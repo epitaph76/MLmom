@@ -1,0 +1,8 @@
+{
+  "request_id": "example-request-1",
+  "task": "Find applicable baseline approaches for a future ML task",
+  "task_type": "classification",
+  "metric": "roc_auc",
+  "dataset_summary": { "rows": 1000, "columns": 12, "contains_raw_data": false },
+  "constraints": { "compute": "cpu" }
+}

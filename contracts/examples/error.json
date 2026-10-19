@@ -1,0 +1,7 @@
+{
+  "code": "JOB_NOT_FOUND",
+  "message": "Research job does not exist",
+  "retryable": false,
+  "request_id": null,
+  "mock": true
+}
