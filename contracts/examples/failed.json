@@ -1,8 +1,0 @@
-{
-  "job_id": "example-job-3",
-  "request_id": "example-request-3",
-  "status": "failed",
-  "result": null,
-  "error": { "code": "MOCK_FAILURE", "message": "Synthetic research failure", "retryable": false, "request_id": "example-request-3", "mock": true },
-  "mock": true
-}

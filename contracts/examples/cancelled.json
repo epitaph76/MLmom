@@ -1,8 +1,0 @@
-{
-  "job_id": "example-job-4",
-  "request_id": "example-request-4",
-  "status": "cancelled",
-  "result": null,
-  "error": null,
-  "mock": true
-}
