@@ -1,0 +1,13 @@
+name: mlmom-search
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: mlmom-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8080"
+    environment:
+      FORCE_OWNERSHIP: "false"
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
