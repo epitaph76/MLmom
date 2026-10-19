@@ -1,8 +1,0 @@
-{
-  "job_id": "example-job-2",
-  "request_id": "example-request-2",
-  "status": "succeeded",
-  "result": { "cards": [], "hypotheses": [] },
-  "error": null,
-  "mock": true
-}
