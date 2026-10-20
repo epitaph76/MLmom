@@ -68,7 +68,7 @@ def _ordered_columns(profile: DatasetProfile) -> list[ColumnProfile]:
         key=lambda column: (
             column.name not in important,
             column.role == ColumnRole.FEATURE,
-            -(column.shift_score or 0),
+            -column.train.missing_rate,
             column.name,
         ),
     )
@@ -99,6 +99,24 @@ def _render(
     ])
     if task.inference_evidence:
         lines.append("Inference evidence: " + " ".join(task.inference_evidence))
+        lines.append("")
+
+    result = task.result_format
+    lines.extend([
+        "## Required result",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| File | {_escape(result.file_name or 'not specified')} |",
+        f"| Columns | {_escape(', '.join(result.columns) or 'not specified')} |",
+        f"| Encoding | {_escape(result.encoding or 'not specified')} |",
+        f"| Delimiter | `{_escape(result.delimiter or 'not specified')}` |",
+        f"| Include index | {_escape(result.include_index if result.include_index is not None else 'not specified')} |",
+        f"| Row order | {_escape(result.row_order or 'not specified')} |",
+        "",
+    ])
+    if task.requirements:
+        lines.append("Requirements: " + " ".join(task.requirements))
         lines.append("")
 
     lines.extend([
@@ -140,18 +158,16 @@ def _render(
     lines.extend([
         "## Column overview",
         "",
-        "| Column | Role | Type | Missing train | Missing test | Unique train | Distribution | Shift | Tags"
+        "| Column | Role | Type | Missing | Unique | Distribution | Tags"
         + (" | Description |" if include_descriptions else " |"),
-        "|---|---|---|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---:|---:|---|---|"
         + ("---|" if include_descriptions else ""),
     ])
     for column in columns:
         base = (
             f"| `{_escape(column.name)}` | `{column.role}` | `{column.semantic_type}` | "
             f"{_percent(column.train.missing_rate)} | "
-            f"{_percent(column.test.missing_rate) if column.test else 'n/a'} | "
             f"{_number(column.train.unique_count)} | {_escape(_distribution_text(column))} | "
-            f"{column.shift_score if column.shift_score is not None else 'n/a'} | "
             f"{_escape(', '.join(column.tags) or 'none')} |"
         )
         if include_descriptions:

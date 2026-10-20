@@ -31,6 +31,7 @@ from .contracts import (
     FileRole,
     InferenceConfidence,
     MetricDirection,
+    ResultFormat,
     SemanticType,
     Severity,
     SplitColumnStats,
@@ -54,11 +55,8 @@ class InputLayout:
     root: Path
     dataset_name: str
     train_path: Path
-    test_path: Path | None = None
-    sample_path: Path | None = None
     dictionary_paths: list[Path] = field(default_factory=list)
     task_path: Path | None = None
-    auxiliary_paths: list[Path] = field(default_factory=list)
     target_columns: list[str] = field(default_factory=list)
     id_columns: list[str] = field(default_factory=list)
     task_type: TaskType | None = None
@@ -115,14 +113,12 @@ class DataInspector:
         top_values: int = 6,
         histogram_bins: int = 6,
         high_missing_threshold: float = 0.40,
-        shift_warning_threshold: float = 0.25,
     ) -> None:
         if top_values < 1 or histogram_bins < 3:
             raise ValueError("top_values must be positive and histogram_bins must be at least 3")
         self.top_values = top_values
         self.histogram_bins = histogram_bins
         self.high_missing_threshold = high_missing_threshold
-        self.shift_warning_threshold = shift_warning_threshold
 
     def inspect_directory(
         self,
@@ -131,8 +127,6 @@ class DataInspector:
         *,
         manifest_path: str | Path | None = None,
         train_path: str | Path | None = None,
-        test_path: str | Path | None = None,
-        sample_submission_path: str | Path | None = None,
         dictionary_paths: Iterable[str | Path] = (),
         task_description_path: str | Path | None = None,
         target_columns: Iterable[str] = (),
@@ -151,12 +145,6 @@ class DataInspector:
 
         layout.dataset_name = dataset_name or manifest.get("dataset_name") or root.name
         layout.train_path = _resolve_path(root, train_path) or layout.train_path
-        layout.test_path = _resolve_path(root, test_path) if test_path else layout.test_path
-        layout.sample_path = (
-            _resolve_path(root, sample_submission_path)
-            if sample_submission_path
-            else layout.sample_path
-        )
         explicit_dictionaries = [_resolve_path(root, path) for path in dictionary_paths]
         if explicit_dictionaries:
             layout.dictionary_paths = [path for path in explicit_dictionaries if path is not None]
@@ -180,9 +168,7 @@ class DataInspector:
         self,
         *,
         train_path: str | Path,
-        test_path: str | Path | None = None,
         dictionary_path: str | Path | None = None,
-        sample_submission_path: str | Path | None = None,
         task_description_path: str | Path | None = None,
         dataset_name: str = "dataset",
         target_columns: Iterable[str] = (),
@@ -198,8 +184,6 @@ class DataInspector:
             root=train.parent,
             dataset_name=dataset_name,
             train_path=train,
-            test_path=Path(test_path).resolve() if test_path else None,
-            sample_path=Path(sample_submission_path).resolve() if sample_submission_path else None,
             dictionary_paths=[Path(dictionary_path).resolve()] if dictionary_path else [],
             task_path=Path(task_description_path).resolve() if task_description_path else None,
             target_columns=list(target_columns),
@@ -229,49 +213,34 @@ class DataInspector:
             raise FileNotFoundError(f"No CSV or TSV files found under {root}")
 
         manifest_train = _resolve_path(root, manifest.get("train"))
-        manifest_test = _resolve_path(root, manifest.get("test"))
-        manifest_sample = _resolve_path(root, manifest.get("sample_submission"))
         manifest_dicts = [
             path for value in manifest.get("dictionaries", [])
             if (path := _resolve_path(root, value)) is not None
         ]
         manifest_task = _resolve_path(root, manifest.get("task_description"))
-        manifest_aux = [
-            path for value in manifest.get("auxiliary_tables", [])
-            if (path := _resolve_path(root, value)) is not None
+
+        ignored_names = ("test", "holdout", "scoring", "sample_submission", "submission_sample", "submission", "тест")
+        inspector_files = [
+            path for path in data_files
+            if not any(token in path.stem.lower() for token in ignored_names)
         ]
-
-        dictionaries = manifest_dicts or [path for path in data_files if self._looks_like_dictionary(path)]
-        sample = manifest_sample or self._first_named(data_files, ("sample_submission", "submission_sample", "submission"))
-        train = manifest_train or self._first_named(data_files, ("train", "training", "обуч"))
-        test = manifest_test or self._first_named(data_files, ("test", "holdout", "scoring", "тест"))
-
-        excluded = set(dictionaries)
-        if sample:
-            excluded.add(sample)
-        candidates = [path for path in data_files if path not in excluded]
-        if train is None or test is None:
-            inferred_train, inferred_test = self._infer_train_test_pair(candidates)
-            train = train or inferred_train
-            test = test or inferred_test
+        dictionaries = manifest_dicts or [path for path in inspector_files if self._looks_like_dictionary(path)]
+        candidates = [path for path in inspector_files if path not in set(dictionaries)]
+        train = manifest_train or self._first_named(candidates, ("train", "training", "learning", "обуч"))
         if train is None and len(candidates) == 1:
             train = candidates[0]
         if train is None:
-            raise ValueError("Could not identify a training table. Use --train or dataset_manifest.json.")
+            raise ValueError(
+                "Could not identify one training table. Use --train or the train field in dataset_manifest.json."
+            )
 
         task = manifest_task or self._first_task_text(files)
-        used = {train, *dictionaries}
-        used.update(path for path in (test, sample) if path is not None)
-        auxiliary = manifest_aux or [path for path in data_files if path not in used]
         return InputLayout(
             root=root,
             dataset_name=str(manifest.get("dataset_name") or root.name),
             train_path=train,
-            test_path=test,
-            sample_path=sample,
             dictionary_paths=dictionaries,
             task_path=task,
-            auxiliary_paths=auxiliary,
         )
 
     @staticmethod
@@ -301,31 +270,6 @@ class DataInspector:
         has_name = bool(columns & _NAME_ALIASES)
         has_metadata = bool(columns & (_ROLE_ALIASES | _TYPE_ALIASES | _DESCRIPTION_ALIASES))
         return has_name and has_metadata
-
-    def _infer_train_test_pair(self, candidates: list[Path]) -> tuple[Path | None, Path | None]:
-        if not candidates:
-            return None, None
-        if len(candidates) == 1:
-            return candidates[0], None
-        headers = {path: self._peek_columns(path) for path in candidates}
-        best: tuple[float, Path, Path] | None = None
-        for possible_train in candidates:
-            train_columns = headers[possible_train]
-            train_set = set(train_columns)
-            for possible_test in candidates:
-                if possible_train == possible_test:
-                    continue
-                test_columns = headers[possible_test]
-                test_set = set(test_columns)
-                extra = train_set - test_set
-                if not extra or len(extra) > max(10, len(train_set) // 4):
-                    continue
-                overlap = len(train_set & test_set) / max(len(train_set | test_set), 1)
-                order_bonus = 0.1 if [c for c in train_columns if c in test_set] == test_columns else 0.0
-                score = overlap + order_bonus
-                if best is None or score > best[0]:
-                    best = (score, possible_train, possible_test)
-        return (best[1], best[2]) if best else (candidates[0], None)
 
     def _peek_columns(self, path: Path) -> list[str]:
         return list(self._read_table(path, nrows=0).columns)
@@ -364,13 +308,11 @@ class DataInspector:
 
     def _inspect_layout(self, layout: InputLayout) -> DatasetProfile:
         train = self._read_table(layout.train_path)
-        test = self._read_table(layout.test_path) if layout.test_path else None
-        sample = self._read_table(layout.sample_path) if layout.sample_path else None
         task_text = self._read_task_text(layout.task_path)
         metadata = self._read_dictionaries(layout.dictionary_paths)
 
-        targets = self._infer_targets(train, test, sample, metadata, layout.target_columns)
-        ids = self._infer_ids(train, test, sample, metadata, layout.id_columns, targets)
+        targets = self._infer_targets(train, metadata, layout.target_columns, task_text)
+        ids = self._infer_ids(train, metadata, layout.id_columns, targets)
         time_column = self._infer_time_column(train, metadata, layout.time_column, targets, ids)
         groups = self._infer_role_columns(metadata, ColumnRole.GROUP, train.columns, layout.group_columns)
         weight = layout.weight_column or self._first_role_column(metadata, ColumnRole.WEIGHT, train.columns)
@@ -391,18 +333,16 @@ class DataInspector:
         issues: list[DataIssue] = []
         for name in train.columns:
             role = self._column_role(name, task, metadata)
-            test_series = test[name] if test is not None and name in test.columns else None
             profile = self._profile_column(
                 name=name,
                 role=role,
                 train_series=train[name],
-                test_series=test_series,
                 metadata=metadata.get(name, {}),
             )
             columns.append(profile)
             issues.extend(self._column_issues(profile))
 
-        checks = self._build_checks(train, test, sample, metadata, task)
+        checks = self._build_checks(train, metadata, task)
         issues.extend(self._check_issues(checks))
         target_summaries = {
             target: self._target_summary(train[target], task, columns)
@@ -419,9 +359,9 @@ class DataInspector:
                 columns=task.target_columns,
             ))
 
-        files = self._profile_files(layout, train, test, sample)
+        files = self._profile_files(layout, train)
         hints = self._preprocessing_hints(columns, task, issues, checks)
-        notes = self._relationship_notes(layout, train, files)
+        notes = self._relationship_notes(layout)
         return DatasetProfile(
             dataset_name=layout.dataset_name,
             root_path=str(layout.root),
@@ -490,10 +430,9 @@ class DataInspector:
     def _infer_targets(
         self,
         train: pd.DataFrame,
-        test: pd.DataFrame | None,
-        sample: pd.DataFrame | None,
         metadata: dict[str, dict[str, str | None]],
         explicit: list[str],
+        task_text: str | None,
     ) -> list[str]:
         if explicit:
             self._validate_columns(explicit, train, "target")
@@ -502,26 +441,34 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared
-        if test is not None:
-            train_only = [
-                name for name in train.columns
-                if name not in test.columns
-                and self._normalise_role(metadata.get(name, {}).get("role"))
-                not in {ColumnRole.WEIGHT, ColumnRole.IGNORED}
-            ]
-            if train_only:
-                return train_only
-        if sample is not None:
-            outputs = [name for name in sample.columns if (test is None or name not in test.columns) and name in train.columns]
-            if outputs:
-                return outputs
+        text = task_text or ""
+        mentioned: list[tuple[int, str]] = []
+        target_tokens = ("target", "таргет", "целевая", "предсказать", "predict")
+        lowered = text.lower()
+        for name in train.columns:
+            positions = [match.start() for match in re.finditer(re.escape(name.lower()), lowered)]
+            if not positions:
+                continue
+            score = 0
+            for position in positions:
+                context = lowered[max(0, position - 100): position + len(name) + 100]
+                score = max(score, sum(token in context for token in target_tokens))
+            if score:
+                mentioned.append((score, name))
+        if mentioned:
+            best_score = max(score for score, _ in mentioned)
+            return [name for score, name in mentioned if score == best_score]
+        conventional = [
+            name for name in train.columns
+            if _normalise_name(name) in {"target", "label", "response", "outcome", "y"}
+        ]
+        if conventional:
+            return conventional
         return []
 
     def _infer_ids(
         self,
         train: pd.DataFrame,
-        test: pd.DataFrame | None,
-        sample: pd.DataFrame | None,
         metadata: dict[str, dict[str, str | None]],
         explicit: list[str],
         targets: list[str],
@@ -533,14 +480,9 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared
-        common = set(train.columns)
-        if test is not None:
-            common &= set(test.columns)
-        if sample is not None:
-            common &= set(sample.columns)
         named = [
             name for name in train.columns
-            if name in common and name not in targets
+            if name not in targets
             and (_normalise_name(name) in {"id", "row_id", "record_id", "index"} or _normalise_name(name).endswith("_id"))
         ]
         return named[:3]
@@ -566,12 +508,21 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared[0]
-        tokens = ("date", "datetime", "timestamp", "event_time", "дата", "время")
+        tokens = ("date", "datetime", "timestamp", "event_time", "year", "period", "month", "дата", "время", "год", "период", "месяц")
         for name in train.columns:
             if name in targets or name in ids:
                 continue
             normalised = _normalise_name(name)
-            if any(token in normalised for token in tokens) and self._datetime_parse_rate(train[name]) >= 0.80:
+            metadata_text = " ".join(
+                str(value).lower()
+                for value in (name, metadata.get(name, {}).get("description"), metadata.get(name, {}).get("unit"))
+                if value
+            )
+            if not any(token in normalised or token in metadata_text for token in tokens):
+                continue
+            if self._datetime_parse_rate(train[name]) >= 0.80:
+                return name
+            if ptypes.is_numeric_dtype(train[name].dtype) and train[name].nunique(dropna=True) <= 100:
                 return name
         return None
 
@@ -586,9 +537,18 @@ class DataInspector:
         if explicit_list:
             return [name for name in explicit_list if name in available]
         available_set = set(available)
-        return [
+        declared = [
             name for name, meta in metadata.items()
             if name in available_set and self._normalise_role(meta.get("role")) == role
+        ]
+        if declared or role != ColumnRole.GROUP:
+            return declared
+        group_tokens = ("group", "query", "session", "entity", "customer", "user", "account", "building", "групп", "объект")
+        return [
+            name for name in available_set
+            if _normalise_name(name) != "id"
+            and _normalise_name(name).endswith("_id")
+            and any(token in _normalise_name(name) for token in group_tokens)
         ]
 
     def _first_role_column(
@@ -643,7 +603,11 @@ class DataInspector:
             series = train[target]
             unique = int(series.nunique(dropna=True))
             declared = str(metadata.get(target, {}).get("dtype") or "").lower()
-            if any(token in text for token in ("time series", "forecast", "временн", "прогноз") ) and time_column:
+            forecasting_wording = any(
+                token in text
+                for token in ("time series", "forecasting", "временной ряд", "прогнозирование")
+            ) and not re.search(r"\bне\s+(?:является\s+)?прогноз", text)
+            if forecasting_wording and time_column:
                 task_type = TaskType.TIME_SERIES_FORECASTING
                 evidence.append("Forecasting wording and a time column were detected.")
             elif any(token in text for token in ("ranking", "rank ", "ранжир")):
@@ -684,6 +648,7 @@ class DataInspector:
             values = train[targets[0]].dropna().astype(str).unique().tolist()
             classes = sorted(values)
             class_count = len(classes)
+        result_format, requirements = self._infer_result_format(task_text or "", ids, targets)
         return TaskSpec(
             task_type=task_type,
             target_columns=targets,
@@ -697,7 +662,85 @@ class DataInspector:
             classes=classes,
             inference_confidence=confidence,
             inference_evidence=evidence,
+            result_format=result_format,
+            requirements=requirements,
         )
+
+    @staticmethod
+    def _infer_result_format(
+        task_text: str,
+        ids: list[str],
+        targets: list[str],
+    ) -> tuple[ResultFormat, list[str]]:
+        """Extract submission requirements from the condition without reading inference files."""
+
+        section_match = re.search(
+            r"^#{1,6}\s*(?:формат результата|result format|output format)\s*$",
+            task_text,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        focused_text = task_text[section_match.end():] if section_match else task_text
+        lower = focused_text.lower()
+        file_match = re.search(
+            r"(?:файл|file)\s+[`'\"]?([\w.\-]+\.csv)",
+            focused_text,
+            flags=re.IGNORECASE,
+        )
+        header_match = re.search(r"```csv\s*[\r\n]+([^\r\n`]+)", focused_text, flags=re.IGNORECASE)
+        columns = [part.strip() for part in header_match.group(1).split(",")] if header_match else []
+        if not columns and ids and targets:
+            columns = [*ids, *targets]
+
+        encoding = "utf-8" if "utf-8" in lower or "utf8" in lower else None
+        delimiter: str | None = None
+        if "разделитель" in lower or "delimiter" in lower:
+            if ("точк" in lower and "запят" in lower) or "semicolon" in lower:
+                delimiter = ";"
+            elif "табуля" in lower or "tab" in lower:
+                delimiter = "\t"
+            elif "запят" in lower or "comma" in lower:
+                delimiter = ","
+
+        include_index: bool | None = None
+        if "без дополнительного индекса" in lower or "без индекса" in lower or "without index" in lower:
+            include_index = False
+
+        row_order: str | None = None
+        if ("порядок строк" in lower or "row order" in lower) and any(
+            token in lower for token in ("совпад", "same", "match")
+        ):
+            row_order = "inference_input"
+
+        one_prediction = bool(re.search(r"(?:для каждого|for each).{0,120}(?:одно|one).{0,40}(?:предсказ|prediction)", lower))
+        no_missing = bool(re.search(r"(?:пропуск|missing|nan).{0,80}(?:недопустим|not allowed|forbidden)", lower))
+        finite_required = bool(re.search(r"(?:бесконеч|infinite|inf).{0,80}(?:недопустим|not allowed|forbidden)", lower))
+        no_duplicate_ids = bool(re.search(r"(?:повторяющ|duplicate).{0,40}(?:id|идентифик).{0,80}(?:недопустим|not allowed|forbidden)", lower))
+
+        requirements: list[str] = []
+        if one_prediction:
+            requirements.append("Produce exactly one prediction for every inference input ID.")
+        if no_missing or finite_required:
+            requirements.append("Predictions must be finite and non-missing.")
+        if no_duplicate_ids:
+            requirements.append("Output ID combinations must be unique.")
+        if row_order:
+            requirements.append("Preserve the row order of the inference input.")
+
+        result = ResultFormat(
+            file_name=file_match.group(1) if file_match else None,
+            encoding=encoding,
+            delimiter=delimiter,
+            include_index=include_index,
+            columns=columns,
+            id_columns=[name for name in ids if not columns or name in columns],
+            prediction_columns=[name for name in targets if not columns or name in columns],
+            row_order=row_order,
+            one_prediction_per_id=True if one_prediction else None,
+            finite_predictions_required=True if finite_required else None,
+            missing_predictions_allowed=False if no_missing else None,
+            duplicate_ids_allowed=False if no_duplicate_ids else None,
+        )
+        return result, requirements
 
     @staticmethod
     def _metric_from_text(text: str) -> str | None:
@@ -832,23 +875,17 @@ class DataInspector:
         name: str,
         role: ColumnRole,
         train_series: pd.Series,
-        test_series: pd.Series | None,
         metadata: dict[str, str | None],
     ) -> ColumnProfile:
         semantic = self._semantic_type(name, train_series, metadata, role)
         train_stats = self._split_stats(train_series, semantic)
-        test_stats = self._split_stats(test_series, semantic) if test_series is not None else None
         if role == ColumnRole.TARGET and semantic in {SemanticType.CATEGORICAL, SemanticType.BOOLEAN}:
             train_stats.distribution = self._categorical_distribution(
                 train_series,
                 len(train_series),
                 limit=50,
             )
-        unseen_count, unseen_rate, unseen_examples = self._unseen_values(
-            name, train_series, test_series, semantic, metadata
-        )
-        shift = self._shift_score(train_series, test_series, semantic)
-        tags = self._column_tags(name, role, semantic, train_stats, shift)
+        tags = self._column_tags(name, role, semantic, train_stats)
         return ColumnProfile(
             name=name,
             role=role,
@@ -858,11 +895,6 @@ class DataInspector:
             description=metadata.get("description"),
             unit=metadata.get("unit"),
             train=train_stats,
-            test=test_stats,
-            shift_score=shift,
-            unseen_test_value_count=unseen_count,
-            unseen_test_row_rate=unseen_rate,
-            unseen_test_examples=unseen_examples,
             tags=tags,
         )
 
@@ -1052,69 +1084,12 @@ class DataInspector:
             distribution.append(DistributionBucket(label="<other years>", count=remaining, rate=_rate(remaining, rows)))
         return summary, distribution
 
-    def _unseen_values(
-        self,
-        name: str,
-        train: pd.Series,
-        test: pd.Series | None,
-        semantic: SemanticType,
-        metadata: dict[str, str | None],
-    ) -> tuple[int, float, list[str]]:
-        if test is None:
-            return 0, 0.0, []
-        metadata_text = " ".join(
-            str(value).lower()
-            for value in (name, metadata.get("unit"), metadata.get("description"))
-            if value
-        )
-        numeric_code = (
-            semantic == SemanticType.NUMERIC
-            and any(token in metadata_text for token in ("code", "period", "код", "период"))
-            and train.nunique(dropna=True) <= 50
-            and _rate(int(train.nunique(dropna=True)), max(int(train.notna().sum()), 1)) <= 0.05
-        )
-        if semantic not in {SemanticType.CATEGORICAL, SemanticType.BOOLEAN} and not numeric_code:
-            return 0, 0.0, []
-        train_values = set(train.dropna().astype(str).unique())
-        test_values = test.dropna().astype(str)
-        mask = ~test_values.isin(train_values)
-        unseen = sorted(test_values[mask].unique().tolist())
-        return len(unseen), _rate(int(mask.sum()), len(test)), unseen[: self.top_values]
-
-    @staticmethod
-    def _shift_score(train: pd.Series, test: pd.Series | None, semantic: SemanticType) -> float | None:
-        if test is None:
-            return None
-        missing_delta = abs(float(train.isna().mean()) - float(test.isna().mean()))
-        if semantic == SemanticType.NUMERIC:
-            left = pd.to_numeric(train, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-            right = pd.to_numeric(test, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-            if left.empty or right.empty:
-                return _finite_float(missing_delta)
-            pooled_std = math.sqrt((float(left.var()) + float(right.var())) / 2)
-            mean_shift = (
-                abs(float(left.mean()) - float(right.mean())) / pooled_std
-                if math.isfinite(pooled_std) and pooled_std > 0
-                else 0.0
-            )
-            return _finite_float(max(mean_shift, missing_delta))
-        if semantic in {SemanticType.CATEGORICAL, SemanticType.BOOLEAN}:
-            left_freq = train.fillna("<missing>").astype(str).value_counts(normalize=True)
-            right_freq = test.fillna("<missing>").astype(str).value_counts(normalize=True)
-            values = left_freq.index.union(right_freq.index)
-            total_variation = 0.5 * (
-                left_freq.reindex(values, fill_value=0) - right_freq.reindex(values, fill_value=0)
-            ).abs().sum()
-            return _finite_float(max(float(total_variation), missing_delta))
-        return _finite_float(missing_delta)
-
     @staticmethod
     def _column_tags(
         name: str,
         role: ColumnRole,
         semantic: SemanticType,
         stats: SplitColumnStats,
-        shift: float | None,
     ) -> list[str]:
         tags: list[str] = []
         if stats.missing_rate >= 0.40:
@@ -1125,8 +1100,6 @@ class DataInspector:
             tags.append("near_unique")
         if semantic == SemanticType.CATEGORICAL and stats.unique_count > 100:
             tags.append("high_cardinality")
-        if role in {ColumnRole.FEATURE, ColumnRole.TIME, ColumnRole.GROUP} and shift is not None and shift >= 0.25:
-            tags.append("train_test_shift")
         if any(token in _normalise_name(name) for token in ("date", "time", "year", "month", "период")):
             tags.append("temporal_candidate")
         return tags
@@ -1141,7 +1114,6 @@ class DataInspector:
                 columns=[profile.name],
                 details={
                     "train_missing_rate": profile.train.missing_rate,
-                    "test_missing_rate": profile.test.missing_rate if profile.test else None,
                 },
             ))
         if profile.role == ColumnRole.FEATURE and "constant" in profile.tags:
@@ -1158,27 +1130,6 @@ class DataInspector:
                 message=f"{profile.name} is nearly unique and may behave like an identifier.",
                 columns=[profile.name],
             ))
-        if profile.unseen_test_value_count:
-            code = "unseen_test_categories" if profile.semantic_type != SemanticType.NUMERIC else "unseen_test_codes"
-            issues.append(DataIssue(
-                code=code,
-                severity=Severity.WARNING,
-                message=f"{profile.name}: test contains values absent from train.",
-                columns=[profile.name],
-                details={
-                    "unseen_values": profile.unseen_test_value_count,
-                    "test_row_rate": profile.unseen_test_row_rate,
-                    "examples": profile.unseen_test_examples,
-                },
-            ))
-        if profile.role == ColumnRole.FEATURE and "train_test_shift" in profile.tags:
-            issues.append(DataIssue(
-                code="train_test_shift",
-                severity=Severity.WARNING,
-                message=f"{profile.name}: train/test shift score is {profile.shift_score:.3f}.",
-                columns=[profile.name],
-                details={"shift_score": profile.shift_score},
-            ))
         if profile.train.infinite_count:
             issues.append(DataIssue(
                 code="infinite_values",
@@ -1192,8 +1143,6 @@ class DataInspector:
     def _build_checks(
         self,
         train: pd.DataFrame,
-        test: pd.DataFrame | None,
-        sample: pd.DataFrame | None,
         metadata: dict[str, dict[str, str | None]],
         task: TaskSpec,
     ) -> DatasetChecks:
@@ -1202,7 +1151,6 @@ class DataInspector:
             if column not in task.target_columns and column not in task.id_columns
             and column != task.weight_column
         ]
-        expected_test = [column for column in train.columns if column not in task.target_columns]
         train_hash = pd.util.hash_pandas_object(train[feature_columns], index=False) if feature_columns else pd.Series(dtype="uint64")
         target_frame = train[task.target_columns].astype(str).agg("\x1f".join, axis=1) if task.target_columns else None
         conflicting = None
@@ -1210,55 +1158,20 @@ class DataInspector:
             grouped = pd.DataFrame({"feature_hash": train_hash, "target": target_frame})
             conflicting = int(grouped.groupby("feature_hash", sort=False)["target"].nunique().gt(1).sum())
 
-        if test is None:
-            schema_match = None
-            train_only: list[str] = []
-            test_only: list[str] = []
-            test_hash = pd.Series(dtype="uint64")
-            overlap = None
-        else:
-            schema_match = expected_test == list(test.columns)
-            train_only = [column for column in train.columns if column not in test.columns]
-            test_only = [column for column in test.columns if column not in train.columns]
-            shared_features = [column for column in feature_columns if column in test.columns]
-            test_hash = pd.util.hash_pandas_object(test[shared_features], index=False) if shared_features else pd.Series(dtype="uint64")
-            comparable_train_hash = pd.util.hash_pandas_object(train[shared_features], index=False) if shared_features else pd.Series(dtype="uint64")
-            overlap = int(test_hash.isin(set(comparable_train_hash.tolist())).sum()) if shared_features else None
-
         duplicate_train_ids, null_train_ids = self._id_checks(train, task.id_columns)
-        duplicate_test_ids, null_test_ids = self._id_checks(test, task.id_columns) if test is not None else (None, None)
-
-        expected_sample = [*task.id_columns, *task.target_columns]
-        sample_columns_match = list(sample.columns) == expected_sample if sample is not None and expected_sample else None
-        sample_rows_match = len(sample) == len(test) if sample is not None and test is not None else None
-        sample_order_match: bool | None = None
-        if sample is not None and test is not None and task.id_columns and all(
-            column in sample.columns and column in test.columns for column in task.id_columns
-        ):
-            sample_order_match = bool(sample[task.id_columns].equals(test[task.id_columns]))
 
         return DatasetChecks(
-            train_test_schema_match=schema_match,
-            train_only_columns=train_only,
-            test_only_columns=test_only,
             duplicate_train_rows=int(train.duplicated().sum()),
             duplicate_train_feature_rows=int(train_hash.duplicated().sum()) if not train_hash.empty else None,
-            duplicate_test_feature_rows=int(test_hash.duplicated().sum()) if not test_hash.empty else None,
             conflicting_duplicate_target_groups=conflicting,
-            train_test_feature_overlap_rows=overlap,
             duplicate_train_ids=duplicate_train_ids,
-            duplicate_test_ids=duplicate_test_ids,
             null_train_ids=null_train_ids,
-            null_test_ids=null_test_ids,
-            sample_columns_match=sample_columns_match,
-            sample_row_count_matches_test=sample_rows_match,
-            sample_id_order_matches_test=sample_order_match,
             dictionary_covers_all_train_columns=(set(metadata) >= set(train.columns)) if metadata else None,
         )
 
     @staticmethod
-    def _id_checks(frame: pd.DataFrame | None, ids: list[str]) -> tuple[int | None, int | None]:
-        if frame is None or not ids or not all(column in frame.columns for column in ids):
+    def _id_checks(frame: pd.DataFrame, ids: list[str]) -> tuple[int | None, int | None]:
+        if not ids or not all(column in frame.columns for column in ids):
             return None, None
         return int(frame.duplicated(subset=ids).sum()), int(frame[ids].isna().any(axis=1).sum())
 
@@ -1266,23 +1179,13 @@ class DataInspector:
     def _check_issues(checks: DatasetChecks) -> list[DataIssue]:
         issues: list[DataIssue] = []
         failures = {
-            "schema_mismatch": checks.train_test_schema_match is False,
             "duplicate_train_ids": bool(checks.duplicate_train_ids),
-            "duplicate_test_ids": bool(checks.duplicate_test_ids),
-            "null_ids": bool(checks.null_train_ids) or bool(checks.null_test_ids),
-            "sample_columns_mismatch": checks.sample_columns_match is False,
-            "sample_row_count_mismatch": checks.sample_row_count_matches_test is False,
-            "sample_id_order_mismatch": checks.sample_id_order_matches_test is False,
+            "null_ids": bool(checks.null_train_ids),
             "dictionary_mismatch": checks.dictionary_covers_all_train_columns is False,
         }
         messages = {
-            "schema_mismatch": "Train feature columns and test columns differ or are ordered differently.",
             "duplicate_train_ids": "Train contains duplicate ID combinations.",
-            "duplicate_test_ids": "Test contains duplicate ID combinations.",
             "null_ids": "At least one ID column contains missing values.",
-            "sample_columns_mismatch": "Sample submission columns do not match IDs and targets.",
-            "sample_row_count_mismatch": "Sample submission row count does not match test.",
-            "sample_id_order_mismatch": "Sample submission ID order does not match test.",
             "dictionary_mismatch": "Column dictionaries do not cover every train column.",
         }
         for code, failed in failures.items():
@@ -1297,13 +1200,6 @@ class DataInspector:
                     "duplicate_train_rows": checks.duplicate_train_feature_rows,
                     "conflicting_target_groups": checks.conflicting_duplicate_target_groups,
                 },
-            ))
-        if checks.train_test_feature_overlap_rows:
-            issues.append(DataIssue(
-                code="train_test_feature_overlap",
-                severity=Severity.WARNING,
-                message="Some test rows exactly match train rows after excluding IDs and targets.",
-                details={"matching_test_rows": checks.train_test_feature_overlap_rows},
             ))
         return issues
 
@@ -1442,26 +1338,14 @@ class DataInspector:
         self,
         layout: InputLayout,
         train: pd.DataFrame,
-        test: pd.DataFrame | None,
-        sample: pd.DataFrame | None,
     ) -> list[TableProfile]:
         profiles = [self._table_profile(layout.train_path, FileRole.TRAIN, train)]
-        if layout.test_path and test is not None:
-            profiles.append(self._table_profile(layout.test_path, FileRole.TEST, test))
-        if layout.sample_path and sample is not None:
-            profiles.append(self._table_profile(layout.sample_path, FileRole.SAMPLE_SUBMISSION, sample))
         for path in layout.dictionary_paths:
             try:
                 frame = self._read_table(path)
                 profiles.append(self._table_profile(path, FileRole.DATA_DICTIONARY, frame))
             except Exception as error:
                 profiles.append(self._failed_table_profile(path, FileRole.DATA_DICTIONARY, error))
-        for path in layout.auxiliary_paths:
-            try:
-                frame = self._read_table(path)
-                profiles.append(self._table_profile(path, FileRole.AUXILIARY, frame))
-            except Exception as error:
-                profiles.append(self._failed_table_profile(path, FileRole.AUXILIARY, error))
         if layout.task_path:
             profiles.append(TableProfile(
                 file_name=layout.task_path.name,
@@ -1498,17 +1382,8 @@ class DataInspector:
     def _relationship_notes(
         self,
         layout: InputLayout,
-        train: pd.DataFrame,
-        files: list[TableProfile],
     ) -> list[str]:
         notes: list[str] = []
-        train_columns = set(train.columns)
-        for file in files:
-            if file.role != FileRole.AUXILIARY or not file.column_names:
-                continue
-            shared = sorted(train_columns & set(file.column_names))
-            if shared:
-                notes.append(f"Auxiliary table {file.file_name} shares columns with train: {', '.join(shared[:12])}.")
         if layout.task_path is None:
             notes.append("No task description file was identified; metric and task inference rely on data only.")
         if not layout.dictionary_paths:
@@ -1534,8 +1409,6 @@ class DataInspector:
             hints.append("Fit imputers inside each training fold; consider missingness indicators when absence may carry signal.")
         if any(issue.code == "duplicate_feature_rows" for issue in issues):
             hints.append("Place identical feature rows in the same validation fold to prevent duplicate leakage.")
-        if any(issue.code in {"unseen_test_codes", "train_test_shift"} for issue in issues):
-            hints.append("Choose validation splits that reproduce observed train/test group, period, or distribution shifts.")
         if task.task_type in {
             TaskType.BINARY_CLASSIFICATION,
             TaskType.MULTICLASS_CLASSIFICATION,
@@ -1569,7 +1442,7 @@ def build_llm_context(profile: DatasetProfile, max_chars: int = 30_000) -> dict[
         key=lambda column: (
             column.name not in important_columns,
             column.role == ColumnRole.FEATURE,
-            -(column.shift_score or 0),
+            -column.train.missing_rate,
             column.name,
         ),
     )
@@ -1577,8 +1450,8 @@ def build_llm_context(profile: DatasetProfile, max_chars: int = 30_000) -> dict[
         (column for column in profile.columns if column.role == ColumnRole.FEATURE),
         key=lambda column: (
             column.name not in important_columns,
-            -(column.shift_score or 0),
             -column.train.missing_rate,
+            -column.train.unique_count,
         ),
     )
     detailed_names = set(profile.task.target_columns)
@@ -1600,7 +1473,6 @@ def build_llm_context(profile: DatasetProfile, max_chars: int = 30_000) -> dict[
             "role": column.role,
             "type": column.semantic_type,
             "missing_train": column.train.missing_rate,
-            "missing_test": column.test.missing_rate if column.test else None,
             "unique_train": column.train.unique_count,
             "summary": column.train.summary if column.name in detailed_names else compact_summary,
             "distribution": (
@@ -1611,19 +1483,12 @@ def build_llm_context(profile: DatasetProfile, max_chars: int = 30_000) -> dict[
                 if column.name in detailed_names
                 else []
             ),
-            "shift": column.shift_score,
             "tags": column.tags,
         }
         if column.description:
             item["description"] = column.description[:220]
         if column.unit:
             item["unit"] = column.unit
-        if column.unseen_test_value_count:
-            item["unseen_test"] = {
-                "value_count": column.unseen_test_value_count,
-                "row_rate": column.unseen_test_row_rate,
-                "examples": column.unseen_test_examples,
-            }
         compact_columns.append(item)
 
     issue_groups: list[dict[str, Any]] = []
@@ -1704,8 +1569,6 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, help="Optional dataset_manifest.json")
     parser.add_argument("--name", help="Dataset name")
     parser.add_argument("--train", type=Path, help="Train CSV/TSV; overrides discovery")
-    parser.add_argument("--test", type=Path, help="Test CSV/TSV; overrides discovery")
-    parser.add_argument("--sample", type=Path, help="Sample submission CSV/TSV")
     parser.add_argument("--dictionary", type=Path, action="append", default=[], help="Column dictionary; repeatable")
     parser.add_argument("--task-description", type=Path, help="Task Markdown or text file")
     parser.add_argument("--target", action="append", default=[], help="Target column; repeatable")
@@ -1726,8 +1589,6 @@ def main() -> None:
         args.name,
         manifest_path=args.manifest,
         train_path=args.train,
-        test_path=args.test,
-        sample_submission_path=args.sample,
         dictionary_paths=args.dictionary,
         task_description_path=args.task_description,
         target_columns=args.target,

@@ -63,10 +63,7 @@ class ColumnRole(StrEnum):
 
 class FileRole(StrEnum):
     TRAIN = "train"
-    TEST = "test"
-    SAMPLE_SUBMISSION = "sample_submission"
     DATA_DICTIONARY = "data_dictionary"
-    AUXILIARY = "auxiliary"
     TASK_DESCRIPTION = "task_description"
     UNKNOWN = "unknown"
 
@@ -75,6 +72,23 @@ class Severity(StrEnum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
+
+class ResultFormat(StrictModel):
+    """Machine-readable output requirements extracted from the task text."""
+
+    file_name: str | None = None
+    encoding: str | None = None
+    delimiter: str | None = None
+    include_index: bool | None = None
+    columns: list[str] = Field(default_factory=list)
+    id_columns: list[str] = Field(default_factory=list)
+    prediction_columns: list[str] = Field(default_factory=list)
+    row_order: str | None = None
+    one_prediction_per_id: bool | None = None
+    finite_predictions_required: bool | None = None
+    missing_predictions_allowed: bool | None = None
+    duplicate_ids_allowed: bool | None = None
 
 
 class TaskSpec(StrictModel):
@@ -92,6 +106,8 @@ class TaskSpec(StrictModel):
     classes: list[str] = Field(default_factory=list)
     inference_confidence: InferenceConfidence = InferenceConfidence.LOW
     inference_evidence: list[str] = Field(default_factory=list)
+    result_format: ResultFormat = Field(default_factory=ResultFormat)
+    requirements: list[str] = Field(default_factory=list)
 
 
 class DataIssue(StrictModel):
@@ -133,11 +149,6 @@ class ColumnProfile(StrictModel):
     description: str | None = None
     unit: str | None = None
     train: SplitColumnStats
-    test: SplitColumnStats | None = None
-    shift_score: float | None = None
-    unseen_test_value_count: int = 0
-    unseen_test_row_rate: float = 0.0
-    unseen_test_examples: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
 
@@ -156,28 +167,18 @@ class TableProfile(StrictModel):
 
 
 class DatasetChecks(StrictModel):
-    train_test_schema_match: bool | None = None
-    train_only_columns: list[str] = Field(default_factory=list)
-    test_only_columns: list[str] = Field(default_factory=list)
     duplicate_train_rows: int | None = None
     duplicate_train_feature_rows: int | None = None
-    duplicate_test_feature_rows: int | None = None
     conflicting_duplicate_target_groups: int | None = None
-    train_test_feature_overlap_rows: int | None = None
     duplicate_train_ids: int | None = None
-    duplicate_test_ids: int | None = None
     null_train_ids: int | None = None
-    null_test_ids: int | None = None
-    sample_columns_match: bool | None = None
-    sample_row_count_matches_test: bool | None = None
-    sample_id_order_matches_test: bool | None = None
     dictionary_covers_all_train_columns: bool | None = None
 
 
 class DatasetProfile(StrictModel):
     """Full deterministic output of the universal Data Inspector."""
 
-    schema_version: str = "2.0.0"
+    schema_version: str = "3.0.0"
     dataset_name: str
     root_path: str
     task_description: str | None = None

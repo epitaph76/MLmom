@@ -1,15 +1,10 @@
 {
   "dataset_name": "example_task",
   "train": "tables/learning_data.csv",
-  "test": "tables/scoring_data.csv",
-  "sample_submission": "submission_format.csv",
   "dictionaries": [
     "columns.csv"
   ],
   "task_description": "task.md",
-  "auxiliary_tables": [
-    "reference/countries.csv"
-  ],
   "target_columns": [
     "target"
   ],

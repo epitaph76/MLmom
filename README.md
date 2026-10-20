@@ -1,8 +1,11 @@
 # MLMom: Universal Data Inspector
 
-Data Inspector — первый узел AutoML-агента. Он принимает произвольный набор
-табличных файлов, описание колонок и текст задачи, а затем создаёт компактное
-описание данных для LLM. Исходные файлы не изменяются.
+Data Inspector — первый узел AutoML-агента. Он принимает ровно три вида входа:
+обучающую таблицу, словарь колонок и текст задачи. Затем он создаёт компактный
+`TaskSpec` и профиль train для LLM. Исходные файлы не изменяются.
+
+`test.csv` и шаблон submission относятся к ML Execution Runtime. Data Inspector
+их не читает, не анализирует и не использует для определения таргета.
 
 
 ## Поддерживаемые сценарии
@@ -12,9 +15,8 @@ Data Inspector — первый узел AutoML-агента. Он приним�
 - time-series forecasting при наличии временной колонки;
 - ranking;
 - anomaly detection и clustering без таргета;
-- train без test;
 - составные ID, несколько таргетов, group/time/weight columns;
-- несколько словарей колонок и вспомогательных CSV/TSV;
+- несколько словарей колонок;
 - произвольные имена файлов через `dataset_manifest.json` или CLI overrides.
 
 Если задача неоднозначна, инспектор не маскирует догадку под факт. Он ставит
@@ -43,15 +45,14 @@ Data Inspector — первый узел AutoML-агента. Он приним�
 
 ## Что анализируется
 
-- состав и назначение всех найденных файлов;
+- состав train, словаря и текстового условия;
 - таргеты, ID, time/group/weight columns, тип задачи и метрика;
-- соответствие train, test, словарей и sample submission;
+- формат результата: имя файла, колонки, кодировка, разделитель, индекс и порядок строк;
+- требования к пропускам, бесконечностям, уникальности ID и числу прогнозов;
 - тип, описание, единицы, пропуски и кардинальность каждой колонки;
 - числовые квантили и диапазоны с количеством и долей строк;
 - распределения категорий, boolean, datetime и длины текста;
-- неизвестные test-категории и коды;
-- train/test shift;
-- повторяющиеся признаки, конфликтующие таргеты и train/test overlap;
+- повторяющиеся признаки и конфликтующие таргеты;
 - потенциальная утечка таргета;
 - дисбаланс классов и перекос регрессионного таргета;
 - рекомендации по препроцессингу и валидации.
@@ -62,13 +63,14 @@ Data Inspector ничего не удаляет, не импутирует и н
 ## Автоопределение и manifest
 
 При стандартных названиях достаточно каталога: инспектор найдёт `train`,
-`test`, sample submission, словарь и текст задачи. Для произвольной структуры
+словарь и текст задачи. Файлы с именами test/scoring/submission намеренно
+игнорируются. Для произвольной структуры
 используйте [dataset_manifest.example.json](dataset_manifest.example.json).
 
 Важные поля manifest:
 
-- `train`, `test`, `sample_submission`;
-- `dictionaries` и `auxiliary_tables`;
+- `train`;
+- `dictionaries`;
 - `task_description`;
 - `target_columns`, `id_columns`;
 - `task_type`, `primary_metric`;
@@ -106,7 +108,6 @@ python -m mlmom.data_inspector `
 python -m mlmom.data_inspector `
   "C:\path\to\dataset" `
   --train learning.csv `
-  --test scoring.csv `
   --target label `
   --id record_id `
   --task-type multiclass_classification `
@@ -122,6 +123,6 @@ python -m mlmom.data_inspector `
 python -m unittest discover -v
 ```
 
-Тесты проверяют произвольные имена файлов, manifest, auxiliary tables,
-автоопределение regression/classification, datetime, text, unknown categories,
-числовые диапазоны и лимит контекста.
+Тесты проверяют произвольные имена файлов, manifest, полное игнорирование
+test/submission, автоопределение regression/classification, извлечение формата
+результата, datetime, text, категории, числовые диапазоны и лимит контекста.

@@ -2,12 +2,12 @@
 
 from typing import TYPE_CHECKING, Any
 
-from .contracts import DatasetProfile, TaskSpec
+from .contracts import DatasetProfile, ResultFormat, TaskSpec
 
 if TYPE_CHECKING:
     from .data_inspector import DataInspector
 
-__all__ = ["DataInspector", "DatasetProfile", "TaskSpec"]
+__all__ = ["DataInspector", "DatasetProfile", "ResultFormat", "TaskSpec"]
 
 
 def __getattr__(name: str) -> Any:
