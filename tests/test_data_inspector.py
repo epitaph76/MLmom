@@ -172,6 +172,28 @@ class DataInspectorTests(unittest.TestCase):
             self.assertNotIn("Missing test", report)
             self.assertNotIn("train/test", report.lower())
 
+    def test_duration_feature_is_not_mistaken_for_time_axis(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pd.DataFrame({
+                "id": range(60),
+                "synack": [value / 1000 for value in range(60)],
+                "attack_cat": ["normal", "attack"] * 30,
+            }).to_csv(root / "train.csv", index=False)
+            write_dictionary(root, [
+                ["id", "id", "numeric", "identifier", "Row ID"],
+                ["synack", "feature", "numeric", "ms", "Время SYN → SYN-ACK"],
+                ["attack_cat", "target", "category", "label", "Attack class"],
+            ])
+            (root / "task.md").write_text(
+                "Binary classification. Metric: macro F1.", encoding="utf-8"
+            )
+
+            profile = DataInspector().inspect_directory(root)
+
+            self.assertIsNone(profile.task.time_column)
+            self.assertEqual(profile.task.task_type, TaskType.BINARY_CLASSIFICATION)
+
 
 if __name__ == "__main__":
     unittest.main()

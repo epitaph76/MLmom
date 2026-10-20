@@ -508,17 +508,24 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared[0]
-        tokens = ("date", "datetime", "timestamp", "event_time", "year", "period", "month", "дата", "время", "год", "период", "месяц")
+        # A description such as "response time" or "Время SYN -> SYN-ACK" is a
+        # duration, not an ordering key.  Automatic inference therefore relies
+        # on the column name or declared dtype; descriptions alone are too
+        # ambiguous for numeric telemetry.
+        name_tokens = (
+            "date", "datetime", "timestamp", "event_time", "year", "period",
+            "month", "week", "quarter", "дата", "время", "год", "период",
+            "месяц", "неделя", "квартал",
+        )
+        dtype_tokens = ("date", "datetime", "timestamp", "time", "дата", "время")
         for name in train.columns:
             if name in targets or name in ids:
                 continue
             normalised = _normalise_name(name)
-            metadata_text = " ".join(
-                str(value).lower()
-                for value in (name, metadata.get(name, {}).get("description"), metadata.get(name, {}).get("unit"))
-                if value
-            )
-            if not any(token in normalised or token in metadata_text for token in tokens):
+            declared_dtype = str(metadata.get(name, {}).get("dtype") or "").lower()
+            name_hint = any(token in normalised for token in name_tokens)
+            dtype_hint = any(token in declared_dtype for token in dtype_tokens)
+            if not (name_hint or dtype_hint):
                 continue
             if self._datetime_parse_rate(train[name]) >= 0.80:
                 return name

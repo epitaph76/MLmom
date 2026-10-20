@@ -1,4 +1,4 @@
-# MLMom: Universal Data Inspector
+# MLMom: Data Inspector and Task Analysis
 
 Data Inspector — первый узел AutoML-агента. Он принимает ровно три вида входа:
 обучающую таблицу, словарь колонок и текст задачи. Затем он создаёт компактный
@@ -126,3 +126,59 @@ python -m unittest discover -v
 Тесты проверяют произвольные имена файлов, manifest, полное игнорирование
 test/submission, автоопределение regression/classification, извлечение формата
 результата, datetime, text, категории, числовые диапазоны и лимит контекста.
+
+## Первичный LLM-модуль и валидация задачи
+
+После Data Inspector запускается LangGraph-процесс:
+
+```text
+profile.json -> LLM analysis -> deterministic validation
+                      ^                  |
+                      |---- feedback ----|
+```
+
+LLM получает полный текст задания и компактный результат Data Inspector, но не
+читает сырые строки train. Она возвращает строгий `TaskDefinition`: тип задачи,
+таргеты, метрику и направление оптимизации, схему валидации, служебные колонки,
+формат результата, требования, допущения и риски.
+
+Python-валидатор независимо проверяет, что:
+
+- все упомянутые колонки существуют в train;
+- target и ID совпадают с профилем и словарём данных;
+- target и ID исключены из признаков;
+- метрика применима к типу предсказания и имеет верное направление;
+- временная и групповая структура не нарушается при валидации;
+- формат результата соответствует требованиям из `task.md`.
+
+При ошибке валидатор возвращает структурированный feedback в LLM. После трёх
+неудачных попыток процесс завершается со статусом `failed` и кодом выхода 2,
+поэтому некорректный контракт не попадёт в ML Execution Runtime.
+
+### Настройка RouterAI
+
+Скопируйте `.env.example` в локальный `.env` и добавьте ключ. `.env` уже
+исключён из Git.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+```dotenv
+ROUTERAI_API_KEY=your-real-key
+ROUTERAI_BASE_URL=https://routerai.ru/api/v1
+ROUTERAI_MODEL=deepseek/deepseek-v4.1-flash-1017
+```
+
+Не записывайте настоящий ключ в Python-файл, README, commit или сообщение чата.
+
+После создания `profile.json` запустите:
+
+```powershell
+python -m mlmom.task_graph `
+  --profile artifacts\dataset.profile.json `
+  --output artifacts\dataset.task.json `
+  --max-attempts 3
+```
+
+

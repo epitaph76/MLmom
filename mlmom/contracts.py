@@ -8,7 +8,7 @@ prompt without serialising raw records.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,6 +34,17 @@ class MetricDirection(StrEnum):
     MINIMIZE = "minimize"
     MAXIMIZE = "maximize"
     UNKNOWN = "unknown"
+
+
+class ValidationStrategy(StrEnum):
+    """Cross-validation scheme selected for model evaluation."""
+
+    STRATIFIED_KFOLD = "stratified_kfold"
+    KFOLD = "kfold"
+    GROUP_KFOLD = "group_kfold"
+    TIME_SERIES_SPLIT = "time_series_split"
+    HOLDOUT = "holdout"
+    UNSPECIFIED = "unspecified"
 
 
 class InferenceConfidence(StrEnum):
@@ -108,6 +119,50 @@ class TaskSpec(StrictModel):
     inference_evidence: list[str] = Field(default_factory=list)
     result_format: ResultFormat = Field(default_factory=ResultFormat)
     requirements: list[str] = Field(default_factory=list)
+
+
+class TaskDefinition(StrictModel):
+    """Canonical task description proposed by the primary LLM node."""
+
+    schema_version: str = "1.0.0"
+    objective: str
+    task_type: TaskType
+    target_columns: list[str] = Field(default_factory=list)
+    id_columns: list[str] = Field(default_factory=list)
+    time_column: str | None = None
+    group_columns: list[str] = Field(default_factory=list)
+    weight_column: str | None = None
+    excluded_feature_columns: list[str] = Field(default_factory=list)
+    primary_metric: str
+    metric_direction: MetricDirection
+    validation_strategy: ValidationStrategy
+    result_format: ResultFormat
+    requirements: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class TaskValidationFinding(StrictModel):
+    code: str
+    severity: Severity
+    message: str
+    field: str | None = None
+    expected: Any | None = None
+    actual: Any | None = None
+
+
+class TaskValidationReport(StrictModel):
+    valid: bool
+    findings: list[TaskValidationFinding] = Field(default_factory=list)
+
+
+class TaskAnalysisResult(StrictModel):
+    status: Literal["validated", "failed"]
+    attempts: int
+    model: str
+    task: TaskDefinition | None = None
+    validation: TaskValidationReport
 
 
 class DataIssue(StrictModel):

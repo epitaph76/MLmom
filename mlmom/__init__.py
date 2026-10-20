@@ -2,12 +2,27 @@
 
 from typing import TYPE_CHECKING, Any
 
-from .contracts import DatasetProfile, ResultFormat, TaskSpec
+from .contracts import (
+    DatasetProfile,
+    ResultFormat,
+    TaskAnalysisResult,
+    TaskDefinition,
+    TaskSpec,
+    TaskValidationReport,
+)
 
 if TYPE_CHECKING:
     from .data_inspector import DataInspector
 
-__all__ = ["DataInspector", "DatasetProfile", "ResultFormat", "TaskSpec"]
+__all__ = [
+    "DataInspector",
+    "DatasetProfile",
+    "ResultFormat",
+    "TaskAnalysisResult",
+    "TaskDefinition",
+    "TaskSpec",
+    "TaskValidationReport",
+]
 
 
 def __getattr__(name: str) -> Any:
