@@ -521,6 +521,9 @@ class DataInspector:
         for name in train.columns:
             if name in targets or name in ids:
                 continue
+            # Explicit dictionary roles outrank column-name heuristics.
+            if self._normalise_role(metadata.get(name, {}).get("role")) == ColumnRole.FEATURE:
+                continue
             normalised = _normalise_name(name)
             declared_dtype = str(metadata.get(name, {}).get("dtype") or "").lower()
             name_hint = any(token in normalised for token in name_tokens)
@@ -740,7 +743,7 @@ class DataInspector:
             include_index=include_index,
             columns=columns,
             id_columns=[name for name in ids if not columns or name in columns],
-            prediction_columns=[name for name in targets if not columns or name in columns],
+            prediction_columns=([name for name in columns if name not in ids] if columns else list(targets)),
             row_order=row_order,
             one_prediction_per_id=True if one_prediction else None,
             finite_predictions_required=True if finite_required else None,

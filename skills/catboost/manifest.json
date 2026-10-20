@@ -1,0 +1,13 @@
+{
+  "skill_id": "catboost",
+  "version": "0.1.0",
+  "title": "catboost",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "catboost"
+  ],
+  "dependencies": [
+    "catboost"
+  ]
+}

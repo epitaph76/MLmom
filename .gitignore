@@ -5,4 +5,8 @@ __pycache__/
 .idea/
 .vscode/
 artifacts/
+*.egg-info/
+dist/
+.pytest_cache/
+.mlmom-runtime-*/
 

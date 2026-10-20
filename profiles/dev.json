@@ -1,0 +1,9 @@
+{
+  "profile": "dev",
+  "total_seconds": 900,
+  "final_reserve_seconds": 180,
+  "first_submission_seconds": 120,
+  "experiment_seconds": 120,
+  "prediction_seconds": 30,
+  "max_rounds": 3
+}

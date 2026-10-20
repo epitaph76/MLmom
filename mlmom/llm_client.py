@@ -18,6 +18,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 DEFAULT_BASE_URL = "https://routerai.ru/api/v1"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+PLATFORM_MODEL = "qwen/qwen3.8-27b"
 
 
 class ChatClient(Protocol):
@@ -38,19 +39,29 @@ class LLMSettings:
     max_tokens: int = 4_000
 
     @classmethod
+    def from_platform_env(cls) -> "LLMSettings":
+        """Use only credentials supplied by Boosters; the model is optional."""
+        missing = [key for key in ('OPENAI_API_KEY','OPENAI_BASE_URL') if not os.getenv(key,'').strip()]
+        if missing:
+            raise ValueError('Platform environment missing: '+', '.join(missing))
+        return cls(api_key=os.environ['OPENAI_API_KEY'].strip(),
+                   base_url=os.environ['OPENAI_BASE_URL'].strip(),
+                   model=os.getenv('OPENAI_MODEL','').strip() or PLATFORM_MODEL)
+
+    @classmethod
     def from_env(cls, env_file: str | None = None) -> "LLMSettings":
         """Load RouterAI settings from ``.env`` and the process environment."""
 
         load_dotenv(dotenv_path=env_file, override=False)
-        api_key = os.getenv("ROUTERAI_API_KEY", "").strip()
+        api_key = os.getenv("OPENAI_API_KEY", os.getenv("ROUTERAI_API_KEY", "")).strip()
         if not api_key:
             raise ValueError(
-                "ROUTERAI_API_KEY is not set. Copy .env.example to .env and add the key locally."
+                "OPENAI_API_KEY is not set. Configure the platform environment or a local .env."
             )
         return cls(
             api_key=api_key,
-            base_url=os.getenv("ROUTERAI_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL,
-            model=os.getenv("ROUTERAI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
+            base_url=os.getenv("OPENAI_BASE_URL", os.getenv("ROUTERAI_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
+            model=os.getenv("OPENAI_MODEL", os.getenv("ROUTERAI_MODEL", DEFAULT_MODEL)).strip() or DEFAULT_MODEL,
             timeout_seconds=float(os.getenv("ROUTERAI_TIMEOUT_SECONDS", "120")),
             max_tokens=int(os.getenv("ROUTERAI_MAX_TOKENS", "4000")),
         )

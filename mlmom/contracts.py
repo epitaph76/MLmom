@@ -100,6 +100,8 @@ class ResultFormat(StrictModel):
     finite_predictions_required: bool | None = None
     missing_predictions_allowed: bool | None = None
     duplicate_ids_allowed: bool | None = None
+    prediction_kind: Literal['value','label','probability','cluster','ranking_score','anomaly_score'] | None = None
+    class_order: list[str | int | float | bool] = Field(default_factory=list)
 
 
 class TaskSpec(StrictModel):
@@ -134,6 +136,7 @@ class TaskDefinition(StrictModel):
     weight_column: str | None = None
     excluded_feature_columns: list[str] = Field(default_factory=list)
     primary_metric: str
+    metric_options: dict[str, Any] = Field(default_factory=dict)
     metric_direction: MetricDirection
     validation_strategy: ValidationStrategy
     result_format: ResultFormat

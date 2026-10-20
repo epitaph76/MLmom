@@ -1,0 +1,13 @@
+{
+  "skill_id": "torch",
+  "version": "0.1.0",
+  "title": "torch",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "torch"
+  ],
+  "dependencies": [
+    "torch"
+  ]
+}

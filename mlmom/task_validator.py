@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import Any
 
 from .contracts import (
@@ -174,11 +175,46 @@ class TaskValidator:
             )
 
         self._validate_metric(profile, task, add)
+        self._validate_metric_options(task, add)
         self._validate_strategy(task, add)
         self._validate_result_format(profile, task, add)
 
         errors = [finding for finding in findings if finding.severity == Severity.ERROR]
         return TaskValidationReport(valid=not errors, findings=findings)
+
+    def _validate_metric_options(self, task: TaskDefinition, add: Any) -> None:
+        metric=_normalise_metric(task.primary_metric)
+        allowed={
+            'ndcg':{'k'},'map':{'k'},'mean_average_precision':{'k'},'mrr':{'k'},
+            'roc_auc':{'average','multi_class','max_fpr'},'auc':{'average','multi_class','max_fpr'},
+            'log_loss':set(),'silhouette':{'sample_size','random_state','metric'},
+            'average_precision':{'average','pos_label'},'precision':{'average','pos_label'},'recall':{'average','pos_label'},
+            'f1':{'average','pos_label'},'f1_macro':{'average'},'macro_f1':{'average'},'f1_micro':{'average'},
+            'micro_f1':{'average'},'f1_weighted':{'average'},'weighted_f1':{'average'},
+            'rmse':{'multioutput'},'mse':{'multioutput'},'mae':{'multioutput'},'r2':{'multioutput'},
+        }.get(metric,set())
+        if set(task.metric_options)-allowed:add('unsupported_metric_options','Unsupported metric arguments.',field='metric_options')
+        try:json.dumps(task.metric_options,allow_nan=False)
+        except (TypeError,ValueError):add('invalid_metric_option','Metric arguments must be finite JSON values.',field='metric_options')
+        for key in ['k','sample_size']:
+            value=task.metric_options.get(key)
+            if value is not None and (type(value) is not int or value<1):add('invalid_metric_option',f'{key} must be a positive integer.',field='metric_options')
+        if metric in {'macro_f1','f1_macro','micro_f1','f1_micro','weighted_f1','f1_weighted'}:
+            expected='macro' if 'macro' in metric else 'micro' if 'micro' in metric else 'weighted'
+            if task.metric_options.get('average',expected)!=expected:add('metric_option_mismatch','Averaging contradicts the named metric.',field='metric_options')
+        average=task.metric_options.get('average')
+        if 'average' in task.metric_options and (not isinstance(average,str) or average not in {'binary','macro','micro','weighted','samples'}):
+            add('invalid_metric_option','A scalar averaging strategy is required.',field='metric_options')
+        if average=='samples' and task.task_type!=TaskType.MULTILABEL_CLASSIFICATION:
+            add('invalid_metric_option','samples averaging requires multilabel classification.',field='metric_options')
+        if average=='binary' and task.task_type not in {TaskType.BINARY_CLASSIFICATION,TaskType.ANOMALY_DETECTION}:
+            add('invalid_metric_option','binary averaging requires a binary task.',field='metric_options')
+        if task.task_type==TaskType.MULTICLASS_CLASSIFICATION and metric in {'f1','precision','recall'} and average is None:
+            add('ambiguous_metric_averaging','Multiclass precision/recall/F1 requires explicit averaging.',field='metric_options')
+        if 'max_fpr' in task.metric_options:
+            value=task.metric_options['max_fpr']
+            if not isinstance(value,(int,float)) or not 0<value<=1 or (task.task_type==TaskType.MULTICLASS_CLASSIFICATION and value!=1):
+                add('invalid_metric_option','max_fpr is incompatible with this task.',field='metric_options')
 
     def _validate_metric(self, profile: DatasetProfile, task: TaskDefinition, add: Any) -> None:
         metric = _normalise_metric(task.primary_metric)
@@ -270,6 +306,7 @@ class TaskValidator:
             "file_name", "encoding", "delimiter", "include_index", "row_order",
             "one_prediction_per_id", "finite_predictions_required",
             "missing_predictions_allowed", "duplicate_ids_allowed",
+            "prediction_kind",
         )
         for field_name in scalar_fields:
             expected_value = getattr(expected, field_name)
@@ -293,7 +330,12 @@ class TaskValidator:
                     expected=expected_value,
                     actual=actual_value,
                 )
-        if actual.prediction_columns and actual.prediction_columns != task.target_columns:
+        prediction=actual.prediction_kind
+        kinds=({'label','probability'} if 'classification' in task.task_type else {'cluster'} if task.task_type==TaskType.CLUSTERING
+               else {'anomaly_score','label'} if task.task_type==TaskType.ANOMALY_DETECTION else {'ranking_score','value'} if task.task_type==TaskType.RANKING else {'value'})
+        if prediction is not None and prediction not in kinds:add('prediction_kind_mismatch','Output kind is incompatible with the task.',field='result_format.prediction_kind')
+        if (task.target_columns and actual.prediction_columns and
+                not expected.prediction_columns and actual.prediction_columns != task.target_columns):
             add(
                 "prediction_target_mismatch",
                 "Prediction columns must be the task target columns.",

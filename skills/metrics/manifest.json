@@ -1,0 +1,9 @@
+{
+  "skill_id": "metrics",
+  "version": "0.1.0",
+  "title": "metrics",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

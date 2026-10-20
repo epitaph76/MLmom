@@ -1,0 +1,13 @@
+{
+  "skill_id": "autogluon",
+  "version": "0.1.0",
+  "title": "autogluon",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "autogluon"
+  ],
+  "dependencies": [
+    "autogluon.tabular"
+  ]
+}

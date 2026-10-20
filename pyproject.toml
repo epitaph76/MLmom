@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mlmom"
-version = "0.1.0"
+version = "0.2.0"
 description = "AutoML agent components for the Alfa Hack"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -15,6 +15,16 @@ dependencies = [
     "python-dotenv==1.0.1",
     "tenacity==9.0.0",
     "langgraph==0.6.7",
+    "scipy==1.12.0",
+    "scikit-learn==1.5.2",
+    "optuna==4.2.1",
+    "psutil==6.1.1",
+    "joblib==1.4.2",
+    "cloudpickle==3.1.1",
+    "threadpoolctl==3.6.0",
+    "PyYAML==6.0.2",
+    "langchain==0.3.27",
+    "langchain-openai==0.3.23",
 ]
 
 [tool.setuptools.packages.find]

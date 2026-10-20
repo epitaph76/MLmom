@@ -1,0 +1,9 @@
+{
+  "skill_id": "preprocessing",
+  "version": "0.1.0",
+  "title": "preprocessing",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

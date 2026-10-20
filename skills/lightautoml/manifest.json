@@ -1,0 +1,13 @@
+{
+  "skill_id": "lightautoml",
+  "version": "0.1.0",
+  "title": "lightautoml",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "lightautoml"
+  ],
+  "dependencies": [
+    "lightautoml"
+  ]
+}

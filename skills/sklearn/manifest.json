@@ -1,0 +1,13 @@
+{
+  "skill_id": "sklearn",
+  "version": "0.1.0",
+  "title": "sklearn",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "sklearn"
+  ],
+  "dependencies": [
+    "scikit-learn"
+  ]
+}

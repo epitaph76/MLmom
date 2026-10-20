@@ -1,0 +1,13 @@
+{
+  "skill_id": "flaml",
+  "version": "0.1.0",
+  "title": "flaml",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "flaml"
+  ],
+  "dependencies": [
+    "flaml"
+  ]
+}

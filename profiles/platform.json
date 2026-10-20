@@ -1,0 +1,8 @@
+{
+  "profile": "platform",
+  "total_seconds": 10800,
+  "final_reserve_seconds": 2400,
+  "first_submission_seconds": 600,
+  "max_workers": 3,
+  "plateau_rounds": 5
+}

@@ -1,0 +1,13 @@
+{
+  "skill_id": "statsmodels",
+  "version": "0.1.0",
+  "title": "statsmodels",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "statsmodels"
+  ],
+  "dependencies": [
+    "statsmodels"
+  ]
+}

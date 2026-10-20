@@ -85,7 +85,9 @@ def build_task_graph(client: ChatClient):
         {"repair": "repair", "finish": END},
     )
     graph.add_edge("repair", "validate")
-    return graph.compile()
+    # Stage one has its own Pydantic state; the outer runtime persists its JSON result.
+    # Do not inherit an enclosing graph's JSON-only checkpointer.
+    return graph.compile(checkpointer=False)
 
 
 def analyze_task(

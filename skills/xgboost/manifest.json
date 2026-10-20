@@ -1,0 +1,13 @@
+{
+  "skill_id": "xgboost",
+  "version": "0.1.0",
+  "title": "xgboost",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [
+    "xgboost"
+  ],
+  "dependencies": [
+    "xgboost"
+  ]
+}

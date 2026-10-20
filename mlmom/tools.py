@@ -1,0 +1,135 @@
+"""Typed capability tools. Only explicitly registered tools reach an LLM role."""
+from __future__ import annotations
+
+import ast
+import inspect
+import json
+import time
+from pathlib import Path
+from typing import Any, Callable
+from pydantic import create_model,ConfigDict
+from .inputs import inside
+from .pipeline_contracts import ToolResult, ValidationReport
+
+
+class ToolSet:
+    def __init__(self):
+        self.tools = {}
+
+    def register(self, name: str, fn: Callable, description: str):
+        hints = __import__('typing').get_type_hints(fn)
+        fields = {}
+        for key, parameter in inspect.signature(fn).parameters.items():
+            default = ... if parameter.default is inspect.Parameter.empty else parameter.default
+            fields[key] = (hints.get(key, Any), default)
+        model = create_model(name + 'Args', __config__=ConfigDict(extra='forbid'), **fields)
+        self.tools[name] = (fn, model, description)
+        return self
+
+    def schemas(self):
+        return [{'type':'function','function':{'name':name,'description':description,'parameters':model.model_json_schema()}}
+                for name, (_, model, description) in self.tools.items()]
+
+    def invoke(self, name: str, arguments: str | dict) -> ToolResult:
+        start = time.monotonic()
+        try:
+            fn, model, _ = self.tools[name]
+            args = model.model_validate(json.loads(arguments) if isinstance(arguments,str) else arguments)
+            result = fn(**args.model_dump())
+            return ToolResult(status='ok', data=result, duration_seconds=time.monotonic()-start)
+        except Exception as error:
+            return ToolResult(status='error', error=f'{type(error).__name__}: {str(error)[:2500]}',
+                              duration_seconds=time.monotonic()-start)
+
+
+class Workspace:
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def path(self, path: str):
+        p = inside(self.root, path)
+        if p.suffix not in {'.py','.json','.md','.txt'} or any(part.startswith('.') for part in p.relative_to(self.root).parts):
+            raise ValueError('Only code and metadata files are allowed')
+        return p
+
+    def list_files(self) -> list[str]:
+        return [p.relative_to(self.root).as_posix() for p in sorted(self.root.rglob('*'))
+                if p.is_file() and p.suffix in {'.py','.json','.md','.txt'}][:100]
+
+    def read_file(self, path: str) -> str:
+        p = self.path(path)
+        if p.stat().st_size > 64000: raise ValueError('File exceeds tool read limit')
+        return p.read_text(encoding='utf-8')
+
+    def write_file(self, path: str, content: str) -> str:
+        if len(content) > 64000: raise ValueError('File exceeds write limit')
+        p = self.path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding='utf-8')
+        return path
+
+    def apply_patch(self, path: str, old_text: str, new_text: str) -> str:
+        text = self.read_file(path)
+        if not old_text or text.count(old_text) != 1:
+            raise ValueError('Patch must identify exactly one nonempty source block')
+        return self.write_file(path, text.replace(old_text,new_text,1))
+
+    def search(self, text: str) -> list[dict]:
+        results = []
+        for name in self.list_files():
+            for line, value in enumerate(self.read_file(name).splitlines(),1):
+                if text in value: results.append({'path':name,'line':line,'text':value[:300]})
+                if len(results) >= 50: return results
+        return results
+
+    def tools(self):
+        result = ToolSet()
+        for name in ['list_files','read_file','write_file','apply_patch','search']:
+            result.register(name, getattr(self,name), {
+                'list_files':'List candidate workspace files.', 'read_file':'Read candidate source.',
+                'write_file':'Create or update candidate source.', 'apply_patch':'Replace exactly one source block.',
+                'search':'Search candidate source files.'}[name])
+        return result
+
+
+FORBIDDEN = {'os','subprocess','socket','requests','httpx','urllib','ftplib','pip','ctypes','multiprocessing',
+             'psutil','sqlite3','keyring','shutil'}
+ALLOWED = {'mlmom','numpy','pandas','scipy','sklearn','catboost','lightgbm','xgboost','flaml','autogluon',
+           'lightautoml','statsmodels','torch','imblearn','category_encoders','feature_engine','optuna',
+           'polars','pyarrow','joblib','cloudpickle','math','statistics','typing','collections','functools',
+           'itertools','dataclasses','pathlib','json','re','time','random','copy','warnings','pickle'}
+
+
+def verify_source(root: Path) -> ValidationReport:
+    errors, warnings = [], []
+    files = list(root.rglob('*.py'))
+    if not (root/'candidate.py').is_file(): errors.append('Missing candidate.py')
+    local = {p.stem for p in files}
+    for path in files:
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'), filename=path.name)
+        except (SyntaxError,UnicodeError) as error:
+            errors.append(f'{path.name}: {error}')
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import): names = [n.name for n in node.names]
+            elif isinstance(node, ast.ImportFrom): names = [node.module or '']
+            for name in names:
+                base = name.split('.')[0]
+                if base in FORBIDDEN or (base and base not in ALLOWED and base not in local):
+                    errors.append(f'{path.name}: unsupported import {name}')
+                if base == 'mlmom' and name not in {'mlmom.sdk','mlmom.adapters','mlmom.ensemble'}:
+                    errors.append(f'{path.name}: infrastructure import is forbidden: {name}')
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval','exec','compile','__import__'}:
+                errors.append(f'{path.name}: dynamic execution is forbidden')
+            if isinstance(node,ast.Attribute) and node.attr in {'environ','getenv','system','popen','from_pretrained','load_state_dict_from_url','hub'}:
+                errors.append(f'{path.name}: forbidden API {node.attr}')
+            if isinstance(node,ast.Constant) and isinstance(node.value,str) and ('http://' in node.value or 'https://' in node.value):
+                errors.append(f'{path.name}: network URLs are forbidden')
+        if path.name == 'candidate.py':
+            functions = {node.name for node in tree.body if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+            for name in ['create_candidate','load_candidate']:
+                if name not in functions: errors.append(f'candidate.py must define {name}')
+    return ValidationReport(valid=not errors, errors=sorted(set(errors)), warnings=warnings)
