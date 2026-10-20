@@ -1,0 +1,17 @@
+{
+  "skill_id": "autogluon",
+  "version": "1.0.0",
+  "title": "autogluon",
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification"
+  ],
+  "ml_tools": [
+    "autogluon"
+  ],
+  "dependencies": [
+    "autogluon.tabular"
+  ]
+}

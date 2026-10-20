@@ -1,0 +1,20 @@
+{
+  "skill_id": "xgboost",
+  "version": "1.0.0",
+  "title": "xgboost",
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification",
+    "multioutput_regression",
+    "multilabel_classification",
+    "ranking"
+  ],
+  "ml_tools": [
+    "xgboost"
+  ],
+  "dependencies": [
+    "xgboost"
+  ]
+}

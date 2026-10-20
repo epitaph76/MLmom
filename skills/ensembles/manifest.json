@@ -1,0 +1,15 @@
+{
+  "skill_id": "ensembles",
+  "version": "1.0.0",
+  "title": "Blending and OOF stacking",
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "multioutput_regression",
+    "binary_classification",
+    "multiclass_classification",
+    "multilabel_classification"
+  ],
+  "ml_tools": [],
+  "dependencies": []
+}

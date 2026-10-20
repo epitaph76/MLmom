@@ -1,0 +1,9 @@
+{
+  "skill_id": "validation",
+  "version": "1.0.0",
+  "title": "Internal validation",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

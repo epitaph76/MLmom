@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!pyproject.toml
+!requirements.txt
+!solution.py
+!mlmom/
+!mlmom/**
+!skills/
+!skills/**
+!profiles/
+!profiles/**
+!tests/
+!tests/**
+**/__pycache__/

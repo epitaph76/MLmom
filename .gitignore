@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.idea/
+.vscode/
+artifacts/
+*.egg-info/
+dist/
+.pytest_cache/
+.mlmom-runtime-*/
+

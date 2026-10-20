@@ -1,0 +1,85 @@
+{
+  "date": "2026-10-20",
+  "source_commit": "0a39dc2a5a1958293ecfe05e46549148bb82f3ac",
+  "target_branch": "master",
+  "package": {
+    "path": "submission/mlmom-solution.zip",
+    "root_files": [
+      "solution.py",
+      "requirements.txt",
+      "mlmom_bundle.py"
+    ],
+    "bytes": 84810,
+    "sha256": "d0c34db4eb2e27139cc38c90ff187365144593d7b95032c3aeac00d8884547ea",
+    "secret_scan": "passed",
+    "bundled_source_matches_checkout": true
+  },
+  "skills": {
+    "count": 17,
+    "status": "ready",
+    "version": "1.0.0",
+    "instruction_characters": 23646,
+    "context_limit_characters": 24000,
+    "bundled_files": 35,
+    "planning_and_coding_delivery": "tested"
+  },
+  "tests": {
+    "status": "passed",
+    "count": 45,
+    "duration_seconds": 164.819,
+    "source": "extracted final ZIP",
+    "runtime": "Python 3.12, organizer dependencies, CPU torch",
+    "os": "Linux",
+    "network": "none",
+    "cpus": 8,
+    "memory_gb": 32,
+    "llm": "mock"
+  },
+  "adapters": [
+    "sklearn",
+    "catboost",
+    "lightgbm",
+    "xgboost",
+    "flaml",
+    "autogluon",
+    "lightautoml",
+    "statsmodels",
+    "torch"
+  ],
+  "historical_validation_before_ready_skills": {
+    "source_commit": "e37db7cbd1800338b60fb8bd7e68df01ce42a49e",
+    "public_archives_mock_llm": [
+      {
+        "task": "regression",
+        "rounds": 2,
+        "rows": 22449,
+        "status": "completed"
+      },
+      {
+        "task": "multiclass_classification",
+        "rounds": 2,
+        "rows": 41166,
+        "status": "completed"
+      }
+    ],
+    "real_api_smoke": {
+      "model": "qwen/qwen3.8-27b",
+      "task": "regression",
+      "status": "completed",
+      "rounds": 1,
+      "rows": 22449,
+      "model_role": "submission_refit",
+      "research_holdout_rmse": 43.68648516899244,
+      "duration_seconds": 693.96,
+      "requests": 38,
+      "tokens": 660522,
+      "inspection_and_probes": "reused from earlier real API run on identical inputs",
+      "candidate_rechecked_with_final_worker": true
+    }
+  },
+  "limits": {
+    "current_skills_real_api_smoke": false,
+    "three_hour_stress_run": false,
+    "boosters_submission": false
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "skill_id": "feature_engineering",
+  "version": "1.0.0",
+  "title": "Feature engineering",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

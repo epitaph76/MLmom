@@ -1,0 +1,17 @@
+{
+  "skill_id": "flaml",
+  "version": "1.0.0",
+  "title": "flaml",
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification"
+  ],
+  "ml_tools": [
+    "flaml"
+  ],
+  "dependencies": [
+    "flaml"
+  ]
+}
