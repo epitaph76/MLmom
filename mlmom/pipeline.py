@@ -82,7 +82,8 @@ class Pipeline:
         self.checkpointer = SQLiteCheckpointer(str(self.run_dir/'checkpoints.sqlite3'))
         if client is None:
             client = RoleClient(settings,deadline=self.budget.deadline-self.budget.reserve,max_steps=config.agent_steps,
-                usage_callback=lambda usage:self.store.event('llm_usage','run',usage))
+                usage_callback=lambda usage:self.store.event('llm_usage','run',usage),
+                request_callback=lambda event:self.store.event('llm_request','run',event))
         self.client = client
         self.role_tools = ToolSet()
         self.role_tools.register('list_ml_tools',lambda:[s.model_dump(mode='json') for s in self.tools.values()], 'List installed, probed ML tools.')

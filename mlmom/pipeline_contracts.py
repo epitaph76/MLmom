@@ -29,7 +29,7 @@ class RunConfig(StrictModel):
     reserve_cpus: int = Field(1, ge=0)
     reserve_memory_gb: float = Field(4, ge=0)
     smoke_seconds: float = Field(30, gt=0)
-    llm_timeout_seconds: float = Field(120, gt=0)
+    llm_timeout_seconds: float = Field(300, gt=0)
     llm_max_tokens: int = Field(12000, ge=256)
     metric_options: dict[str, Any] = Field(default_factory=dict)
     submission_kind: str | None = None

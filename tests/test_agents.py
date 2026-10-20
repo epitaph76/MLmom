@@ -7,6 +7,8 @@ import httpx
 from openai import APIStatusError
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
+from openai import APITimeoutError
 from mlmom.agents import RoleClient,LLMUnavailable
 from mlmom.llm_client import LLMSettings
 from mlmom.coding import CodeBundle
@@ -68,6 +70,26 @@ class AgentProtocolTests(unittest.TestCase):
                 client.complete([{'role':'user','content':'{}'}])
         request.assert_called_once()
         self.assertNotIn('sensitive',str(result.exception))
+
+    def test_retry_observability_and_timeout_remain_within_global_deadline(self):
+        events=[];usage=[]
+        client=RoleClient(LLMSettings(api_key='test-only',timeout_seconds=300),deadline=time.time()+10,
+                          request_callback=events.append,usage_callback=usage.append)
+        self.addCleanup(client.client.close)
+        message={'role':'assistant','content':json.dumps({'files':{'candidate.py':'x=1'}})}
+        response=SimpleNamespace(usage=SimpleNamespace(model_dump=lambda:{'total_tokens':7}),
+                                 choices=[SimpleNamespace(message=SimpleNamespace(model_dump=lambda **kwargs:message))])
+        with patch.object(client.client,'with_options') as options,patch('mlmom.agents.time.sleep'):
+            options.return_value.chat.completions.create.side_effect=[
+                APITimeoutError(request=httpx.Request('POST','https://proxy.invalid/v1')),response]
+            result=client.generate('coding_agent','Minimal test',{},CodeBundle)
+        self.assertEqual(result.files,{'candidate.py':'x=1'})
+        self.assertEqual([event['status'] for event in events],['started','retry','started'])
+        self.assertTrue(all(event['role']=='coding_agent' for event in events))
+        self.assertEqual(usage[0]['total_tokens'],7)
+        self.assertEqual(usage[0]['role'],'coding_agent')
+        self.assertTrue(all(0<call.kwargs['timeout']<=10 for call in options.call_args_list))
+        self.assertNotIn('test-only',json.dumps(events+usage))
 
 
 if __name__=='__main__':unittest.main()

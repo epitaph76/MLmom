@@ -15,15 +15,16 @@ class LLMUnavailable(RuntimeError):
 
 
 class RoleClient:
-    def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None):
+    def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None, request_callback=None):
         self.settings = settings
         self.model = settings.model
         self.deadline = deadline
         self.max_steps = max_steps
         self.usage_callback = usage_callback
+        self.request_callback = request_callback
         self.client = OpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=0)
 
-    def _request(self, messages, *, tools=None):
+    def _request(self, messages, *, tools=None, role='task_definition'):
         if time.time() >= self.deadline:
             raise LLMUnavailable('LLM deadline reached')
         params = dict(model=self.model, messages=messages, temperature=0, max_tokens=self.settings.max_tokens)
@@ -36,10 +37,13 @@ class RoleClient:
         for attempt in range(3):
             remaining = self.deadline-time.time()
             if remaining <= 0: break
+            started=time.monotonic()
+            if self.request_callback:
+                self.request_callback(dict(role=role,attempt=attempt+1,status='started'))
             try:
                 response = self.client.with_options(timeout=min(remaining,self.settings.timeout_seconds)).chat.completions.create(**params)
                 if self.usage_callback and response.usage:
-                    self.usage_callback(response.usage.model_dump())
+                    self.usage_callback(dict(response.usage.model_dump(),role=role,request_seconds=time.monotonic()-started))
                 return response.choices[0].message.model_dump(exclude_none=True)
             except BadRequestError as error:
                 # Retry only optional API extensions; never switch provider/model.
@@ -51,6 +55,9 @@ class RoleClient:
                     raise LLMUnavailable(f'Provider rejected request ({error.status_code})') from None
             except (APIConnectionError, APITimeoutError, RateLimitError) as error:
                 last = type(error).__name__
+                if self.request_callback:
+                    self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last,
+                                               request_seconds=time.monotonic()-started))
                 time.sleep(min(2**attempt, max(0,self.deadline-time.time())))
             except APIStatusError as error:
                 if 'budget has been exceeded' in str(getattr(error,'body','')).lower():
@@ -74,7 +81,7 @@ class RoleClient:
             {'role':'user','content':json.dumps(request,ensure_ascii=False,allow_nan=False)},
         ]
         for _ in range(self.max_steps):
-            message = self._request(messages, tools=tools.schemas() if tools else None)
+            message = self._request(messages, tools=tools.schemas() if tools else None,role=role)
             messages.append(message)
             calls = message.get('tool_calls', [])
             if not calls:
