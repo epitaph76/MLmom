@@ -11,6 +11,7 @@ from .pipeline_contracts import MLToolSpec, SkillManifest
 SUPERVISED = ['regression','binary_classification','multiclass_classification']
 MULTI = SUPERVISED + ['multioutput_regression','multilabel_classification']
 CORE_SKILLS = ('candidate_sdk', 'validation', 'metrics', 'preprocessing')
+LIGHTAUTOML_OBJECTIVES = {'regression':'rmse','binary_classification':'roc_auc','multiclass_classification':'log_loss'}
 DEFINITIONS = [
     ('sklearn','scikit-learn','sklearn','1.5.2',MULTI+['clustering','anomaly_detection'],'fast',False,True,False),
     ('catboost','catboost','catboost','1.2.8',MULTI+['ranking'],'medium',False,True,True),

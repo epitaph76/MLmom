@@ -8,11 +8,13 @@ Choose one backend for a hypothesis; add feature_engineering, imbalance, hpo or 
 
 The stock adapters are deliberately narrower than their libraries: sklearn selects fixed estimators; LightGBM/XGBoost use dense OHE; most boosters do not pass eval_set; statsmodels only supports unweighted single-output OLS; Torch accepts four MLP options. Cards distinguish stock behavior from custom candidate implementations. Do not copy research examples as if every parameter were an allowed model_params key.
 
-LightAutoML's default objectives match regression/RMSE, binary/ROC-AUC and multiclass/log-loss. Its current plan validator accepts more name/task combinations than these native defaults; the skill explicitly requires an exact match. Temporal tasks remain deferred. Instructions do not add new adapter capabilities.
+LightAutoML's default objectives match regression/RMSE, binary/ROC-AUC and multiclass/log-loss. Both the plan validator and adapter enforce these exact pairs before training. Temporal tasks remain deferred; instructions do not add new adapter capabilities.
+
+The planning roles receive the core instruction content automatically, and read_skills exposes selected backend/technique instructions with the same compatibility and context checks. The semantic validator receives all selected instructions before approving a plan; the coder receives the corresponding versioned package contents.
 
 ## Maintenance
 
-Run tests/test_skills.py and the skill-creator quick_validate.py on each skill folder. Test registry budget/deduplication, shared-contract hashes, compatibility and flat-ZIP extraction; rerun pipeline integration when changing automatic loading. The full training environment is Python 3.12 with versions pinned in requirements.txt. Offline runtime uses installed API inspection rather than fetching these links.
+Run tests/test_skills.py and tests/test_packaging.py for manifest/frontmatter validation, context limits, provenance, compatibility and flat-ZIP extraction. Rerun pipeline integration when changing automatic loading; the runtime uses Python 3.12, pinned requirements and installed API inspection without fetching documentation.
 
 ## Primary API references
 

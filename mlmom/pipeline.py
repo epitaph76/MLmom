@@ -88,7 +88,12 @@ class Pipeline:
         self.role_tools = ToolSet()
         self.role_tools.register('list_ml_tools',lambda:[s.model_dump(mode='json') for s in self.tools.values()], 'List installed, probed ML tools.')
         self.role_tools.register('list_skills',self.skills.list,'List registered instruction packages.')
+        self.role_tools.register('read_skills',self.read_skills,'Read compatible skill instructions and hashes, including the automatic core contract.')
         self.role_tools.register('read_history',self.read_history,'Read bounded structured experiment history. No raw rows.')
+
+    def read_skills(self, skill_ids: list[str]) -> list[dict]:
+        if self.context is None:raise ValueError('Skills require a validated task context')
+        return self.skills.load(skill_ids,self.context.task.task_type)
 
     def input_hashes(self):
         paths = [self.files.task,self.files.train,self.files.test,*self.files.dictionaries]

@@ -45,6 +45,28 @@ class RepairLLM(OfflineLLM):
 
 
 class InvariantTests(unittest.TestCase):
+    def test_lightautoml_task_objective_checked_before_planning_and_fit(self):
+        from mlmom.adapters import LibraryCandidate
+        from mlmom.sdk import FitContext
+        from mlmom.evaluation import prediction_kind
+        pairs=[('regression','rmse','roc_auc'),('binary_classification','roc_auc','log_loss'),
+               ('multiclass_classification','log_loss','roc_auc')]
+        for kind,accepted,rejected in pairs:
+            with self.subTest(task=kind),tempfile.TemporaryDirectory() as temp:
+                frame,context,plan,code=execution_case(Path(temp),kind)
+                tools=installed_tools();tools['lightautoml'].available=True
+                plan.tool_id='lightautoml';plan.skill_ids=['lightautoml'];plan.strategy='native';plan.patience_trials=None
+                skills=SkillRegistry(ROOT/'skills')
+                budget=BudgetSnapshot(remaining_seconds=200,research_seconds=100,available_cpus=4,available_memory_gb=8,spent_seconds=0)
+                with patch('mlmom.registry.importlib.metadata.version',return_value='test'):
+                    for metric,valid in [(accepted,True),(rejected,False)]:
+                        context.task.primary_metric=metric;plan.prediction_kind=prediction_kind(metric,kind)
+                        report=validate_plan(plan,context,tools,skills,budget)
+                        self.assertEqual(report.valid,valid,report)
+                ctx=FitContext(task_type=kind,metric=rejected,direction='minimize',seed=42,cpus=1,memory_gb=2,time_limit_seconds=1)
+                with self.assertRaisesRegex(ValueError,'native objective'):
+                    LibraryCandidate({'tool_id':'lightautoml'}).fit(frame[context.feature_columns],frame[context.task.target_columns],ctx)
+
     def test_tool_written_candidate_survives_api_or_step_limit_then_is_verified(self):
         from mlmom.agents import LLMUnavailable
         for interruption in [ValueError('coding_agent exceeded 12 tool steps'),LLMUnavailable('API unavailable')]:

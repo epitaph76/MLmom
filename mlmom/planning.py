@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, START, END
 from .pipeline_contracts import (HypothesisBatch, PlanBatch, HypothesisPlan, ValidationReport,
                                   BudgetSnapshot, TaskContext)
 from .evaluation import prediction_kind
+from .registry import LIGHTAUTOML_OBJECTIVES
 
 
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot) -> ValidationReport:
@@ -54,6 +55,8 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         accepted={'rmse','mae','f1_macro','roc_auc','accuracy','log_loss'}
         if plan.tool_id=='lightautoml':accepted={'rmse','roc_auc','log_loss'}
         if metric_name(context.task.primary_metric) not in accepted:errors.append('Native adapter cannot optimize this metric')
+        if plan.tool_id=='lightautoml' and metric_name(context.task.primary_metric)!=LIGHTAUTOML_OBJECTIVES.get(context.task.task_type):
+            errors.append('LightAutoML native objective must match its task: regression=rmse, binary=roc_auc, multiclass=log_loss')
     if plan.ensemble_components:
         if context.task.task_type not in {'regression','multioutput_regression','binary_classification','multiclass_classification','multilabel_classification'}:
             errors.append('Ensemble SDK supports supervised regression/classification')
@@ -77,6 +80,7 @@ class PlanningState(TypedDict, total=False):
 
 
 def build_planning_graph(client, context, tools, skills, budget, max_attempts=3, max_candidates=3, role_tools=None, known_candidates=None):
+    core_instructions=skills.load([],context.task.task_type)
     def hypotheses(state):
         errors=[]
         for _ in range(max_attempts):
@@ -84,7 +88,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 batch = client.generate('hypothesis_generator',
                     f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 must contain a fast baseline. '
                     'Use history to improve strong approaches and avoid failed configurations.',
-                    dict(state['payload'],feedback=errors), HypothesisBatch, role_tools)
+                    dict(state['payload'],feedback=errors,skill_instructions=core_instructions), HypothesisBatch, role_tools)
                 if len(batch.hypotheses)>max_candidates:raise ValueError('Too many hypotheses for this run')
                 return {'hypotheses':batch.model_dump(mode='json'), 'attempts':0, 'errors':[]}
             except ValueError as error:errors=[str(error)]
@@ -96,13 +100,14 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 'Turn the supplied hypotheses into executable plans, preserving their IDs and meaning. '
                 'Use only available tools and skills. Native AutoML must set patience_trials=null. '
                 'Core candidate_sdk, validation, metrics and preprocessing skills load automatically. '
+                'Read the supplied core instructions; use read_skills for backend/technique instructions before finalizing a plan. '
                 'Select the backend skill; add hpo for Optuna, feature_engineering for new features, '
                 'imbalance for weighting/threshold changes, and ensembles plus component backend skills for ensembles. '
                 'Start with a cheap baseline, then a booster; native AutoML is an alternative search backend. '
                 'Do not include targets, IDs or evaluation data in features. A fast baseline uses strategy=single. '
                 'Model parameters passed to adapters must not override CPU, network, GPU or orchestration settings.',
                 dict(state['payload'], hypotheses=state['hypotheses'], previous_plans=state.get('plans',[]),
-                     feedback=state.get('errors',[])), PlanBatch, role_tools)
+                     feedback=state.get('errors',[]),skill_instructions=core_instructions), PlanBatch, role_tools)
             plans = [p.model_dump(mode='json') for p in batch.plans][:max_candidates]
             return {'plans':plans, 'attempts':state.get('attempts',0)+1, 'errors':[]}
         except ValueError as error:
@@ -126,9 +131,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         return {'errors':errors,'valid':not errors}
 
     def semantic(state):
+        selected_ids=[key for plan in state['plans'] for key in plan['skill_ids']]
+        instructions=skills.load(selected_ids,context.task.task_type)
         report = client.generate('plan_validator',
-            'Review feasibility, leakage, diversity and methodological validity. Return findings; never rewrite plans.',
-            dict(state['payload'],plans=state['plans']), ValidationReport)
+            'Review feasibility, leakage, diversity and methodological validity against the supplied skill instructions. Return findings; never rewrite plans.',
+            dict(state['payload'],plans=state['plans'],skill_instructions=instructions), ValidationReport)
         if not report.valid and not report.errors:
             report.errors.append('Semantic validator rejected the plan without an explanation')
         return {'valid':report.valid and not report.errors,'errors':report.errors}

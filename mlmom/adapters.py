@@ -12,6 +12,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
 from sklearn.multioutput import MultiOutputRegressor, MultiOutputClassifier
 from .evaluation import metric_name
 from .sdk import FitContext
+from .registry import LIGHTAUTOML_OBJECTIVES
 
 
 def classification(kind):
@@ -178,13 +179,14 @@ class LibraryCandidate:
             if frozen:
                 self.model.refit_full(model='best',set_best_to_refit_full=True,num_cpus=context.cpus,num_gpus=0,fit_strategy='sequential')
         else:
+            metric = metric_name(context.metric)
+            if metric != LIGHTAUTOML_OBJECTIVES.get(context.task_type):
+                raise ValueError('LightAutoML native objective does not match the requested task metric')
             from lightautoml.automl.presets.tabular_presets import TabularAutoML
             from lightautoml.tasks import Task
             # The preset's default task metric is allowed only when it matches the objective.
             metric = metric_name(context.metric)
-            if metric not in {'rmse','roc_auc','log_loss'}:
-                raise ValueError('LightAutoML requires an explicitly supported native objective')
-            task_name = 'reg' if not classification(context.task_type) else 'binary' if len(context.classes)==2 else 'multiclass'
+            task_name = {'regression':'reg','binary_classification':'binary','multiclass_classification':'multiclass'}[context.task_type]
             if classification(context.task_type):
                 self.encoder = LabelEncoder().fit(y)
                 y = self.encoder.transform(y)

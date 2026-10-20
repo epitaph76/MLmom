@@ -58,8 +58,17 @@ class PipelineIntegrationTests(unittest.TestCase):
                     prediction_seconds=10,experiment_seconds=20,reserve_cpus=0,reserve_memory_gb=0)
                 client=OfflineLLM()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
-                    result=Pipeline(task,config,run_dir=root/'run',client=client).run()
+                    pipeline=Pipeline(task,config,run_dir=root/'run',client=client)
+                    result=pipeline.run()
                 self.assertEqual(result['status'],'completed',result)
+                core={'candidate_sdk','validation','metrics','preprocessing'}
+                for role,payload in client.calls:
+                    if role in {'hypothesis_generator','planner','plan_validator'}:
+                        self.assertLessEqual(core,{s['skill_id'] for s in payload['skill_instructions']})
+                        if role=='plan_validator':self.assertIn('sklearn',{s['skill_id'] for s in payload['skill_instructions']})
+                read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
+                self.assertEqual(read.status,'ok')
+                self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in read.data})
                 self.assertEqual(result['submission']['model_role'],'submission_refit',result)
                 output=pd.read_csv(root/'input'/'submission.csv')
                 test=pd.read_csv(root/'input'/'test.csv')
