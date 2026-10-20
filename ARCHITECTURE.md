@@ -1,57 +1,115 @@
-# MLmom runtime
+# Функциональные блоки MLmom
 
-The runtime extends the existing DataAnalisys package. `solution.py` is the organizer entrypoint; `mlmom.pipeline.Pipeline` owns the persistent run graph. No runtime fallback generates a model without the LLM.
+## 1. Точка входа — `solution.py`
+Команда `python solution.py task.md` запускает полный цикл; без аргумента используется `task.md` в текущем каталоге. CLI принимает `--config`, `--profile`, `--run-dir`, `--resume`, возвращает JSON-статус и код 0 при наличии корректного результата, иначе 2.
 
-Boosters copies only root Python files and requirements. The upload ZIP contains
-`solution.py`, `requirements.txt`, and generated `mlmom_bundle.py`. The latter
-stores this project's source, manifests and skill placeholders as Python strings
-and restores them to a content-addressed local runtime directory before imports.
-Workers import that restored package through their explicit PYTHONPATH. No
-third-party code, packages or model weights are bundled. No installation or
-network request is used for bootstrapping. Platform credentials come only from
-OPENAI_API_KEY/OPENAI_BASE_URL; OPENAI_MODEL defaults to qwen/qwen3.8-27b.
+## 2. Конфигурация — `mlmom/pipeline_contracts.py`, `profiles/`
+`RunConfig` задаёт сроки, ресурсы, split, HPO, повторы и лимиты агентов; значения проверяются Pydantic. `platform.json` задаёт 180 минут и резерв 40 минут, `dev.json` — 15 минут и резерв 3 минуты; `--profile` выбирает источник подключения, а временные параметры загружаются через `--config`.
 
-## Graphs and ownership
+## 3. Разрешение входов — `mlmom/inputs.py`
+Файлы ищутся по manifest, существующим путям из условия, рядом с заданием и затем по однозначному рекурсивному совпадению. Неоднозначность и выход за корень задания отклоняются; расхождение путей из организаторских `task.md` с размещением CSV обрабатывается.
 
-`inspect -> plan -> execute -> analyze -> plan | finalize` is a LangGraph 0.6.7 StateGraph with a SQLite checkpointer. Planning and coding each run bounded validation/repair subgraphs. The original task-analysis graph retains its Pydantic state and explicitly disables inherited persistence; its result is persisted by the outer graph as JSON.
+## 4. Data Inspector — `mlmom/data_inspector.py`
+Инспектор анализирует train, словари и текст задания, сохраняя `DatasetProfile`, компактный JSON и Markdown без сырых строк. Он определяет роли и типы колонок, распределения, пропуски, дубликаты и риски; `test.csv` не используется для определения постановки.
 
-LLM roles propose hypotheses, plans and source. Trusted Python owns split indices, trial objectives, resource allocation, metric computation, ranking and output publication. Candidate code never executes in the controller. Tool schemas are built from typed function signatures; roles receive an explicit capability set.
+## 5. Постановка — `task_analyzer.py`, `task_graph.py`, `task_validator.py`
+LLM превращает профиль и условие в `TaskDefinition`, после чего Python проверяет колонки, метрику, исключение служебных полей и формат результата. Ошибки возвращаются на исправление, по умолчанию допускаются три попытки; исходный эвристический `TaskSpec` сохранён.
 
-## Candidate lifecycle
+## 6. Типы задач — `mlmom/contracts.py`, `mlmom/evaluation.py`
+Исполнение поддерживает регрессию, бинарную и многоклассовую классификацию, multioutput regression, multilabel, ranking, clustering и anomaly detection в пределах возможностей выбранного адаптера. Временная постановка получает статус `deferred_time_series_support`, а обычный годовой признак сам по себе не запускает forecasting.
 
-1. Resolve inputs and profile only train/dictionaries/task. Prefer explicit manifest paths, existing paths from task prose, siblings, then a unique recursive match. Reject ambiguity/path traversal.
-2. Validate TaskDefinition against the stage-one profile. Keep TaskSpec as the existing heuristic contract; TaskContext references the canonical task and profile.
-3. Probe each installed, version-matching library adapter in a bounded subprocess. Missing or failing libraries are unavailable to Planner.
-4. Generate up to three plans. Apply deterministic checks, semantic validation and bounded repair.
-5. Load versioned skills. Placeholder packages are explicitly marked and do not block code generation.
-6. Generate source in a restricted workspace. Preserve every revision. Check AST/import policy and a synthetic fit/predict/save/load cycle in a subprocess.
-7. Train only the allowed outer-train rows. Optuna optimizes ordinary candidates on an internal split; native AutoML uses its own search. Save a new immutable model directory for every best checkpoint, atomically updating its progress pointer.
-8. Predict holdout features in a subprocess. The controller calculates metrics against labels it retains. Predictions, model code, data hash, split, parameters and dependency versions remain linked in the ledger.
+## 7. Контекст и контракты — `mlmom/pipeline_contracts.py`
+`TaskContext` связывает проверенную постановку, профиль, файлы, признаки и классы; остальные Pydantic-модели описывают гипотезы, планы, версии кода, split, эксперименты, trials, оценки, Champion и submission. В checkpoint передаются JSON-данные и ссылки, а DataFrame, модели, клиенты и процессы остаются вне него.
 
-The generated module exports `create_candidate(config)` and `load_candidate(artifact_dir)`. Its object implements `fit(X, y, FitContext)`, `predict(X, {kind: ...})`, and `save(artifact_dir)`. Models may use the real library adapters or implement custom transformations. Factories never train at import time. Local custom classes have stable module names for serialization.
+## 8. LLM-клиент — `mlmom/agents.py`, `mlmom/llm_client.py`
+Общий OpenAI-compatible клиент поддерживает JSON, function calling, ограниченные повторы, дедлайн, учёт usage и журнал начала/повторов запросов. Стандартный запрос ограничен 300 секундами и 12 000 токенами вместе с reasoning; исчерпание ответа и дневного бюджета диагностируется отдельно.
 
-Stage-one models have additive optional fields: `TaskDefinition.metric_options` and `ResultFormat.prediction_kind/class_order`. Old artifacts without them remain readable. These fields carry ranking cutoffs, averaging rules, label/probability output distinctions and explicit probability-column ordering. Evaluation retains canonical training class order; output ordering is applied only when publishing a submission.
+## 9. Подключение API — `mlmom/llm_client.py`
+Платформа использует только `OPENAI_API_KEY`, `OPENAI_BASE_URL` и необязательный `OPENAI_MODEL`; локальный dev-профиль дополнительно читает `.env` и `ROUTERAI_*`. Ключ не сохраняется в модели, ZIP, journal или worker environment.
 
-## Rounds and evaluation
+## 10. Управляющий граф — `mlmom/pipeline.py`
+Основной StateGraph выполняет `inspect → plan → execute → analyze`, затем выбирает новый раунд либо `finalize`. Python управляет ресурсами, split, оценкой, Champion и публикацией; LLM предлагает планы и исходный код.
 
-Each full round gets a new reproducible outer split. All candidates in that round share it. Classification is stratified, multilabel uses rare-label allocation, ranking/groups preserve group membership. Time-aware execution is deferred. Explicit dictionary feature roles outrank year/date name heuristics.
+## 11. Hypothesis Generator — `mlmom/planning.py`
+Генератор предлагает не более трёх различных гипотез, используя профиль, доступные возможности и агрегированную историю. Первый раунд обязан содержать быстрый baseline, который готовится и выполняется раньше остальных кандидатов.
 
-The incumbent is retrained using its selected parameters, without a new search. Promotion compares only current-round evaluations. Ties retain the incumbent. If incumbent evaluation fails, historical Champion remains and new candidates are provisional. Earlier scores on other splits are never treated as comparable evidence of improvement.
+## 12. Planner — `mlmom/planning.py`
+Planner задаёт библиотеку, preprocessing, параметры, skills, стратегию поиска и CPU/RAM/time budget для каждой гипотезы. План сохраняет происхождение через `based_on`, если использует существующего кандидата.
 
-Top results within a relative 1% gap are passed forward, at most three, together with aggregate error diagnostics and recent failures. No raw holdout examples enter prompts. Five conclusive rounds without a challenger victory stop research. Blending and OOF stacking refit their components using only current training data.
+## 13. Проверки плана — `mlmom/planning.py`
+Python проверяет доступность и совместимость инструментов, skills, prediction kind, search space, параметры и ресурсы. Отдельная LLM-роль проверяет методологию и утечки; при отказе план исправляется в пределах `max_attempts`.
 
-## Processes, deadlines and recovery
+## 14. Реестр ML-инструментов — `mlmom/registry.py`
+Для sklearn, CatBoost, LightGBM, XGBoost, FLAML, AutoGluon, LightAutoML, statsmodels и torch описаны задачи, prediction API, веса, группы, поиск, сохранение и стоимость. Библиотека становится доступной после проверки версии и рабочего fit/predict/save/load probe в отдельном процессе.
 
-Default budget is 180 minutes, with a 40-minute finalization reserve, 1 CPU and 4 GB controller reserve, at most three concurrent experiments. Admission uses declared CPU/RAM plus cost-tag priority; affinity allocations are disjoint. Workers receive thread limits and no API keys, and their process trees are monitored for RSS and elapsed time. A worker watchdog also detects parent death. This is fault containment, not a hostile-code security boundary.
+## 15. Реестр скиллов — `mlmom/registry.py`, `skills/`
+Каждый skill содержит `manifest.json` и `SKILL.md`; загрузчик проверяет идентификатор, версию, задачи, зависимости, размер контекста и хеш содержимого. Все инструкции имеют статус `placeholder`, который передаётся кодеру и сохраняется в версии кандидата, но не блокирует генерацию.
 
-The initial baseline is prepared/executed before alternatives. The ten-minute first-file target is a goal, not a guarantee when the LLM or library is slow. Research models predict test directly and atomically update a validated submission. At finalization, a separate model is refitted on all train; it is never evaluated on an earlier holdout. Failed finalization preserves the existing file.
+## 16. Набор заглушек — `skills/`
+Библиотечные skills: sklearn, CatBoost, LightGBM, XGBoost, FLAML, AutoGluon, LightAutoML, statsmodels и torch. Техники: preprocessing, feature engineering, imbalance, HPO, ensembles и metrics; агенты не изменяют общий реестр.
 
-SQLite stores domain objects/events and checkpoint state separately. Workers emit file results; the controller writes the ledger. Deterministic experiment IDs reconcile completed workers with resumed graph execution. Session hashes reject changed task inputs. API usage is recorded; dev has no separate token/currency ceiling. No state is shared between competition tasks.
+## 17. Tool calling — `mlmom/tools.py`
+`ToolSet` строит JSON-схемы из типизированных функций и проверяет аргументы; результат содержит статус, данные либо ошибку, длительность и ссылки. Planner получает просмотр возможностей и ограниченную историю, кодер — workspace, предыдущий код, API introspection и проверки; управляющие операции остаются Python-узлам.
 
-## Supported libraries and limits
+## 18. Workspace — `mlmom/tools.py`
+Кодер может перечислять, читать, искать, создавать и изменять Python-файлы только внутри своего workspace. Проверяются пути, размер и точность patch; большие логи хранятся отдельно, в контекст возвращаются ограниченные фрагменты.
 
-Adapters cover sklearn, CatBoost, LightGBM, XGBoost, statsmodels OLS, CPU torch, FLAML, AutoGluon and LightAutoML. Capabilities differ by task; the registry and runtime probes decide availability. AutoGluon explicitly selects non-pretrained tree families. LightAutoML uses untuned CPU lgb/cb presets. Native trial reporting preserves backend logs/descriptions instead of pretending all libraries expose identical callbacks.
+## 19. Coding Agent — `mlmom/coding.py`
+Кодер получает план, SDK, выбранные skills, доступные библиотеки и при необходимости предыдущую реализацию, затем пишет кандидата и исправляет ошибки. Каждая попытка сохраняется отдельно; уже записанный инструментами код после сбоя API или лимита шагов проходит обычную проверку с отметкой причины восстановления.
 
-Generic clustering evaluation currently requires finite numeric features for its metric space. Anomaly metrics require explicit evaluation labels. Unknown metrics/output contracts are rejected. Temporal forecasting and a separate untouched final audit are outside v1. Result probabilities for submission can be selected through `submission_kind`; per-metric options are explicit configuration.
+## 20. SDK — `mlmom/sdk.py`
+Модуль кандидата экспортирует `create_candidate(config)` и `load_candidate(artifact_dir)`; объект реализует `fit(X, y, context)`, `predict(X, prediction_spec)` и `save(artifact_dir)`. `context` — dataclass `FitContext` с ресурсами, сроками, seed, классами, группами, весами и разрешённой внутренней валидацией; каталог сохранения создаёт инфраструктура.
 
-All 15 SKILL.md files intentionally contain placeholders. Their manifests, loading, hashes, compatibility checks and context limits are implemented; substantive instruction content remains future work.
+## 21. Проверка кода — `mlmom/tools.py`, `mlmom/coding.py`
+Verifier проверяет AST, импорты и SDK, затем запускает ограниченный fit/predict/save/load smoke в отдельном процессе. Синтетика сохраняет имена и типы признаков, target schema и классы задачи; модель дополнительно загружается после переноса каталога артефакта.
+
+## 22. Адаптеры — `mlmom/adapters.py`
+`LibraryCandidate` реализует реальные CPU-адаптеры девяти библиотек, preprocessing, predict API, сохранение и экспорт выбранных параметров. Для AutoGluon разрешены деревья без pretrained-компонентов, LightAutoML использует CPU lgb/cb, statsmodels ограничен одновыходной OLS-регрессией.
+
+## 23. Разбиение — `mlmom/splitting.py`
+Каждый исследовательский раунд получает новый seed и сохранённые индексы; внутри раунда все кандидаты используют один внешний holdout. Применяются random, stratified, group-aware и отдельная multilabel-логика с контролем редких меток; HPO видит только train текущего раунда.
+
+## 24. Планировщик ресурсов — `mlmom/resources.py`, `mlmom/pipeline.py`
+Scheduler учитывает доступные CPU/RAM контейнера, резервирует 1 CPU и 4 GB управляющему процессу и допускает до трёх совместимых запусков. CPU affinity не пересекается между jobs, потоки библиотек ограничены, освободившиеся ресурсы используются следующими заданиями.
+
+## 25. Worker — `mlmom/worker.py`
+Worker получает минимальное окружение без API-ключей и выполняет probe, smoke, train, predict либо API introspection. Контролируются RSS, wall time и смерть родителя; при нарушении лимита завершается дерево процессов, сохраняются статус и ограниченные логи.
+
+## 26. Optuna — `mlmom/worker.py`
+Общий runner создаёт внутреннюю валидацию, выполняет до 20 trials с patience 5 и сохраняет параметры, score, длительность и причины завершения. Внешние ответы недоступны оптимизатору; лучшая модель сохраняется в отдельный неизменяемый каталог.
+
+## 27. Native AutoML — `mlmom/adapters.py`
+FLAML, AutoGluon и LightAutoML используют собственные механизмы поиска и реально поддерживаемые параметры остановки. Сохраняются конфигурации и native history; переобучение выбранной конфигурации для incumbent/refit выполняется без нового HPO.
+
+## 28. Ансамбли — `mlmom/ensemble.py`
+Blending и stacking оформляются самостоятельными кандидатами, их компоненты обучаются заново на train текущего split. Stacking использует внутренние OOF-предсказания, а компоненты сохраняются отдельно вместе с метамоделью.
+
+## 29. Evaluator — `mlmom/evaluation.py`
+Worker возвращает предсказания, после чего управляющий Python проверяет форму, конечность, метки/вероятности и вычисляет метрику по сохранённым внешним ответам. Диагностика включает per-class F1, confusion matrix, распределение регрессионных ошибок и допустимые агрегированные срезы.
+
+## 30. Champion — `mlmom/pipeline.py`
+Incumbent переобучается на новом split с сохранёнными лучшими параметрами; сравниваются только результаты текущего раунда, при равенстве остаётся incumbent. Если incumbent не удалось оценить, исторический Champion сохраняется, а лучший новый результат остаётся неподтверждённым.
+
+## 31. Analyzer — `mlmom/pipeline.py`
+В следующий раунд передаются до трёх результатов с относительным отставанием `gap / max(abs(best_score), 1e-12) <= 0.01` и краткая сводка failures. Сырые примеры ошибок в LLM не отправляются; история разных split не используется как единая сравнительная таблица.
+
+## 32. Submission — `mlmom/submission.py`
+Во время исследования предсказания test формируются моделью текущего Champion, затем проверяются колонки, порядок ID, метки, ширина и конечность значений. Файл записывается через временный путь и атомарную замену, поэтому сбой не уничтожает предыдущий корректный результат.
+
+## 33. Финализация — `mlmom/pipeline.py`
+Новые исследования прекращаются при достижении резерва, невозможности следующего раунда, `max_rounds` или пяти завершённых раундах без победы над переобученным incumbent. Лучший кандидат обучается на всём train в роли `submission_refit`, хранится отдельно от evaluation-моделей и заменяет submission только после успешной проверки.
+
+## 34. История — `mlmom/persistence.py`
+`experiments.sqlite3` хранит контракты, версии кандидатов, планы, split, эксперименты, trials, метрики и события, а крупные данные и модели лежат файлами. Оценка связана с точным кодом, параметрами, зависимостями, split и моделью; старые версии не перезаписываются.
+
+## 35. Checkpoint — `mlmom/checkpoint.py`
+Persistent saver реализует интерфейс LangGraph через стандартный `sqlite3` и хранит JSON-состояние в `checkpoints.sqlite3`. При `--resume` проверяются input hashes и конфигурация, а журнал завершённых workers предотвращает повторное обучение уже готовых экспериментов.
+
+## 36. Упаковка — `scripts/package_solution.py`
+ZIP содержит ровно три корневых файла: `solution.py`, организаторский `requirements.txt` и `mlmom_bundle.py` с исходниками собственного runtime, skills и profiles. Bootstrap восстанавливает их в локальный `.mlmom-runtime-<hash>/`, без pip, загрузок, сторонних пакетов, данных, ключей и моделей в архиве.
+
+## 37. Тесты — `tests/`, `.github/workflows/ci.yml`
+Автотесты используют mock LLM и проверяют контракты, инструменты, все типы задач, SDK, циклы, HPO, ошибки, лимиты, восстановление и сохранность submission; установленные адаптеры проверяются реальным обучением. GitHub Actions запускает тесты и публикует собранный ZIP, а `scripts/smoke_organizer.py` отдельно проверяет два полных архива организаторов без API.
+
+## 38. Границы v1
+Изоляция процессов защищает от сбоев и превышения ресурсов, но не гарантирует защиту от намеренно враждебного Python-кода; независимый финальный audit holdout не добавлен. Forecasting отложен, неизвестные метрики и неоднозначные выходные контракты отклоняются, а успех платформенного скоринга подтверждает только Boosters после загрузки.

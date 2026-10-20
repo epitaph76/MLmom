@@ -45,6 +45,30 @@ class RepairLLM(OfflineLLM):
 
 
 class InvariantTests(unittest.TestCase):
+    def test_tool_written_candidate_survives_api_or_step_limit_then_is_verified(self):
+        from mlmom.agents import LLMUnavailable
+        for interruption in [ValueError('coding_agent exceeded 12 tool steps'),LLMUnavailable('API unavailable')]:
+            class InterruptedCoder(OfflineLLM):
+                def generate(self,role,instruction,payload,schema,tools=None):
+                    if role=='coding_agent':
+                        result=tools.invoke('write_file',{'path':'candidate.py','content':ADAPTER_CODE})
+                        if result.status!='ok':raise AssertionError(result)
+                        raise interruption
+                    return super().generate(role,instruction,payload,schema,tools)
+            with self.subTest(error=type(interruption).__name__),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);task=dataset(root/'input')
+                config=RunConfig(total_seconds=90,final_reserve_seconds=15,max_rounds=1,max_candidates=1,
+                                 smoke_seconds=10,experiment_seconds=15,prediction_seconds=10)
+                with patch('mlmom.pipeline.installed_tools',only_sklearn):
+                    result=Pipeline(task,config,run_dir=root/'run',client=InterruptedCoder()).run()
+                self.assertEqual(result['status'],'completed',result)
+                store=ExperimentStore(root/'run')
+                try:
+                    candidates=store.list('candidate')
+                    self.assertTrue(candidates[-1]['verification']['valid'])
+                    self.assertTrue(candidates[-1]['verification']['warnings'])
+                finally:store.close()
+
     def test_explicit_probability_column_uses_the_requested_class(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);frame,context,plan,code=execution_case(root,'binary_classification')

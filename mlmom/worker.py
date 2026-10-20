@@ -82,6 +82,32 @@ def smoke(request, root):
     from .persistence import tree_hash
     kind = request.get('task_type','regression')
     X,y = synthetic(kind)
+    if request.get('feature_schema'):
+        import pandas as pd
+        import numpy as np
+        rng=np.random.default_rng(42)
+        columns={}
+        for column in request['feature_schema']:
+            semantic=column['semantic_type']
+            if semantic in {'categorical','text'}:
+                values=np.resize(['synthetic_a','synthetic_b','synthetic_c'],len(X))
+            elif semantic=='boolean':values=np.arange(len(X))%2==0
+            elif semantic=='datetime':values=pd.date_range('2020-01-01',periods=len(X))
+            else:values=rng.uniform(1,10,len(X))
+            columns[column['name']]=values
+        X=pd.DataFrame(columns)
+        labels=request.get('classes',[])
+        if 'classification' in kind and kind!='multilabel_classification' and labels:
+            count=max(len(X),len(labels)*2)
+            if count>len(X):X=X.iloc[np.arange(count)%len(X)].reset_index(drop=True)
+            y=pd.Series([labels[i%len(labels)] for i in range(len(X))])
+        names=request.get('target_columns',[])
+        if names and y is not None:
+            if kind in {'multioutput_regression','multilabel_classification'}:
+                base=np.asarray(y)
+                if base.ndim==1:base=base[:,None]
+                y=pd.DataFrame({name:base[:,i%base.shape[1]] for i,name in enumerate(names)})
+            elif isinstance(y,pd.Series):y.name=names[0]
     config = request['config']
     if request.get('code_dir'):
         if request.get('code_hash') and tree_hash(Path(request['code_dir'])) != request['code_hash']:
@@ -114,12 +140,14 @@ def smoke(request, root):
             json.dumps(frozen_model.native_history(),allow_nan=False)
             checked_predictions(frozen_model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
                                 request.get('prediction_kind','value'))
+            (root/'frozen-model').mkdir(parents=True,exist_ok=True)
             frozen_model.save(str(root/'frozen-model'))
             frozen_loaded=module.load_candidate(str(root/'frozen-model')) if module else load_adapter(str(root/'frozen-model'))
             checked_predictions(frozen_loaded.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
                                 request.get('prediction_kind','value'))
     kinds = [request.get('prediction_kind','value')]
     for prediction in kinds: checked_predictions(model.predict(X.iloc[:5],{'kind':prediction}),5,prediction)
+    (root/'model').mkdir(parents=True,exist_ok=True)
     model.save(str(root/'model'))
     moved=root/f'relocated-model-{uuid.uuid4().hex[:8]}'
     (root/'model').rename(moved)
@@ -163,6 +191,7 @@ def train(request, root):
     def save_progress(model, params, score, reason):
         params=model.export_model_params() if hasattr(model,'export_model_params') else params
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
+        artifact.mkdir(parents=True)
         model.save(str(artifact))
         history=model.native_history() if hasattr(model,'native_history') else None
         history_ref=None

@@ -48,6 +48,32 @@ def execution_case(root, kind, tool='sklearn'):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_smoke_preserves_task_columns_types_and_class_labels(self):
+        code='''from mlmom.adapters import LibraryCandidate,load_adapter
+from pathlib import Path
+class NamedCandidate(LibraryCandidate):
+    def fit(self,X,y,context):
+        assert list(X)==['area','facility']
+        assert X['facility'].dtype=='object'
+        assert y.name=='target_value'
+        assert set(y.unique())=={'ALPHA','BETA','GAMMA','DELTA'}
+        return super().fit(X,y,context)
+    def save(self,artifact_dir):
+        assert Path(artifact_dir).is_dir()
+        return super().save(artifact_dir)
+def create_candidate(config):return NamedCandidate(config)
+def load_candidate(artifact_dir):return load_adapter(artifact_dir)
+'''
+        with tempfile.TemporaryDirectory() as temp,SandboxManager() as manager:
+            root=Path(temp);source=root/'code';source.mkdir();(source/'candidate.py').write_text(code,encoding='utf-8')
+            result=manager.run(dict(action='smoke',code_dir=str(source),code_hash=tree_hash(source),
+                config={'tool_id':'sklearn','model_params':{'n_estimators':8}},task_type='multiclass_classification',
+                metric='log_loss',prediction_kind='probability',
+                feature_schema=[{'name':'area','semantic_type':'numeric'},{'name':'facility','semantic_type':'categorical'}],
+                classes=['ALPHA','BETA','GAMMA','DELTA'],target_columns=['target_value']),
+                root/'smoke',seconds=20,memory_gb=2,cpus=1)
+            self.assertEqual(result['status'],'completed',result)
+
     def test_all_non_temporal_task_families_fit_evaluate_and_reload(self):
         cases=['binary_classification','multioutput_regression','multilabel_classification','clustering','anomaly_detection','ranking']
         for kind in cases:
