@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-20",
+  "source_commit": "e37db7cbd1800338b60fb8bd7e68df01ce42a49e",
+  "package": {
+    "path": "submission/mlmom-solution.zip",
+    "root_files": [
+      "solution.py",
+      "requirements.txt",
+      "mlmom_bundle.py"
+    ],
+    "bytes": 75045,
+    "sha256": "3af0f9e5552401efb3165e7ef16b26c664d51682f5dde8857386a1d04c10a562",
+    "secret_scan": "passed"
+  },
+  "tests": {
+    "status": "passed",
+    "count": 38,
+    "duration_seconds": 161.598,
+    "source": "extracted final ZIP",
+    "runtime": "Python 3.12, organizer dependencies, CPU torch",
+    "os": "Linux",
+    "network": "none",
+    "cpus": 8,
+    "memory_gb": 32
+  },
+  "adapters": [
+    "sklearn",
+    "catboost",
+    "lightgbm",
+    "xgboost",
+    "flaml",
+    "autogluon",
+    "lightautoml",
+    "statsmodels",
+    "torch"
+  ],
+  "public_archives_mock_llm": [
+    {
+      "task": "regression",
+      "rounds": 2,
+      "rows": 22449,
+      "status": "completed"
+    },
+    {
+      "task": "multiclass_classification",
+      "rounds": 2,
+      "rows": 41166,
+      "status": "completed"
+    }
+  ],
+  "real_api_smoke": {
+    "model": "qwen/qwen3.8-27b",
+    "task": "regression",
+    "status": "completed",
+    "rounds": 1,
+    "rows": 22449,
+    "model_role": "submission_refit",
+    "research_holdout_rmse": 43.68648516899244,
+    "duration_seconds": 693.96,
+    "requests": 38,
+    "tokens": 660522,
+    "inspection_and_probes": "reused from earlier real API run on identical inputs",
+    "candidate_rechecked_with_final_worker": true
+  },
+  "limits": {
+    "skills": "15 placeholders; manifests and tools implemented",
+    "three_hour_stress_run": false,
+    "boosters_submission": false
+  }
+}

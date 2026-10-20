@@ -32,6 +32,7 @@ python solution.py /path/to/task.md --config profiles/dev.json
 
 ## Тесты и ZIP
 Обычные тесты используют mock LLM, а обращения к реальному API выполняются отдельно. Сборщик создаёт плоский ZIP с `solution.py`, `requirements.txt` и `mlmom_bundle.py`, поскольку Boosters не переносит вложенные папки.
+Проверенный [архив для загрузки](submission/mlmom-solution.zip) и [отчёт проверки](VALIDATION.md) включены в репозиторий.
 
 ```bash
 python -m unittest discover -v
