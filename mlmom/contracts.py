@@ -1,0 +1,191 @@
+"""Versioned JSON contracts for dataset inspection.
+
+The models contain no pandas or NumPy objects. They can be persisted by the
+Experiment Store, consumed by the Evaluation System, and reduced to an LLM
+prompt without serialising raw records.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class TaskType(StrEnum):
+    REGRESSION = "regression"
+    MULTIOUTPUT_REGRESSION = "multioutput_regression"
+    BINARY_CLASSIFICATION = "binary_classification"
+    MULTICLASS_CLASSIFICATION = "multiclass_classification"
+    MULTILABEL_CLASSIFICATION = "multilabel_classification"
+    TIME_SERIES_FORECASTING = "time_series_forecasting"
+    RANKING = "ranking"
+    ANOMALY_DETECTION = "anomaly_detection"
+    CLUSTERING = "clustering"
+    UNKNOWN = "unknown"
+
+
+class MetricDirection(StrEnum):
+    MINIMIZE = "minimize"
+    MAXIMIZE = "maximize"
+    UNKNOWN = "unknown"
+
+
+class InferenceConfidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class SemanticType(StrEnum):
+    NUMERIC = "numeric"
+    CATEGORICAL = "categorical"
+    DATETIME = "datetime"
+    TEXT = "text"
+    BOOLEAN = "boolean"
+    UNKNOWN = "unknown"
+
+
+class ColumnRole(StrEnum):
+    ID = "id"
+    FEATURE = "feature"
+    TARGET = "target"
+    TIME = "time"
+    GROUP = "group"
+    WEIGHT = "weight"
+    IGNORED = "ignored"
+
+
+class FileRole(StrEnum):
+    TRAIN = "train"
+    TEST = "test"
+    SAMPLE_SUBMISSION = "sample_submission"
+    DATA_DICTIONARY = "data_dictionary"
+    AUXILIARY = "auxiliary"
+    TASK_DESCRIPTION = "task_description"
+    UNKNOWN = "unknown"
+
+
+class Severity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class TaskSpec(StrictModel):
+    """Task definition inferred from data, descriptions, and explicit hints."""
+
+    task_type: TaskType
+    target_columns: list[str] = Field(default_factory=list)
+    id_columns: list[str] = Field(default_factory=list)
+    time_column: str | None = None
+    group_columns: list[str] = Field(default_factory=list)
+    weight_column: str | None = None
+    primary_metric: str | None = None
+    metric_direction: MetricDirection = MetricDirection.UNKNOWN
+    class_count: int | None = None
+    classes: list[str] = Field(default_factory=list)
+    inference_confidence: InferenceConfidence = InferenceConfidence.LOW
+    inference_evidence: list[str] = Field(default_factory=list)
+
+
+class DataIssue(StrictModel):
+    code: str
+    severity: Severity
+    message: str
+    columns: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class DistributionBucket(StrictModel):
+    """One numeric range or categorical value with count and share."""
+
+    label: str
+    count: int
+    rate: float
+    lower: float | None = None
+    upper: float | None = None
+
+
+class SplitColumnStats(StrictModel):
+    rows: int
+    missing_count: int
+    missing_rate: float
+    unique_count: int
+    unique_rate: float
+    infinite_count: int = 0
+    summary: dict[str, Any] = Field(default_factory=dict)
+    distribution: list[DistributionBucket] = Field(default_factory=list)
+
+
+class ColumnProfile(StrictModel):
+    name: str
+    role: ColumnRole
+    semantic_type: SemanticType
+    pandas_dtype: str
+    declared_dtype: str | None = None
+    description: str | None = None
+    unit: str | None = None
+    train: SplitColumnStats
+    test: SplitColumnStats | None = None
+    shift_score: float | None = None
+    unseen_test_value_count: int = 0
+    unseen_test_row_rate: float = 0.0
+    unseen_test_examples: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class TableProfile(StrictModel):
+    file_name: str
+    path: str
+    role: FileRole
+    rows: int | None = None
+    columns: int | None = None
+    column_names: list[str] = Field(default_factory=list)
+    size_bytes: int
+    memory_bytes: int | None = None
+    duplicate_rows: int | None = None
+    sampled_for_statistics: bool = False
+    read_error: str | None = None
+
+
+class DatasetChecks(StrictModel):
+    train_test_schema_match: bool | None = None
+    train_only_columns: list[str] = Field(default_factory=list)
+    test_only_columns: list[str] = Field(default_factory=list)
+    duplicate_train_rows: int | None = None
+    duplicate_train_feature_rows: int | None = None
+    duplicate_test_feature_rows: int | None = None
+    conflicting_duplicate_target_groups: int | None = None
+    train_test_feature_overlap_rows: int | None = None
+    duplicate_train_ids: int | None = None
+    duplicate_test_ids: int | None = None
+    null_train_ids: int | None = None
+    null_test_ids: int | None = None
+    sample_columns_match: bool | None = None
+    sample_row_count_matches_test: bool | None = None
+    sample_id_order_matches_test: bool | None = None
+    dictionary_covers_all_train_columns: bool | None = None
+
+
+class DatasetProfile(StrictModel):
+    """Full deterministic output of the universal Data Inspector."""
+
+    schema_version: str = "2.0.0"
+    dataset_name: str
+    root_path: str
+    task_description: str | None = None
+    files: list[TableProfile]
+    task: TaskSpec
+    columns: list[ColumnProfile]
+    target_summaries: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    checks: DatasetChecks
+    issues: list[DataIssue] = Field(default_factory=list)
+    preprocessing_hints: list[str] = Field(default_factory=list)
+    report_notes: list[str] = Field(default_factory=list)

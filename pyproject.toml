@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlmom"
+version = "0.1.0"
+description = "AutoML agent components for the Alfa Hack"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy==1.26.4",
+    "pandas==2.2.3",
+    "pydantic==2.10.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["mlmom*"]
+

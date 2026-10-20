@@ -1,0 +1,24 @@
+{
+  "dataset_name": "example_task",
+  "train": "tables/learning_data.csv",
+  "test": "tables/scoring_data.csv",
+  "sample_submission": "submission_format.csv",
+  "dictionaries": [
+    "columns.csv"
+  ],
+  "task_description": "task.md",
+  "auxiliary_tables": [
+    "reference/countries.csv"
+  ],
+  "target_columns": [
+    "target"
+  ],
+  "id_columns": [
+    "record_id"
+  ],
+  "task_type": "multiclass_classification",
+  "primary_metric": "macro_f1",
+  "time_column": null,
+  "group_columns": [],
+  "weight_column": null
+}
