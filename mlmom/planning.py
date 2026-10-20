@@ -95,6 +95,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             batch = client.generate('planner',
                 'Turn the supplied hypotheses into executable plans, preserving their IDs and meaning. '
                 'Use only available tools and skills. Native AutoML must set patience_trials=null. '
+                'Core candidate_sdk, validation, metrics and preprocessing skills load automatically. '
+                'Select the backend skill; add hpo for Optuna, feature_engineering for new features, '
+                'imbalance for weighting/threshold changes, and ensembles plus component backend skills for ensembles. '
+                'Start with a cheap baseline, then a booster; native AutoML is an alternative search backend. '
                 'Do not include targets, IDs or evaluation data in features. A fast baseline uses strategy=single. '
                 'Model parameters passed to adapters must not override CPU, network, GPU or orchestration settings.',
                 dict(state['payload'], hypotheses=state['hypotheses'], previous_plans=state.get('plans',[]),

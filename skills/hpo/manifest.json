@@ -1,8 +1,8 @@
 {
   "skill_id": "hpo",
-  "version": "0.1.0",
-  "title": "hpo",
-  "status": "placeholder",
+  "version": "1.0.0",
+  "title": "Bounded hyperparameter search",
+  "status": "ready",
   "task_types": [],
   "ml_tools": [],
   "dependencies": []

@@ -1,9 +1,17 @@
 {
   "skill_id": "sklearn",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "title": "sklearn",
-  "status": "placeholder",
-  "task_types": [],
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification",
+    "multioutput_regression",
+    "multilabel_classification",
+    "clustering",
+    "anomaly_detection"
+  ],
   "ml_tools": [
     "sklearn"
   ],

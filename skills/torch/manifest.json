@@ -1,9 +1,15 @@
 {
   "skill_id": "torch",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "title": "torch",
-  "status": "placeholder",
-  "task_types": [],
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification",
+    "multioutput_regression",
+    "multilabel_classification"
+  ],
   "ml_tools": [
     "torch"
   ],

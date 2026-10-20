@@ -75,7 +75,9 @@ class PipelineIntegrationTests(unittest.TestCase):
                 self.assertEqual(len(incumbent),1)
                 self.assertEqual(incumbent[0]['split_id'],splits[1]['split_id'])
                 self.assertTrue(all(r['split_id']!='all-train' for r in evaluations))
-                self.assertTrue(all(s['status']=='placeholder' for c in store.list('candidate') for s in c['skill_versions'].values()))
+                self.assertTrue(all(s['status']=='ready' for c in store.list('candidate') for s in c['skill_versions'].values()))
+                self.assertTrue(all({'candidate_sdk','validation','metrics','preprocessing','sklearn'} <= set(c['skill_versions'])
+                                    for c in store.list('candidate')))
                 count=len(runs);store.close()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
                     again=Pipeline(task,config,run_dir=root/'run',client=OfflineLLM(fail=True),resume=True).run(resume=True)
@@ -102,10 +104,10 @@ class ComponentTests(unittest.TestCase):
             self.assertEqual(workspace.read_file('candidate.py'),'x=2\n')
             with self.assertRaises(ValueError):workspace.apply_patch('candidate.py','missing','x')
 
-    def test_skill_placeholders_and_registry_no_false_availability(self):
+    def test_ready_skills_and_registry_no_false_availability(self):
         registry=SkillRegistry(ROOT/'skills')
         loaded=registry.load(['sklearn','metrics'],'regression')
-        self.assertTrue(all(s['status']=='placeholder' and len(s['sha256'])==64 for s in loaded))
+        self.assertTrue(all(s['status']=='ready' and len(s['sha256'])==64 for s in loaded))
         self.assertFalse(any(t.available for t in installed_tools().values()))
 
     def test_checkpoint_sync_async_resume_and_pending_writes(self):

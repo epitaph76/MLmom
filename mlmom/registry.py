@@ -10,6 +10,7 @@ from .pipeline_contracts import MLToolSpec, SkillManifest
 
 SUPERVISED = ['regression','binary_classification','multiclass_classification']
 MULTI = SUPERVISED + ['multioutput_regression','multilabel_classification']
+CORE_SKILLS = ('candidate_sdk', 'validation', 'metrics', 'preprocessing')
 DEFINITIONS = [
     ('sklearn','scikit-learn','sklearn','1.5.2',MULTI+['clustering','anomaly_detection'],'fast',False,True,False),
     ('catboost','catboost','catboost','1.2.8',MULTI+['ranking'],'medium',False,True,True),
@@ -60,7 +61,9 @@ class SkillRegistry:
     def load(self, ids: list[str], task_type: str, *, max_chars=24000):
         loaded = []
         used = 0
-        for key in dict.fromkeys(ids):
+        # Every candidate receives the same contract, even when a planner only
+        # selects a backend. Shared text is counted and versioned exactly once.
+        for key in dict.fromkeys([*CORE_SKILLS, *ids]):
             if key not in self.manifests: raise ValueError(f'Unknown skill: {key}')
             manifest = self.manifests[key]
             if manifest.task_types and task_type not in manifest.task_types:
@@ -69,6 +72,8 @@ class SkillRegistry:
                 importlib.metadata.version(distribution)
             root = self.root/key
             text = (root/'SKILL.md').read_text(encoding='utf-8')
+            if key == 'candidate_sdk':
+                text = (self.root/'COMMON.md').read_text(encoding='utf-8') + '\n' + text
             used += len(text)
             if used > max_chars: raise ValueError('Selected skills exceed context budget')
             digest = hashlib.sha256((root/'manifest.json').read_bytes() + text.encode()).hexdigest()
