@@ -1,6 +1,7 @@
 {
   "date": "2026-10-20",
-  "source_commit": "e37db7cbd1800338b60fb8bd7e68df01ce42a49e",
+  "source_commit": "0a39dc2a5a1958293ecfe05e46549148bb82f3ac",
+  "target_branch": "master",
   "package": {
     "path": "submission/mlmom-solution.zip",
     "root_files": [
@@ -8,20 +9,31 @@
       "requirements.txt",
       "mlmom_bundle.py"
     ],
-    "bytes": 75045,
-    "sha256": "3af0f9e5552401efb3165e7ef16b26c664d51682f5dde8857386a1d04c10a562",
-    "secret_scan": "passed"
+    "bytes": 84810,
+    "sha256": "d0c34db4eb2e27139cc38c90ff187365144593d7b95032c3aeac00d8884547ea",
+    "secret_scan": "passed",
+    "bundled_source_matches_checkout": true
+  },
+  "skills": {
+    "count": 17,
+    "status": "ready",
+    "version": "1.0.0",
+    "instruction_characters": 23646,
+    "context_limit_characters": 24000,
+    "bundled_files": 35,
+    "planning_and_coding_delivery": "tested"
   },
   "tests": {
     "status": "passed",
-    "count": 38,
-    "duration_seconds": 161.598,
+    "count": 45,
+    "duration_seconds": 164.819,
     "source": "extracted final ZIP",
     "runtime": "Python 3.12, organizer dependencies, CPU torch",
     "os": "Linux",
     "network": "none",
     "cpus": 8,
-    "memory_gb": 32
+    "memory_gb": 32,
+    "llm": "mock"
   },
   "adapters": [
     "sklearn",
@@ -34,36 +46,39 @@
     "statsmodels",
     "torch"
   ],
-  "public_archives_mock_llm": [
-    {
+  "historical_validation_before_ready_skills": {
+    "source_commit": "e37db7cbd1800338b60fb8bd7e68df01ce42a49e",
+    "public_archives_mock_llm": [
+      {
+        "task": "regression",
+        "rounds": 2,
+        "rows": 22449,
+        "status": "completed"
+      },
+      {
+        "task": "multiclass_classification",
+        "rounds": 2,
+        "rows": 41166,
+        "status": "completed"
+      }
+    ],
+    "real_api_smoke": {
+      "model": "qwen/qwen3.8-27b",
       "task": "regression",
-      "rounds": 2,
+      "status": "completed",
+      "rounds": 1,
       "rows": 22449,
-      "status": "completed"
-    },
-    {
-      "task": "multiclass_classification",
-      "rounds": 2,
-      "rows": 41166,
-      "status": "completed"
+      "model_role": "submission_refit",
+      "research_holdout_rmse": 43.68648516899244,
+      "duration_seconds": 693.96,
+      "requests": 38,
+      "tokens": 660522,
+      "inspection_and_probes": "reused from earlier real API run on identical inputs",
+      "candidate_rechecked_with_final_worker": true
     }
-  ],
-  "real_api_smoke": {
-    "model": "qwen/qwen3.8-27b",
-    "task": "regression",
-    "status": "completed",
-    "rounds": 1,
-    "rows": 22449,
-    "model_role": "submission_refit",
-    "research_holdout_rmse": 43.68648516899244,
-    "duration_seconds": 693.96,
-    "requests": 38,
-    "tokens": 660522,
-    "inspection_and_probes": "reused from earlier real API run on identical inputs",
-    "candidate_rechecked_with_final_worker": true
   },
   "limits": {
-    "skills": "15 placeholders; manifests and tools implemented",
+    "current_skills_real_api_smoke": false,
     "three_hour_stress_run": false,
     "boosters_submission": false
   }
