@@ -42,9 +42,16 @@ class RoleClient:
                 self.request_callback(dict(role=role,attempt=attempt+1,status='started'))
             try:
                 response = self.client.with_options(timeout=min(remaining,self.settings.timeout_seconds)).chat.completions.create(**params)
+                choice=response.choices[0]
+                finish_reason=getattr(choice,'finish_reason',None)
                 if self.usage_callback and response.usage:
-                    self.usage_callback(dict(response.usage.model_dump(),role=role,request_seconds=time.monotonic()-started))
-                return response.choices[0].message.model_dump(exclude_none=True)
+                    self.usage_callback(dict(response.usage.model_dump(),role=role,request_seconds=time.monotonic()-started,
+                                             finish_reason=finish_reason))
+                message=choice.message.model_dump(exclude_none=True)
+                if finish_reason=='length' and not message.get('tool_calls'):
+                    raise ValueError(f'{role} response hit max_tokens={self.settings.max_tokens}; '
+                                     'reasoning and final JSON share this limit. Return a shorter final JSON or increase llm_max_tokens.')
+                return message
             except BadRequestError as error:
                 # Retry only optional API extensions; never switch provider/model.
                 if 'parallel_tool_calls' in params:

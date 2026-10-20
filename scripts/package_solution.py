@@ -34,15 +34,21 @@ def bootstrap(directory):
 def package(root: Path, output: Path):
     paths = [p for folder in ['mlmom','skills','profiles'] for p in (root/folder).rglob('*')
              if p.is_file() and p.suffix in {'.py','.json','.md'} and '__pycache__' not in p.parts]
-    files = {p.relative_to(root).as_posix():p.read_text(encoding='utf-8') for p in sorted(paths)}
+    files = {p.relative_to(root).as_posix():p.read_text(encoding='utf-8')
+             for p in sorted(paths,key=lambda p:p.relative_to(root).as_posix())}
     digest = hashlib.sha256(json.dumps(files,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     bundle = ('# Generated source bundle for Boosters. No third-party packages.\nimport json\n'
               + 'FILES = '+repr(files)+'\nDIGEST = '+repr(digest)+'\n'+BOOTSTRAP)
     output.parent.mkdir(parents=True,exist_ok=True)
+    entries = {'solution.py':(root/'solution.py').read_text(encoding='utf-8'),
+               'requirements.txt':(root/'requirements.txt').read_text(encoding='utf-8'),
+               'mlmom_bundle.py':bundle}
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
-        archive.write(root/'solution.py','solution.py')
-        archive.write(root/'requirements.txt','requirements.txt')
-        archive.writestr('mlmom_bundle.py',bundle)
+        for name,content in entries.items():
+            info=zipfile.ZipInfo(name,date_time=(2020,1,1,0,0,0))
+            info.create_system=3
+            info.external_attr=0o100644 << 16
+            archive.writestr(info,content.encode('utf-8'),compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
     with zipfile.ZipFile(output) as archive:
         assert set(archive.namelist()) == {'solution.py','requirements.txt','mlmom_bundle.py'}
         assert not any('/' in name for name in archive.namelist())

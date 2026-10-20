@@ -16,9 +16,12 @@ class FlatPackageTests(unittest.TestCase):
             directory=Path(temp)
             archive=directory/'solution.zip'
             package(root,archive)
+            second=directory/'second.zip'
+            package(root,second)
+            self.assertEqual(archive.read_bytes(),second.read_bytes())
             with zipfile.ZipFile(archive) as source:
                 self.assertEqual(set(source.namelist()),{'solution.py','requirements.txt','mlmom_bundle.py'})
-                self.assertEqual(source.read('requirements.txt'),(root/'requirements.txt').read_bytes())
+                self.assertEqual(source.read('requirements.txt'),(root/'requirements.txt').read_text(encoding='utf-8').encode('utf-8'))
                 source.extractall(directory/'platform')
             script='''import sys,json
 from pathlib import Path

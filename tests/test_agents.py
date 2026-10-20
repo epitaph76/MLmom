@@ -91,5 +91,17 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertTrue(all(0<call.kwargs['timeout']<=10 for call in options.call_args_list))
         self.assertNotIn('test-only',json.dumps(events+usage))
 
+    def test_reasoning_exhaustion_has_explicit_diagnostic(self):
+        usage=[]
+        client=RoleClient(LLMSettings(api_key='test-only'),deadline=time.time()+10,usage_callback=usage.append)
+        self.addCleanup(client.client.close)
+        response=SimpleNamespace(usage=SimpleNamespace(model_dump=lambda:{'completion_tokens':4000}),
+            choices=[SimpleNamespace(finish_reason='length',message=SimpleNamespace(model_dump=lambda **kwargs:{'role':'assistant'}))])
+        with patch.object(client.client,'with_options') as options:
+            options.return_value.chat.completions.create.return_value=response
+            with self.assertRaisesRegex(ValueError,'reasoning and final JSON share this limit'):
+                client.generate('coding_agent','Test',{},CodeBundle)
+        self.assertEqual(usage[0]['finish_reason'],'length')
+
 
 if __name__=='__main__':unittest.main()
