@@ -343,7 +343,7 @@ def main():
             module=request['module'];symbol=request['symbol']
             pattern=r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*'
             if not re.fullmatch(pattern,module) or not re.fullmatch(pattern,symbol):raise ValueError('Invalid API identifier')
-            if module.split('.')[0] not in allowed and module not in {'mlmom.sdk','mlmom.adapters','mlmom.ensemble'}:
+            if module.split('.')[0] not in allowed and module not in {'mlmom.sdk','mlmom.ensemble'}:
                 raise ValueError('API module is not exposed')
             value=importlib.import_module(module)
             for part in symbol.split('.'):value=getattr(value,part)

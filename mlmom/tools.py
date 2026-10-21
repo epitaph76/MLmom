@@ -138,7 +138,7 @@ def verify_source(root: Path) -> ValidationReport:
                 base = name.split('.')[0]
                 if base in FORBIDDEN or (base and base not in ALLOWED and base not in local):
                     errors.append(f'{path.name}: unsupported import {name}')
-                if base == 'mlmom' and name not in {'mlmom.sdk','mlmom.adapters','mlmom.ensemble'}:
+                if base == 'mlmom' and name not in {'mlmom.sdk','mlmom.ensemble'}:
                     errors.append(f'{path.name}: infrastructure import is forbidden: {name}')
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval','exec','compile','__import__'}:
                 errors.append(f'{path.name}: dynamic execution is forbidden')

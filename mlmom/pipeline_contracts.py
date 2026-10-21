@@ -153,7 +153,7 @@ class HypothesisPlan(StrictModel):
     min_delta: float = Field(0, ge=0, description='Legacy absolute comparison threshold; NOT the HPO continuation threshold. Batched search uses RunConfig.hpo_gain_threshold; keep min_delta=0 to retain every improvement.')
     prediction_kind: str = 'value'
     ensemble_components: list[dict[str, Any]] = Field(default_factory=list)
-    execution_mode: Literal['custom', 'adapter_only'] = 'custom'
+    execution_mode: Literal['custom'] = 'custom'
 
 
 class PlanBatch(StrictModel):

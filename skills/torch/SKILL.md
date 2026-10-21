@@ -4,7 +4,7 @@ description: Train a compact CPU tabular MLP with PyTorch 2.5.1 when data size a
 ---
 # PyTorch 2.5.1
 
-Prefer boosting for small/category-heavy data. Stock parameters are only hidden_size (64), epochs (20), lr (.001), batch_size (256). The model is Linear-ReLU-Linear on dense scaled OHE, without validation patience or sample weights. Other layers/loss policies require custom code.
+Prefer boosting for small/category-heavy data. A small reference baseline uses hidden_size (64), epochs (20), lr (.001), batch_size (256). The model is Linear-ReLU-Linear on dense scaled OHE, without validation patience or sample weights. Generate other layers/loss policies explicitly when planned.
 
 Start width 32-128, batch 128-512 and bounded epochs. Estimate dense arrays/tensor copies. Set torch threads from context; keep loaders serial and check remaining_seconds inside minibatches.
 

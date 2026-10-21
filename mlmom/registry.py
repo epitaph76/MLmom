@@ -41,7 +41,7 @@ def installed_tools() -> dict[str, MLToolSpec]:
             prediction_kinds=['value','label','probability'] + (['ranking_score'] if 'ranking' in tasks else [])
             + (['cluster','anomaly_score'] if tool=='sklearn' else []), skill_ids=[tool],
             cost_tag=cost, native_hpo=native, supports_weights=weights, supports_groups=groups,
-            supports_patience=not native, adapter='mlmom.adapters.LibraryCandidate')
+            supports_patience=not native, adapter='generated_candidate')
     return result
 
 
@@ -76,13 +76,13 @@ class SkillRegistry:
     def list(self):
         return [s.model_dump(mode='json') for s in self.manifests.values()]
 
-    def load(self, ids: list[str], task_type: str, *, max_chars=24000):
+    def load(self, ids: list[str], task_type: str, *, max_chars=24000,include_references=False):
         with span('skills', {'requested_ids':ids,'automatic_ids':CORE_SKILLS,'task_type':task_type}):
-            loaded = self._load(ids,task_type,max_chars=max_chars)
+            loaded = self._load(ids,task_type,max_chars=max_chars,include_references=include_references)
             emit('skills.loaded', loaded, skill_ids=[item['skill_id'] for item in loaded])
             return loaded
 
-    def _load(self, ids: list[str], task_type: str, *, max_chars=24000):
+    def _load(self, ids: list[str], task_type: str, *, max_chars=24000,include_references=False):
         loaded = []
         used = 0
         # Every candidate receives the same contract, even when a planner only
@@ -98,6 +98,9 @@ class SkillRegistry:
             text = (root/'SKILL.md').read_text(encoding='utf-8')
             if key == 'candidate_sdk':
                 text = (self.root/'COMMON.md').read_text(encoding='utf-8') + '\n' + text
+            reference=root/'REFERENCE.md'
+            if include_references and reference.is_file():
+                text+='\n\n'+reference.read_text(encoding='utf-8')
             used += len(text)
             if used > max_chars: raise ValueError('Selected skills exceed context budget')
             digest = hashlib.sha256((root/'manifest.json').read_bytes() + text.encode()).hexdigest()

@@ -325,8 +325,8 @@ class Pipeline:
             # A second idea is optional; preserve time for later feedback cycles.
             allowance=self.cycle_allowance(state['round_number'])
             if allowance<2*self.admission_cost(advanced=advanced):
-                output['plans']=sorted(output.get('plans',[]),key=lambda p:(p.get('execution_mode')!='adapter_only',
-                    {'fast':0,'medium':1,'slow':2}[p.get('cost_tag','fast')]))[:1]
+                output['plans']=sorted(output.get('plans',[]),key=lambda p:
+                    {'fast':0,'medium':1,'slow':2}[p.get('cost_tag','fast')])[:1]
                 emit('planning.alternative_deferred',dict(reason='protect_required_cycles',allowance=allowance))
         self.store.put('planning',key,output)
         if output.get('warnings'):
@@ -389,6 +389,9 @@ class Pipeline:
             if ready:
                 candidate = CandidateVersion.model_validate(ready[-1])
                 if tree_hash(Path(candidate.code_dir))!=candidate.code_hash: raise ValueError('Stored candidate was modified')
+                from .tools import verify_source
+                report=verify_source(Path(candidate.code_dir))
+                if not report.valid:raise ValueError('Stored candidate violates current source policy; start a new run: '+ '; '.join(report.errors))
                 return candidate
         if isinstance(self.client,RoleClient) and feedback is None:
             required=self.admission_cost(planning=False,advanced=round_id!='r1')
@@ -402,7 +405,7 @@ class Pipeline:
                 if isinstance(previous_candidate,CandidateVersion): previous_candidate=previous_candidate.model_dump()
                 source = Path(previous_candidate['code_dir'])
                 previous = {'candidate_id':previous_candidate['candidate_id'],'files':{p.relative_to(source).as_posix():p.read_text(encoding='utf-8') for p in source.rglob('*.py')}}
-        skills = self.skills.load(plan.skill_ids,self.context.task.task_type)
+        skills = self.skills.load(plan.skill_ids,self.context.task.task_type,include_references=True,max_chars=48000)
         workspace = self.run_dir/'workspaces'/round_id/plan.hypothesis.hypothesis_id
         graph = build_coding_graph(self.client,workspace=workspace,store=self.store,plan=plan,plan_ref=plan_ref,
             skill_data=skills,tools=self.tools,context=self.context,sandbox=self.sandbox,budget=self.budget,
@@ -631,10 +634,7 @@ class Pipeline:
                     candidate,plan,incumbent,repairs=entry
                     result=job.finish(); completed_run=finished(candidate,plan,run,result)
                     active.remove((entry,job,run))
-                    if completed_run.status=='failed' and plan.execution_mode=='adapter_only':
-                        self.store.event('adapter_failure',candidate.candidate_id,dict(error=completed_run.error,
-                            reason='Exact forwarding code cannot repair backend or parameter errors; requires a revised plan'))
-                    elif completed_run.status=='failed' and not incumbent and repairs<self.config.runtime_repairs and self.budget.snapshot().research_seconds>1:
+                    if completed_run.status=='failed' and not incumbent and repairs<self.config.runtime_repairs and self.budget.snapshot().research_seconds>1:
                         repair_queue.append((candidate,plan,completed_run.error,repairs))
                 if active: time.sleep(.05)
                 elif pending:
@@ -700,16 +700,8 @@ class Pipeline:
         return min(plan.time_limit_seconds,self.config.experiment_seconds,room)
 
     def search_space(self,plan):
-        from .hpo import default_space
-        # Unknown custom implementations must declare their own parameter contract.
-        if plan.execution_mode!='adapter_only':return plan.search_space
-        if plan.tool_id=='sklearn':
-            from .adapters import text_columns
-            linear=plan.model_params.get('estimator')=='linear' or text_columns(features(self.frame,self.context))
-            if linear:
-                key='C' if 'classification' in self.context.task.task_type else 'alpha'
-                return {key:dict(type='float',low=.01,high=10.,log=True)}
-        return default_space(plan.tool_id,plan.model_params)
+        # Generated implementations own their constructor contract; never guess parameters.
+        return plan.search_space
 
     def analyze(self,state):
         context=self.restore(state); round_id=f"r{state['round_number']}"

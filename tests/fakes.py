@@ -1,5 +1,6 @@
 """Offline LLM fixture. Never imported by solution.py or shipped as a fallback."""
 import json
+from pathlib import Path
 from mlmom.contracts import TaskDefinition,ValidationStrategy
 from mlmom.pipeline_contracts import HypothesisBatch,HypothesisPlan,PlanBatch,ValidationReport
 from mlmom.coding import CodeBundle
@@ -10,6 +11,9 @@ def create_candidate(config):
 def load_candidate(artifact_dir):
     return load_adapter(artifact_dir)
 '''
+
+REFERENCE_ROOT=Path(__file__).resolve().parents[1]/'skills'
+GENERATED_CODE=(REFERENCE_ROOT/'sklearn/REFERENCE.md').read_text(encoding='utf-8').split('```python\n',1)[1].split('```',1)[0]
 
 
 class OfflineLLM:
@@ -38,8 +42,9 @@ class OfflineLLM:
         if role=='planner':
             from mlmom.evaluation import prediction_kind
             return PlanBatch(plans=[HypothesisPlan(hypothesis=h,tool_id=self.tool_id,skill_ids=[self.tool_id],model_params=self.params,
+                search_space={'n_estimators':{'type':'int','low':4,'high':12}} if self.tool_id=='sklearn' else {},
                 time_limit_seconds=self.seconds,cpus=self.cpus,memory_gb=2,max_trials=1,
                 prediction_kind=prediction_kind(payload['task']['primary_metric'],payload['task']['task_type'])) for h in payload['hypotheses']['hypotheses']])
         if role=='plan_validator':return ValidationReport(valid=True)
-        if role=='coding_agent':return CodeBundle(files={'candidate.py':ADAPTER_CODE})
+        if role=='coding_agent':return CodeBundle(files={'candidate.py':GENERATED_CODE})
         raise AssertionError(role)

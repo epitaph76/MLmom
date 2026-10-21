@@ -4,7 +4,7 @@ description: Fit CPU CatBoost 1.2.8 with native categories and internal-validati
 ---
 # CatBoost 1.2.8
 
-LibraryCandidate preserves native categories, fills missing categories with a stable string sentinel, and applies a time callback. Numeric NaN is allowed. Persist columns, categories and identical fit/predict cleaning.
+Implement native categories, stable missing-category strings and a time callback in the generated candidate; REFERENCE.md gives direct-library examples. Numeric NaN is allowed. Persist columns, categories and identical fit/predict cleaning.
 
 Single-output regression/classification use context.validation_X/y, 50-round early stopping and use_best_model=True for supported exact metrics: RMSE, MAE, Accuracy, Logloss/MultiClass, macro F1. Other metrics disable stopping rather than substitute a proxy. Export tree_count_ as iterations; refit without validation uses fixed iterations.
 

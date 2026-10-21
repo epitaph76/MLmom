@@ -14,7 +14,7 @@ from mlmom.planning import validate_plan
 from mlmom.registry import SkillRegistry,installed_tools
 from mlmom.resources import SandboxManager
 from mlmom.submission import publish_submission
-from tests.fakes import OfflineLLM,ADAPTER_CODE
+from tests.fakes import OfflineLLM,GENERATED_CODE as ADAPTER_CODE
 from tests.test_pipeline import dataset,only_sklearn
 from tests.test_execution import execution_case
 
@@ -23,14 +23,9 @@ ROOT=Path(mlmom.__file__).resolve().parent.parent
 
 
 def broken_code(threshold):
-    return f'''from mlmom.adapters import LibraryCandidate, load_adapter
-class Model(LibraryCandidate):
-    def fit(self,X,y,context):
-        if len(X)>{threshold}:raise ValueError("intentional real-data fit failure")
-        return super().fit(X,y,context)
-def create_candidate(config):return Model(config)
-def load_candidate(artifact_dir):return load_adapter(artifact_dir)
-'''
+    return ADAPTER_CODE.replace('        self.columns = X.columns.tolist()',
+        f'        if len(X)>{threshold}:raise ValueError("intentional real-data fit failure")\n        self.columns = X.columns.tolist()')
+
 
 
 class RepairLLM(OfflineLLM):
@@ -45,11 +40,7 @@ class RepairLLM(OfflineLLM):
 
 
 class CustomCandidatePipeline(Pipeline):
-    """Exercise the custom-coder repair path independently of the startup gate.
-
-    Production first-round candidates are now adapter_only. These older tests
-    deliberately inject custom failures and therefore target the advanced path.
-    """
+    """Exercise generated-candidate repair including the first baseline."""
     def _prepare(self,plan,round_id,**kwargs):
         plan.execution_mode='custom'
         return super()._prepare(plan,round_id,**kwargs)

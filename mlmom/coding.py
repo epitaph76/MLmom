@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import shutil
-import ast
 import time
 from pathlib import Path
 from typing import TypedDict
@@ -31,48 +30,21 @@ Prediction kinds: value, label, probability (columns in context.classes order), 
 ranking_score, anomaly_score (larger means more anomalous).
 Use CPU only, no external data, pretrained models, pip, network, shell or credentials.
 No read access to input directories: use X/y/context only. Save to artifact_dir only.
-Use helpers from mlmom.sdk, mlmom.adapters or mlmom.ensemble when useful.
-An existing functional adapter is available, so a minimal correct candidate can be:
-from mlmom.adapters import LibraryCandidate, load_adapter
-def create_candidate(config): return LibraryCandidate(config)
-def load_candidate(artifact_dir): return load_adapter(artifact_dir)
-For ensemble plans use EnsembleCandidate and load_ensemble from mlmom.ensemble.
-These are real library adapters, not a substitute for implementing data-specific hypotheses.
-Custom feature engineering must be implemented and persisted with the model.
+Use mlmom.sdk and installed libraries directly. Do not import mlmom.adapters or delegate
+training to LibraryCandidate. Implement the selected estimator and preprocessing in your source.
+Selected skills include reference code for guidance, not a runtime implementation or a fixed template.
+Adapt it to every stated hypothesis: explicit category columns, missing handling, target transforms,
+prediction clipping and engineered features must be implemented, not merely described.
+Use config['model_params'] for every declared search parameter. When baseline strategy=single,
+search_space declares parameters for later Optuna; do not run search inside fit.
+Persist custom feature engineering with the model. Report unsupported operations instead of
+silently substituting different preprocessing.
 Return {"files":{"candidate.py":"...", ...}}. Files must contain the final complete source.
 '''
 
 
 class CodeBundle(StrictModel):
     files: dict[str,str] = Field(min_length=1,max_length=20)
-
-
-ADAPTER_SOURCE = '''from mlmom.adapters import LibraryCandidate, load_adapter
-def create_candidate(config):
-    return LibraryCandidate(config)
-def load_candidate(artifact_dir):
-    return load_adapter(artifact_dir)
-'''
-
-
-def verify_adapter_source(root):
-    report = verify_source(root)
-    if not report.valid:
-        return report
-    try:
-        tree = ast.parse((root/'candidate.py').read_text(encoding='utf-8'))
-        # Comments and docstrings do not execute model logic; every other node
-        # must be the small, documented forwarding interface.
-        for node in ast.walk(tree):
-            if isinstance(node,(ast.Module,ast.FunctionDef)):
-                node.body = [n for n in node.body if not (isinstance(n,ast.Expr) and
-                    isinstance(n.value,ast.Constant) and isinstance(n.value.value,str))]
-        if len(list(root.rglob('*.py'))) != 1 or ast.dump(tree) != ast.dump(ast.parse(ADAPTER_SOURCE)):
-            raise ValueError('adapter_only requires the exact LibraryCandidate/load_adapter wrapper; no custom code or CV')
-    except (ValueError,SyntaxError) as error:
-        report.errors.append(str(error))
-    report.valid = not report.errors
-    return report
 
 
 class CodingState(TypedDict, total=False):
@@ -108,7 +80,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         return max(0.,remaining()-verification_reserve)
 
     def source_report(root):
-        return verify_adapter_source(root) if plan.execution_mode=='adapter_only' else verify_source(root)
+        return verify_source(root)
     # Synthetic checks must keep the task's column names and types: generated
     # feature engineering may legitimately refer to those names explicitly.
     schema=[]
@@ -157,15 +129,10 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 # All API steps and their retries share the same persisted
                 # deadline as source repairs and smoke/inspection workers.
                 client.deadline=min(original_deadline,time.time()+generation_remaining())
-            prompt = SDK_PROMPT
-            if plan.execution_mode=='adapter_only':
-                prompt = ('Return JSON {"files":{"candidate.py":"..."}} containing exactly this source. '
-                          'Do not add logic, custom preprocessing, CV, classes, imports or extra files. '
-                          'The supplied config already selects the model and parameters.\n'+ADAPTER_SOURCE)
-            bundle = client.generate('coding_agent',prompt,
+            bundle = client.generate('coding_agent',SDK_PROMPT,
                 dict(state['payload'],feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
                      current_files={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py')}),
-                CodeBundle,None if plan.execution_mode=='adapter_only' or (config.coding_direct_first and attempts==1) else role_tools)
+                CodeBundle,None if config.coding_direct_first and attempts==1 else role_tools)
             if sum(map(len,bundle.files.values())) > 200000: raise ValueError('Generated source exceeds workspace budget')
             for name,content in bundle.files.items():
                 if not name.endswith('.py'): raise ValueError('Final bundle must contain Python source only')

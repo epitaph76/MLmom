@@ -69,6 +69,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                         if role=='plan_validator':self.assertIn('sklearn',{s['skill_id'] for s in payload['skill_instructions']})
                     if role=='coding_agent':
                         self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in payload['skills']})
+                        self.assertIn('class Candidate:',next(s['content'] for s in payload['skills'] if s['skill_id']=='sklearn'))
                 read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
                 self.assertEqual(read.status,'ok')
                 self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in read.data})

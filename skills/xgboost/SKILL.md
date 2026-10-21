@@ -4,7 +4,7 @@ description: Train regularized CPU histogram boosters and query rankers with the
 ---
 # XGBoost 2.1.4
 
-LibraryCandidate uses CPU hist, dense OHE, target LabelEncoder and serial multioutput wrappers; no eval_set. Native categories/early stopping need custom code. Do not assume category recoding from newer versions.
+Generate CPU hist code with an explicit representation: fitted OHE or native categorical dtype. Persist the target LabelEncoder and use serial multioutput wrappers. Implement internal-validation early stopping and frozen iteration count when planned. REFERENCE.md gives pinned-API examples; do not assume category recoding from newer versions.
 
 Start learning_rate .03-.1, max_depth 3-8, min_child_weight 1-10, subsample/colsample_bytree .7-1, reg_lambda 1-10. Bound stock n_estimators. Custom code sets early_stopping_rounds/eval_metric in the constructor, passes internal eval_set to fit, and disables stopping on validation-free refit. Export best_iteration+1 as n_estimators. sklearn predict uses best_iteration; native Booster needs iteration_range.
 

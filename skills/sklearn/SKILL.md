@@ -4,9 +4,9 @@ description: Build cheap CPU baselines, sparse linear models, multioutput predic
 ---
 # scikit-learn 1.5.2
 
-LibraryCandidate selects ExtraTreesClassifier/Regressor, KMeans or IsolationForest from task_type. model_params go to that constructor; no estimator/solver selector exists. Ridge, LogisticRegression or MiniBatchKMeans need custom candidates.
+Generate direct calls to the chosen estimator. REFERENCE.md shows a complete ExtraTrees/KMeans/IsolationForest candidate. Adapt it for Ridge, LogisticRegression or MiniBatchKMeans; implement any estimator selector explicitly. All declared parameters must reach their actual constructor.
 
-For trees start 100-400 estimators, min_samples_leaf 2-5 and bounded depth on large tables. Sparse/high-dimensional inputs favor scaled Ridge/LogisticRegression with sparse OHE; stock preprocessing is dense. Check the concrete estimator's NaN/sparse/sample_weight support. LabelEncoder is for y, never X.
+For trees start 100-400 estimators, min_samples_leaf 2-5 and bounded depth on large tables. Sparse/high-dimensional inputs favor scaled Ridge/LogisticRegression with sparse OHE; the ordinary-table reference uses dense OHE; select sparse preprocessing explicitly. Check the concrete estimator's NaN/sparse/sample_weight support. LabelEncoder is for y, never X.
 
 ExtraTrees supports multioutput directly. Custom MultiOutputClassifier/Regressor wrappers should use n_jobs=1 while the base estimator uses the allocation. Multilabel probabilities need positive-class extraction and constant-label handling.
 

@@ -1,3 +1,11 @@
+# Проверка генерации кандидатов — 22.10.2026
+
+Финальный ZIP: `submission/mlmom-organizers-20261022.zip`, SHA256 `2299a039a27457ac2151ce207095972f4a175fd938e0a9a143c86ef374ba5297`. 120 тестов, 0 ошибок/падений/пропусков, 317.954 секунды. Выполнены на коде из извлечённого ZIP. Новый режим генерации проверен offline; LLM имитируется, обучение/Optuna/smoke/save/load выполняются реально. Организаторский API проверен MockTransport без сетевых вызовов.
+
+[Описание изменения](docs/GENERATED_CANDIDATES.md), [машинный отчёт](artifacts/generated-candidates-release-20261022/tests.json), [ZIP compliance](artifacts/generated-candidates-release-20261022/compliance.json). Архив сохраняет три корневых файла, официальный requirements.txt, OPENAI_* из окружения, Qwen по умолчанию, бюджет 10800 секунд и контроль CPU/RAM. Платные прогоны предыдущих сборок ниже не подтверждают качество новой генерации.
+
+---
+
 # Проверка планирования — 21 октября 2026
 
 Актуальный ZIP: `submission/mlmom-solution.zip`, SHA256 `e72687e436135b607e6a6da43f6fd553eeddc100602bf453b8c43b528cba0f71`, 112194 байт. **114 тестов прошли** на runtime именно из этого ZIP: failures=0, errors=0, skipped=0, 337.97 секунды. Совпадение checkout и встроенных исходников, состав архива и отсутствие настроенных ключей проверены scripts/report_release.py.

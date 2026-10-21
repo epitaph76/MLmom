@@ -1,4 +1,7 @@
-"""CPU adapters usable by generated candidates. No pretrained weights/downloads."""
+"""Legacy CPU implementations for backend probes and historical model loading.
+
+New generated candidates implement library calls directly using skill references.
+"""
 from __future__ import annotations
 
 import time

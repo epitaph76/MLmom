@@ -10,7 +10,7 @@ import httpx
 from openai import OpenAI
 
 from mlmom.agents import RoleClient, LLMUnavailable, StructuredOutputError
-from mlmom.coding import CodeBundle, ADAPTER_SOURCE, verify_adapter_source, build_coding_graph
+from mlmom.coding import CodeBundle, build_coding_graph
 from mlmom.llm_client import LLMSettings
 from mlmom.persistence import ExperimentStore
 from mlmom.pipeline_contracts import ValidationReport, RunConfig
@@ -121,15 +121,17 @@ class RealFailureRegressions(unittest.TestCase):
                     with self.assertRaises(LLMUnavailable): resumed.complete([{'role':'user','content':'{}'}])
             store.close()
 
-    def test_adapter_only_rejects_custom_cv_and_extra_source(self):
+    def test_generated_source_rejects_adapter_import_but_allows_own_preprocessing(self):
+        from mlmom.tools import verify_source
+        from tests.fakes import ADAPTER_CODE,GENERATED_CODE
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);(root/'candidate.py').write_text(ADAPTER_SOURCE,encoding='utf-8')
-            self.assertTrue(verify_adapter_source(root).valid)
-            (root/'candidate.py').write_text(ADAPTER_SOURCE+'\nfor fold in range(5): pass\n',encoding='utf-8')
-            self.assertFalse(verify_adapter_source(root).valid)
-            (root/'candidate.py').write_text(ADAPTER_SOURCE,encoding='utf-8')
+            root=Path(temp);source=root/'candidate.py'
+            source.write_text(ADAPTER_CODE,encoding='utf-8')
+            self.assertFalse(verify_source(root).valid)
+            source.write_text(GENERATED_CODE,encoding='utf-8')
+            self.assertTrue(verify_source(root).valid)
             (root/'extra.py').write_text('x=1',encoding='utf-8')
-            self.assertFalse(verify_adapter_source(root).valid)
+            self.assertTrue(verify_source(root).valid)
 
     def test_workspace_keeps_every_write_and_patch(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -142,7 +144,7 @@ class RealFailureRegressions(unittest.TestCase):
     def test_timeout_without_candidate_preserves_failure_and_smoke_reserve(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
-            context,tools,_,plan=case();plan.execution_mode='adapter_only'
+            context,tools,_,plan=case()
             class TimedOut:
                 deadline=time.time()+1000
                 def generate(self,*args):
@@ -182,12 +184,12 @@ class RealFailureRegressions(unittest.TestCase):
         self.assertFalse(output['valid'])
         self.assertEqual(sum(role=='planner' for role,_ in client.calls),1)
 
-    def test_validator_timeout_fallback_is_limited_to_verified_adapter_plans(self):
+    def test_validator_timeout_never_bypasses_review_for_generated_plans(self):
         class UnavailableValidator(Planner):
             def generate(self,role,*args,**kwargs):
                 if role=='plan_validator': raise LLMUnavailable('APITimeoutError')
                 return super().generate(role,*args,**kwargs)
-        for lightweight,expected in [(True,True),(False,False)]:
+        for lightweight,expected in [(True,False),(False,False)]:
             context,tools,budget,plan=case()
             output=build_planning_graph(UnavailableValidator(),context,tools,Skills(),budget,
                 lightweight=lightweight,planning_mode='baseline').invoke({'payload':{'round_number':1}})

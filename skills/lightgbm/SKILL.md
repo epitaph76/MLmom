@@ -4,7 +4,7 @@ description: Fit CPU LightGBM 4.6.0 with native categories and internal-validati
 ---
 # LightGBM 4.6.0
 
-LibraryCandidate uses native train-derived category levels; unseen categories become missing. Numeric NaN is supported. preprocessing=['onehot'] selects the legacy dense fallback. Persist column order and category vocabularies.
+Implement train-derived categorical levels explicitly; unseen levels become missing. Numeric NaN is supported. For numeric-coded categorical columns, explicitly cast the planned columns. OHE is a separate implementation choice. See REFERENCE.md and persist column order/vocabularies.
 
 Single-output regression/classification use context.validation_X/y and exact primary-metric early stopping (50 rounds). Export best_iteration_ as fixed n_estimators; validation-free refit uses that count. Multioutput/ranking require explicit per-target/group-aware custom stopping.
 

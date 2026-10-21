@@ -1,11 +1,11 @@
 {
   "date": "2026-10-22",
-  "base_commit": "3ff0cf74cef677efd392c0d5c3d1794a49972517",
+  "base_commit": "d7fc44dab5fcfce0caf0e0060245a561de2eee3a",
   "working_tree_changes": true,
   "package": {
     "archive": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-organizers-20261022.zip",
-    "bytes": 112177,
-    "sha256": "4e6e00d45202f8320777bbef20a6a97dd48322ce522a5e0575ab5757416100fe",
+    "bytes": 116318,
+    "sha256": "2299a039a27457ac2151ce207095972f4a175fd938e0a9a143c86ef374ba5297",
     "flat_root_files": true,
     "official_requirements_identical": true,
     "secrets_absent": true,
@@ -26,6 +26,7 @@
     "live_api_called": false,
     "path": "submission/mlmom-organizers-20261022.zip",
     "canonical_copy": "submission/mlmom-solution.zip",
+    "source_bundle_digest": "5c2a87f11fcf3c41045a947e75983dd0cbf3ef0a080f76522e486d407add748a",
     "root_files": [
       "solution.py",
       "requirements.txt",
@@ -34,14 +35,14 @@
   },
   "tests": {
     "status": "passed",
-    "count": 116,
+    "count": 120,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "duration_seconds": 320.2820000000065,
-    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\organizer-release-20261022\\audit-final\\platform\\.mlmom-runtime-008aac661bed1a6e",
+    "duration_seconds": 317.9539999999979,
+    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\generated-candidates-release-20261022\\platform\\.mlmom-runtime-5c2a87f11fcf3c41",
     "source": "extracted final ZIP",
-    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\organizer-release-20261022\\audit-final\\tests.log"
+    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\generated-candidates-release-20261022\\tests.log"
   },
   "real_api": {
     "model": "qwen/qwen3.8-27b",
@@ -208,18 +209,45 @@
     "platform_score_verified": false
   },
   "previous_release_package": {
-    "path": "submission/mlmom-solution.zip",
+    "archive": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-organizers-20261022.zip",
+    "bytes": 112177,
+    "sha256": "4e6e00d45202f8320777bbef20a6a97dd48322ce522a5e0575ab5757416100fe",
+    "flat_root_files": true,
+    "official_requirements_identical": true,
+    "secrets_absent": true,
+    "no_hardcoded_provider_url": true,
+    "no_private_model_default": true,
+    "source_matches": true,
+    "standalone_cli_help": true,
+    "transport_smoke": {
+      "mock_proxy_requests": [
+        "https://changellenge.up.railway.app/v1/chat/completions",
+        "https://api.alfahack-gateway26.ru/v1/chat/completions"
+      ],
+      "platform_profile": "platform",
+      "total_seconds": 10800,
+      "worker_cpus": 7,
+      "worker_ram_gb": 11.715324401855469
+    },
+    "live_api_called": false,
+    "path": "submission/mlmom-organizers-20261022.zip",
+    "canonical_copy": "submission/mlmom-solution.zip",
     "root_files": [
       "solution.py",
       "requirements.txt",
       "mlmom_bundle.py"
-    ],
-    "bytes": 112194,
-    "sha256": "e72687e436135b607e6a6da43f6fd553eeddc100602bf453b8c43b528cba0f71",
-    "source_bundle_digest": "b5940e5710fb481bc521e0a4f26623f17c02311819796beee25558e718b63bc8",
-    "bundled_source_matches_checkout": true,
-    "secret_scan": "passed: configured keys absent"
+    ]
   },
-  "organizer_compliance_report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\organizer-release-20261022\\audit-final\\compliance.json",
-  "live_api_note": "This release was checked offline. Previous DeepSeek task runs do not prove current organizer Qwen API availability."
+  "organizer_compliance_report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\generated-candidates-release-20261022\\compliance.json",
+  "live_api_note": "New generated-candidate policy validated offline only. Historical DeepSeek/Qwen runs used the previous policy.",
+  "generation_policy": {
+    "execution_mode": "custom only",
+    "fixed_adapter_wrappers": "rejected",
+    "backend_references": 9,
+    "reference_files": 11,
+    "reference_delivery": "selected coder skills only",
+    "llm_plan_review": "required, no deterministic bypass",
+    "hpo_parameter_space": "declared by planner, reused after baseline CSV",
+    "live_llm_runs_this_release": false
+  }
 }

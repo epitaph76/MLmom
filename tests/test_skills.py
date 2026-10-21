@@ -67,7 +67,7 @@ class SkillTests(unittest.TestCase):
         for key, manifest in registry.manifests.items():
             with self.subTest(skill=key):
                 self.assertEqual(manifest.status, 'ready')
-                self.assertEqual(manifest.version, '1.0.0')
+                self.assertRegex(manifest.version, r'^\d+\.\d+\.\d+$')
                 text = (ROOT / key / 'SKILL.md').read_text(encoding='utf-8')
                 self.assertTrue(text.isascii(), 'Runtime instructions must remain compact English text')
                 self.assertTrue(text.startswith('---\n'))

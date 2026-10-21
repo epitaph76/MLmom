@@ -26,10 +26,8 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             errors.append('Native adapter has no trial-patience callback; set patience_trials=null')
         if not set(tool.skill_ids) <= set(plan.skill_ids): errors.append('Required library skills are missing')
     if lightweight:
-        if plan.execution_mode == 'adapter_only' and plan.preprocessing:
-            errors.append('adapter_only uses existing adapter preprocessing; preprocessing must be empty')
-        if plan.strategy != 'single' or plan.search_space or plan.max_trials != 1:
-            errors.append('Lightweight plans require strategy=single, empty search_space and max_trials=1')
+        if plan.strategy != 'single' or plan.max_trials != 1:
+            errors.append('Lightweight plans require strategy=single and max_trials=1; search_space is reserved for later HPO')
         if plan.ensemble_components: errors.append('Lightweight plans cannot contain ensembles')
         if tool and (tool.native_hpo or tool.cost_tag == 'slow'):
             errors.append('Lightweight plans cannot use native AutoML or slow backends')
@@ -141,8 +139,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     batch = generate('hypothesis_generator',
                         f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 or first_candidate_required=true requires a fast baseline. '
                         'When lightweight=true, propose simple fixed-configuration fits only: no HPO, AutoML, neural '
-                        'networks or ensembles. Use only an existing LibraryCandidate adapter with fixed parameters; '
-                        'no custom preprocessing, target transformations or internal cross-validation. '
+                        'networks or ensembles. The coder implements a cheap baseline directly using the selected library '
+                        'and simple fold-local preprocessing; reference skills provide implementation examples. '
+                        'No internal cross-validation. '
                         'Use supplied history; empty history is normal before the first fit. '
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
@@ -187,24 +186,26 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'request backend/technique instructions only if a specific essential contract is missing. '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
                         'imbalance for weighting/thresholds, and ensembles plus component skills for ensembles. '
-                        'When lightweight=true require strategy=single, max_trials=1, empty search_space, no '
+                        'When lightweight=true require strategy=single, max_trials=1, no '
                         'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
                         f'{min(300,initial_experiment_seconds)}. Never override orchestration resources; '
-                        'exclude targets, IDs and evaluation data from features. In lightweight mode use '
-                        'execution_mode=adapter_only, preprocessing=[], existing adapter preprocessing and fixed '
-                        'model parameters only; no custom CV, target transformations or extra preprocessing. '
+                        'exclude targets, IDs and evaluation data from features. Always use execution_mode=custom: '
+                        'the coder implements the estimator and all preprocessing directly. In lightweight mode '
+                        'keep preprocessing cheap and parameters fixed for the initial fit. Declare a small compatible '
+                        'search_space even for a single baseline: it is used only after the first CSV is saved. '
+                        'Describe required transforms in preprocessing, including column names and prediction '
+                        'constraints. No internal CV. '
                         'After baseline use strategy=optuna with a small compatible search_space for ordinary estimators; '
                         'never implement HPO in candidate.fit. Respect improvement_policy and do not use ensembles. '
-                        'Prefer execution_mode=adapter_only for model-only changes. For text use sklearn estimator=linear '
-                        'with C for classification or alpha for regression. '
+                        'Backend skills are references, not hidden runtime adapters. The code must consume every '
+                        'declared model/search parameter. For text specify a sparse linear estimator with C for '
+                        'classification or alpha for regression. '
                         'based_on must be one of known_candidates; hypothesis lineage uses based_on_hypothesis_id.',
                         dict(state['payload'],lightweight=is_light(state),
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              feedback=feedback,skill_instructions=core_instructions), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
-                    if is_light(state):
-                        item.execution_mode='adapter_only'
                     normalized=[]
                     for name in ('n_jobs','num_threads','thread_count','num_cpus'):
                         if item.model_params.get(name)==item.cpus:
@@ -251,8 +252,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'min_delta=0 is correct: the runner separately enforces hpo_gain_threshold=0.005 and keeps tiny gains. '
                         'Review feasibility, leakage and methodological validity against the supplied skill '
                         'instructions. Return a concise validation JSON; never rewrite plans. '
-                        'For adapter_only, the executor verifies the exact LibraryCandidate forwarding wrapper, '
-                        'excludes target/ID from features and owns all splits; do not require custom CV or preprocessing.',
+                        'The coder generates the complete candidate. Check that preprocessing and parameters can '
+                        'implement every claim, with no implicit adapter behavior. The runner owns splits and HPO. '
+                        'Require explicit operations and columns for changes such as treating numeric years as '
+                        'categories. Single baseline search_space is for later HPO.',
                         dict(round_number=state['payload'].get('round_number',1),
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
                              task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else
@@ -273,14 +276,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break
                 except LLMUnavailable as error:
-                    transient=str(error) in {'APITimeoutError','APIConnectionError','HTTP 500','HTTP 502','HTTP 503','HTTP 504'}
-                    if validating and transient and item.execution_mode=='adapter_only':
-                        warning=dict(hypothesis_id=hypothesis.hypothesis_id,
-                            warning='LLM semantic review unavailable; adapter-only deterministic validation used',reason=str(error))
-                        warnings.append(warning)
-                        emit('planning.validation_degraded',warning)
-                        accepted.append(item.model_dump(mode='json'))
-                        break
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break
                 except ValueError as error:

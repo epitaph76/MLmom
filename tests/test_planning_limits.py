@@ -11,7 +11,7 @@ from mlmom.planning import validate_plan, build_planning_graph
 from mlmom.registry import installed_tools
 from mlmom.agents import LLMUnavailable
 from mlmom.tracing import current_context
-from tests.fakes import ADAPTER_CODE
+from tests.fakes import GENERATED_CODE as ADAPTER_CODE
 
 
 class Skills:
