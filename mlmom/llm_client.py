@@ -1,4 +1,4 @@
-"""OpenAI-compatible chat client configured for RouterAI.
+"""OpenAI-compatible chat client configured through environment variables.
 
 Secrets are loaded from environment variables and are never stored in model
 artifacts.  The tiny protocol keeps the task graph testable without network
@@ -15,9 +15,9 @@ from typing import Protocol
 from dotenv import load_dotenv
 
 
-DEFAULT_BASE_URL = "https://routerai.ru/api/v1"
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+DEFAULT_BASE_URL = ""
 PLATFORM_MODEL = "qwen/qwen3.8-27b"
+DEFAULT_MODEL = PLATFORM_MODEL
 
 
 class ChatClient(Protocol):
@@ -58,9 +58,14 @@ class LLMSettings:
             raise ValueError(
                 "OPENAI_API_KEY is not set. Configure the platform environment or a local .env."
             )
+        base_url = (os.getenv("OPENAI_BASE_URL", os.getenv("ROUTERAI_BASE_URL", "")).strip())
+        if not base_url:
+            raise ValueError(
+                "OPENAI_BASE_URL is not set. Configure the platform environment or a local .env."
+            )
         return cls(
             api_key=api_key,
-            base_url=os.getenv("OPENAI_BASE_URL", os.getenv("ROUTERAI_BASE_URL", DEFAULT_BASE_URL)).strip() or DEFAULT_BASE_URL,
+            base_url=base_url,
             model=os.getenv("OPENAI_MODEL", os.getenv("ROUTERAI_MODEL", DEFAULT_MODEL)).strip() or DEFAULT_MODEL,
             timeout_seconds=float(os.getenv("ROUTERAI_TIMEOUT_SECONDS", "120")),
         )

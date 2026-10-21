@@ -62,6 +62,31 @@ class AgentProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'OPENAI_BASE_URL'):
                 LLMSettings.from_platform_env()
 
+    def test_local_settings_require_explicit_endpoint_and_default_to_organizer_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            absent=str(Path(tmp)/'absent.env')
+            with patch.dict('os.environ',{'OPENAI_API_KEY':'test-only'},clear=True):
+                with self.assertRaisesRegex(ValueError,'OPENAI_BASE_URL'):
+                    LLMSettings.from_env(absent)
+            with patch.dict('os.environ',{'OPENAI_API_KEY':'test-only',
+                                        'OPENAI_BASE_URL':'https://proxy.invalid/v1'},clear=True):
+                settings=LLMSettings.from_env(absent)
+                self.assertEqual(settings.base_url,'https://proxy.invalid/v1')
+                self.assertEqual(settings.model,'qwen/qwen3.8-27b')
+
+    def test_platform_accepts_supplied_endpoint_and_model_without_dotenv(self):
+        for url in ['https://changellenge.up.railway.app/v1','https://api.alfahack-gateway26.ru/v1']:
+            with self.subTest(url=url),patch.dict('os.environ',{
+                    'OPENAI_API_KEY':'platform-test-only','OPENAI_BASE_URL':url,
+                    'OPENAI_MODEL':'proxy-task-model','ROUTERAI_API_KEY':'private-test-only',
+                    'ROUTERAI_BASE_URL':'https://private.invalid/v1'},clear=True),\
+                    patch('mlmom.llm_client.load_dotenv') as dotenv:
+                settings=LLMSettings.from_platform_env()
+                self.assertEqual(settings.base_url,url)
+                self.assertEqual(settings.api_key,'platform-test-only')
+                self.assertEqual(settings.model,'proxy-task-model')
+                dotenv.assert_not_called()
+
     def test_daily_budget_error_is_actionable_and_does_not_echo_provider_body(self):
         client=RoleClient(LLMSettings(api_key='test-only'),deadline=time.time()+10)
         self.addCleanup(client.client.close)
