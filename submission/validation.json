@@ -1,6 +1,6 @@
 {
   "date": "2026-10-21",
-  "base_commit": "63b285114d959db5a4dc3cdb6123e45453b75aaf",
+  "base_commit": "76b55708293f29c2f6a8899b428ecc7bccc00e4d",
   "working_tree_changes": true,
   "package": {
     "path": "submission/mlmom-solution.zip",
@@ -9,50 +9,145 @@
       "requirements.txt",
       "mlmom_bundle.py"
     ],
-    "bytes": 95372,
-    "sha256": "c840a1e3de52b8eb33d4ac8bcc91a500b50506239f13539c71b438690992f2fa",
-    "source_bundle_digest": "62a1b1071b574fd4a36f77443fdac6ecf922454069e07f23e9b2f8cf1546938c",
+    "bytes": 112194,
+    "sha256": "e72687e436135b607e6a6da43f6fd553eeddc100602bf453b8c43b528cba0f71",
+    "source_bundle_digest": "b5940e5710fb481bc521e0a4f26623f17c02311819796beee25558e718b63bc8",
     "bundled_source_matches_checkout": true,
     "secret_scan": "passed: configured keys absent"
   },
   "tests": {
     "status": "passed",
-    "count": 81,
+    "count": 114,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "duration_seconds": 239.68699999999808,
-    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\reliable-start-release\\platform\\.mlmom-runtime-a95caadc047c4d1d",
-    "source": "extracted previous ZIP",
+    "duration_seconds": 337.96800000000803,
+    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\planning-recovery-20261021\\release-v2\\platform\\.mlmom-runtime-b5940e5710fb481b",
+    "source": "extracted final ZIP",
     "python": "3.12.10",
     "os": "Windows",
     "llm": "mock",
-    "report": "artifacts/reliable-start-release/tests.log",
-    "runtime_bundle_digest": "a95caadc047c4d1d72814caf9c45285af2b1c8bbdaafe568b455171e88643368"
+    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\planning-recovery-20261021\\release-v2\\tests.log"
   },
-  "organizer_smoke": {
-    "llm": "mock",
-    "tool": "catboost",
-    "rounds_per_task": 2,
-    "report": "artifacts/reliable-start-release/organizer/reports.json",
-    "source": "extracted previous ZIP",
-    "tasks": [
+  "real_api": {
+    "model": "qwen/qwen3.8-27b",
+    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\reports.json",
+    "attempts": [
       {
-        "metric": "rmse",
-        "status": "completed",
-        "rows": 22449,
-        "model_role": "submission_refit",
-        "first_submission_seconds": 23.7830753326416
+        "case": "regression",
+        "attempt": 1,
+        "duration_seconds": 884.1569999999992,
+        "exit_code": 0,
+        "verification": {
+          "status": "passed",
+          "rows": 22449,
+          "replay_rows": 128,
+          "replay_equal": true,
+          "primary_metric": "rmse",
+          "holdout_score": 43.834577684438514,
+          "submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\inputs\\regression\\Регрессия\\submission.csv",
+          "saved_submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-1\\submissions\\final-refit-703e1222ee7c7d6a78aeff001680969f164127018a378f626f04fe9c880a8e78.csv",
+          "model_artifact": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-1\\runs\\final-refit\\model-1dc6b2d27f4c",
+          "candidate_id": "r1-h1_lgbm_baseline-v1",
+          "model_role": "submission_refit"
+        },
+        "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-1",
+        "runtime_matches_release": false,
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 1,
+          "completed_optuna_trials": 5,
+          "passed": false
+        }
       },
       {
-        "metric": "f1_macro",
-        "status": "completed",
-        "rows": 41166,
-        "model_role": "submission_refit",
-        "first_submission_seconds": 55.41746807098389
+        "case": "multiclass",
+        "attempt": 1,
+        "duration_seconds": 380.46800000000076,
+        "exit_code": 2,
+        "verification": {
+          "status": "failed",
+          "reason": "Pipeline did not produce a submission"
+        },
+        "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\multiclass\\attempt-1",
+        "runtime_matches_release": false,
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 0,
+          "completed_optuna_trials": 0,
+          "passed": false
+        }
+      },
+      {
+        "case": "regression",
+        "attempt": 2,
+        "duration_seconds": 1484.9219999999914,
+        "exit_code": 0,
+        "verification": {
+          "status": "passed",
+          "rows": 22449,
+          "replay_rows": 128,
+          "replay_equal": true,
+          "primary_metric": "rmse",
+          "holdout_score": 43.69410240376818,
+          "submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\inputs\\regression\\Регрессия\\submission.csv",
+          "saved_submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-2\\submissions\\final-refit-dfc14b2366114068ccc5c282dbad9ba14ab0679502dd34c92485ca71525959ce.csv",
+          "model_artifact": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-2\\runs\\final-refit\\model-f556402283e2",
+          "candidate_id": "r1-lgbm_baseline-v1",
+          "model_role": "submission_refit"
+        },
+        "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-2",
+        "runtime_matches_release": false,
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 1,
+          "completed_optuna_trials": 5,
+          "passed": false
+        }
+      },
+      {
+        "case": "multiclass",
+        "attempt": 2,
+        "duration_seconds": 2205.311999999991,
+        "exit_code": 0,
+        "verification": {
+          "status": "passed",
+          "rows": 41166,
+          "replay_rows": 128,
+          "replay_equal": true,
+          "primary_metric": "macro_f1",
+          "holdout_score": 0.6150127769121089,
+          "submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\inputs\\multiclass\\Многоклассовая классификация\\submission.csv",
+          "saved_submission": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\multiclass\\attempt-2\\submissions\\final-refit-170a27a9e0f5c0f15a08af3e9f1e60182bf4056d658650de798e35c6a943ca4a.csv",
+          "model_artifact": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\multiclass\\attempt-2\\runs\\final-refit\\model-2cb20d531437",
+          "candidate_id": "r1-h1_lgbm_balanced_baseline-v1",
+          "model_role": "submission_refit"
+        },
+        "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\multiclass\\attempt-2",
+        "runtime_matches_release": false,
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 1,
+          "completed_optuna_trials": 13,
+          "passed": false
+        }
+      },
+      {
+        "case": "regression",
+        "attempt": 3,
+        "duration_seconds": 40.32799999999406,
+        "exit_code": 2,
+        "verification": {
+          "status": "failed",
+          "reason": "Pipeline did not produce a submission"
+        },
+        "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\improvement-real-20261021\\regression\\attempt-3",
+        "runtime_matches_release": true,
+        "process_acceptance": {}
       }
     ],
-    "runtime_bundle_digest": "a95caadc047c4d1d72814caf9c45285af2b1c8bbdaafe568b455171e88643368"
+    "both_real_tasks_passed": false,
+    "both_three_cycle_tasks_passed": false
   },
   "adapters": {
     "sklearn": {
@@ -96,56 +191,6 @@
     "current_real_api_run": false,
     "three_hour_stress_run": false,
     "linux_run": false,
-    "platform_score_verified": false,
-    "current_real_api_success": null
-  },
-  "real_api_diagnostics": {
-    "date": "2026-10-21",
-    "model": "qwen/qwen3.8-27b",
-    "report": "docs/REAL_API_DIAGNOSTICS.md",
-    "artifacts": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\real-diagnostics-20261021-d893fe",
-    "runtime_bundle_digest": "a95caadc047c4d1d72814caf9c45285af2b1c8bbdaafe568b455171e88643368",
-    "cases": [
-      {
-        "case": "regression",
-        "status": "failed",
-        "stop_reason": "no_successful_candidates",
-        "seconds": 1336.609000000004,
-        "peak_rss_gb": 0.38172149658203125,
-        "training_jobs": 0,
-        "api_responses": 35,
-        "total_tokens": 788038,
-        "candidate_python_files": []
-      },
-      {
-        "case": "multiclass",
-        "status": "failed",
-        "stop_reason": "no_successful_candidates",
-        "seconds": 1051.1719999999987,
-        "peak_rss_gb": 0.3936271667480469,
-        "training_jobs": 0,
-        "api_responses": 29,
-        "total_tokens": 574716,
-        "candidate_python_files": []
-      }
-    ],
-    "api_timeout_seconds": {
-      "regression": 180,
-      "multiclass": 300
-    },
-    "worker_cpus": 2,
-    "worker_memory_gb": 3,
-    "total_seconds_per_case": 1800
-  },
-  "token_limit_removal_tests": {
-    "status": "passed",
-    "count": 16,
-    "failures": 0,
-    "errors": 0,
-    "duration_seconds": 5.686999999998079,
-    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\no-token-cap\\platform\\.mlmom-runtime-62a1b1071b574fd4",
-    "source": "extracted current ZIP",
-    "llm": "mock",
-    "report": "artifacts/no-token-cap/tests.log"
+    "platform_score_verified": false
   }
 }

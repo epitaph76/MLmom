@@ -1,13 +1,13 @@
 ---
 name: preprocessing
-description: Fit fold-local tabular transforms, preserve inference state and control unknown categories and sparse/dense memory.
+description: Fit fold-local tabular and sparse text transforms and preserve inference state.
 ---
 # Preprocessing
 
-LibraryCandidate uses median imputation/StandardScaler for numeric/bool and most-frequent imputation/dense OneHotEncoder(handle_unknown='ignore', min_frequency=2, max_categories=100) otherwise. CatBoost/native AutoML use separate paths. plan.preprocessing describes intent; it does not implement transforms.
+Fallback: numeric/bool median imputation, StandardScaler; categories imputed and dense OHE with unknown=ignore, min_frequency=2, max_categories=100. LightGBM defaults to native categories; CatBoost uses native category strings. All vocabularies and transforms fit on current training rows only.
 
-Use train-derived column lists in ColumnTransformer/Pipeline. Preserve empty columns with keep_empty_features=True or record train-only drops. Convert infinity to missing and mixed categories to stable strings/sentinels. Never fit get_dummies separately at prediction.
+For text or mixed tables use sklearn with model_params estimator=linear: C for classification (LogisticRegression), alpha for regression (Ridge). preprocessing=['tfidf'] explicitly enables sparse word/character TF-IDF; long text is also recognized by content. Numeric scaling preserves sparse output and category OHE stays sparse. No pretrained models/downloads. This path supports unseen Unicode tokens, empty text and missing columns' values.
 
-For wide linear models keep OHE sparse; StandardScaler on sparse input needs with_mean=False. Estimate rows * transformed_columns * dtype_size plus copies/model state before densifying. Trees usually need no scaling. Native categorical boosters need fixed train vocabularies/codes.
+Custom preprocessing must be implemented and saved; a plan description alone does not execute it. Preserve empty columns or record train-only drops. Replace infinities with missing. Do not fit encoders separately at predict. Estimate dense memory before conversion. Do not apply target transforms, weights or duplicate removal universally.
 
-Parse dates consistently into selected calendar/elapsed features; learned reference dates/cutoffs are train-only. Persist columns, dtypes and all encoders/imputers/scalers. Predict only transforms. Check unseen categories, missing values, shuffled columns and non-default row indices. Invert any y transform while preserving output order.
+Calendar/lag features require understood semantics and prediction-time availability; forecasting execution remains deferred. Persist columns, encoders, imputers, scales and inverse target transforms. Test unseen values, missingness, shuffled columns and row order.

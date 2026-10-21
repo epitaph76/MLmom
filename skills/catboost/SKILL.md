@@ -1,13 +1,13 @@
 ---
 name: catboost
-description: Train CPU CatBoost 1.2.8 for categorical-heavy tabular prediction, multioutput targets or ranking.
+description: Fit CPU CatBoost 1.2.8 with native categories and internal-validation early stopping.
 ---
 # CatBoost 1.2.8
 
-Prefer for many/high-cardinality categories. LibraryCandidate keeps native categories, fills them with a string sentinel and uses a time callback. It supplies no eval_set; validation early stopping needs custom code.
+LibraryCandidate preserves native categories, fills missing categories with a stable string sentinel, and applies a time callback. Numeric NaN is allowed. Persist columns, categories and identical fit/predict cleaning.
 
-Use identical category string conversion/sentinel at fit/predict: categorical float/NaN values are invalid, numeric NaN is allowed. Persist category columns/order. Start depth 4-8, learning_rate .03-.1, l2_leaf_reg 3-10 and bounded iterations. Keep allow_writing_files=False or confine native files to work_dir.
+Single-output regression/classification use context.validation_X/y, 50-round early stopping and use_best_model=True for supported exact metrics: RMSE, MAE, Accuracy, Logloss/MultiClass, macro F1. Other metrics disable stopping rather than substitute a proxy. Export tree_count_ as iterations; refit without validation uses fixed iterations.
 
-Custom early stopping uses context.validation_X/y, cat_features, early_stopping_rounds and use_best_model=True. Without validation disable use_best_model and train fixed iterations. Export tree_count_ as iterations for refit.
+Start depth 4-8, learning_rate .03-.1, l2_leaf_reg 3-10 and bounded iterations. Keep allow_writing_files=False. Never wrap candidate.fit in another HPO loop.
 
-The adapter uses MultiRMSE for multioutput regression and MultiLogloss for multilabel. Ranker fit/Pool group_id must be contiguous; permute X/y/weights together. Do not confuse sample_weight with group_weight. Use one deliberate class-weighting mechanism. CPU/thread_count belong in code, not plan overrides.
+Multioutput uses MultiRMSE; multilabel uses MultiLogloss. Ranker query groups must be contiguous; sort X/y/weights together. sample_weight is not group_weight. Use one deliberate class-weighting mechanism. CPU/thread_count come from context.

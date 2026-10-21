@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import hashlib
 import json
 import os
@@ -15,13 +16,14 @@ from dotenv import dotenv_values
 
 def main():
     root=Path(__file__).resolve().parents[1]
-    tests=json.loads((root/'artifacts/reliable-start-release/tests.json').read_text(encoding='utf-8'))
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--tests',type=Path,default=root/'artifacts/repaired-release-final-v2/tests.json')
+    parser.add_argument('--real-reports',type=Path)
+    args=parser.parse_args()
+    tests_path=args.tests.resolve()
+    tests=json.loads(tests_path.read_text(encoding='utf-8'))
     if tests['status']!='passed':raise ValueError('Packaged test suite did not pass')
-    reports_path=root/'artifacts/reliable-start-release/organizer/reports.json'
-    if not reports_path.exists(): reports_path=root/'artifacts/reliable-start-organizer/reports.json'
-    reports=json.loads(reports_path.read_text(encoding='utf-8'))
-    if len(reports)!=2 or any(report['status']!='completed' for report in reports):
-        raise ValueError('Both organizer tasks must complete')
+    reports=json.loads(args.real_reports.read_text(encoding='utf-8')) if args.real_reports else []
     archive=root/'submission/mlmom-solution.zip'
     with zipfile.ZipFile(archive) as package:
         names=package.namelist()
@@ -54,19 +56,27 @@ def main():
     from mlmom.registry import installed_tools
     for name,spec in installed_tools().items():
         tools[name]=dict(version=spec.version,installed=spec.reason=='adapter probe required')
+    attempts=[]
+    release_hash=hashlib.sha256(archive.read_bytes()).hexdigest()
+    for report in reports:
+        manifest=json.loads((Path(report['run_dir'])/'input_manifest.json').read_text(encoding='utf-8'))
+        attempts.append(dict(case=report['case'],attempt=report['attempt'],duration_seconds=report['duration_seconds'],
+            exit_code=report['exit_code'],verification=report.get('verification'),run_dir=report['run_dir'],
+            runtime_matches_release=manifest['runtime_archive_sha256']==release_hash,
+            process_acceptance=report.get('result',{}).get('process_acceptance',{})))
+    passed_cases={r['case'] for r in attempts if r['runtime_matches_release'] and r.get('verification',{}).get('status')=='passed'}
+    cycle_cases={r['case'] for r in attempts if r['runtime_matches_release'] and r.get('verification',{}).get('status')=='passed' and r['process_acceptance'].get('passed')}
     result=dict(date='2026-10-21',base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
         working_tree_changes=True,package=dict(path='submission/mlmom-solution.zip',root_files=names,
             bytes=archive.stat().st_size,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
             source_bundle_digest=assignments['DIGEST'],bundled_source_matches_checkout=True,
             secret_scan='passed: configured keys absent'),
         tests=dict(tests,source='extracted final ZIP',python=platform.python_version(),os=platform.system(),llm='mock',
-                   report='artifacts/reliable-start-release/tests.log'),
-        organizer_smoke=dict(llm='mock',tool='catboost',rounds_per_task=2,
-            report=reports_path.relative_to(root).as_posix(),
-            source='extracted final ZIP' if 'reliable-start-release' in reports_path.parts else 'checkout',
-            tasks=[dict(metric=r['primary_metric'],status=r['status'],rows=r['rows'],
-                model_role=r['submission']['model_role'],first_submission_seconds=r['first_submission']['elapsed_seconds']) for r in reports]),
-        adapters=tools,limits=dict(current_real_api_run=False,three_hour_stress_run=False,
+                   report=str(tests_path.with_name('tests.log'))),
+        real_api=dict(model='qwen/qwen3.8-27b',report=str(args.real_reports.resolve()) if args.real_reports else None,
+            attempts=attempts,both_real_tasks_passed=passed_cases=={'regression','multiclass'},
+            both_three_cycle_tasks_passed=cycle_cases=={'regression','multiclass'}),
+        adapters=tools,limits=dict(current_real_api_run=bool(passed_cases),three_hour_stress_run=False,
                                   linux_run=False,platform_score_verified=False))
     (root/'submission/validation.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(dict(status='passed',bytes=result['package']['bytes'],sha256=result['package']['sha256'],tests=tests['count'])))

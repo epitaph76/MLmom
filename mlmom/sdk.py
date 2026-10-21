@@ -26,6 +26,7 @@ class FitContext:
     validation_X: Any = None
     validation_y: Any = None
     validation_groups: Any = None
+    validation_weight: Any = None
     work_dir: str = '.'
     task_context: Any = None
     started: float = field(default_factory=time.monotonic)

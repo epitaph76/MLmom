@@ -90,13 +90,15 @@ class SchedulerIntegrationTests(unittest.TestCase):
 
     def test_advanced_gate_requires_second_round_submission_and_budget(self):
         pipeline=object.__new__(Pipeline)
-        pipeline.config=RunConfig(coding_seconds=100,prediction_seconds=10)
+        pipeline.config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,coding_seconds=100,prediction_seconds=10)
         pipeline.restore=lambda state:Mock()
         pipeline.preflight_tools=lambda **kwargs:None
         pipeline.client=OfflineLLM()
-        pipeline.tools={};pipeline.skills=Mock();pipeline.role_tools=Mock();pipeline.store=Mock()
+        from mlmom.tools import ToolSet
+        pipeline.tools={};pipeline.skills=Mock();pipeline.role_tools=ToolSet();pipeline.store=Mock()
         pipeline.store.list.return_value=[]
-        pipeline.planning_payload=lambda state:{}
+        pipeline.store.get.return_value=None
+        pipeline.planning_payload=lambda state:{'history':{'evaluation':[]}}
         from mlmom.pipeline_contracts import BudgetSnapshot
         for round_number,submission,seconds,light in [(1,True,500,True),(2,False,500,True),
                                                        (2,True,50,True),(2,True,500,False)]:
@@ -114,7 +116,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         from mlmom.persistence import ExperimentStore
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
-            config=RunConfig(total_seconds=150,final_reserve_seconds=20)
+            config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20)
             original=Pipeline(task,config,run_dir=root/'run',client=OfflineLLM())
             original.store.put('budget','current',{'final_reserve_seconds':55})
             cached={'valid':True,'plans':[{'marker':'exact saved parameters'}]}
@@ -134,7 +136,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             client=AlternativeFailure(task.parent/'submission.csv')
-            config=RunConfig(total_seconds=150,final_reserve_seconds=20,max_rounds=1,max_attempts=1,
+            config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,max_rounds=1,max_attempts=1,
                              prediction_seconds=10,smoke_seconds=15,first_submission_seconds=.001)
             with patch('mlmom.pipeline.installed_tools',only_sklearn):
                 result=Pipeline(task,config,run_dir=root/'run',client=client).run()
@@ -146,6 +148,15 @@ class SchedulerIntegrationTests(unittest.TestCase):
             published=[e for e in events if e['kind']=='submission.published']
             self.assertTrue(published)
             self.assertTrue((root/'run'/'trace.md').exists())
+            saved=list((root/'run'/'submissions').glob('*.csv'))
+            self.assertGreaterEqual(len(saved),2)
+            for path in saved:
+                metadata=json.loads(path.with_suffix('.json').read_text(encoding='utf-8'))
+                from mlmom.persistence import file_hash
+                self.assertEqual(file_hash(path),metadata['artifact']['sha256'])
+                self.assertTrue(Path(metadata['model_artifact']).is_dir())
+            index=json.loads((root/'run'/'artifact_index.json').read_text(encoding='utf-8'))
+            self.assertTrue(any(row['path'].startswith('submissions/') for row in index['files']))
 
 
 if __name__=='__main__':unittest.main()

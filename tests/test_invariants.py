@@ -44,6 +44,17 @@ class RepairLLM(OfflineLLM):
         return super().generate(role,instruction,payload,schema,tools)
 
 
+class CustomCandidatePipeline(Pipeline):
+    """Exercise the custom-coder repair path independently of the startup gate.
+
+    Production first-round candidates are now adapter_only. These older tests
+    deliberately inject custom failures and therefore target the advanced path.
+    """
+    def _prepare(self,plan,round_id,**kwargs):
+        plan.execution_mode='custom'
+        return super()._prepare(plan,round_id,**kwargs)
+
+
 class InvariantTests(unittest.TestCase):
     def test_lightautoml_task_objective_checked_before_planning_and_fit(self):
         from mlmom.adapters import LibraryCandidate
@@ -79,10 +90,10 @@ class InvariantTests(unittest.TestCase):
                     return super().generate(role,instruction,payload,schema,tools)
             with self.subTest(error=type(interruption).__name__),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp);task=dataset(root/'input')
-                config=RunConfig(total_seconds=90,final_reserve_seconds=15,max_rounds=1,max_candidates=1,
+                config=RunConfig(coding_direct_first=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=90,final_reserve_seconds=15,max_rounds=1,max_candidates=1,
                                  smoke_seconds=10,experiment_seconds=15,prediction_seconds=10)
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
-                    result=Pipeline(task,config,run_dir=root/'run',client=InterruptedCoder()).run()
+                    result=CustomCandidatePipeline(task,config,run_dir=root/'run',client=InterruptedCoder()).run()
                 self.assertEqual(result['status'],'completed',result)
                 store=ExperimentStore(root/'run')
                 try:
@@ -117,7 +128,7 @@ class InvariantTests(unittest.TestCase):
             path=task.parent/'dataset_manifest.json'
             manifest=json.loads(path.read_text(encoding='utf-8'));manifest['time_column']='x'
             path.write_text(json.dumps(manifest),encoding='utf-8')
-            result=Pipeline(task,RunConfig(total_seconds=60,final_reserve_seconds=10),run_dir=root/'run',client=OfflineLLM()).run()
+            result=Pipeline(task,RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=root/'run',client=OfflineLLM()).run()
             self.assertEqual(result['status'],'deferred',result)
             self.assertEqual(result['stop_reason'],'deferred_time_series_support')
             self.assertFalse((task.parent/'submission.csv').exists())
@@ -126,8 +137,8 @@ class InvariantTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             client=RepairLLM()
-            cfg=RunConfig(total_seconds=180,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1,runtime_repairs=1)
-            with patch('mlmom.pipeline.installed_tools',only_sklearn):result=Pipeline(task,cfg,run_dir=root/'run',client=client).run()
+            cfg=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1,runtime_repairs=1)
+            with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=client).run()
             self.assertEqual(result['status'],'completed',result)
             store=ExperimentStore(root/'run')
             self.assertEqual(len(store.list('candidate')),2)
@@ -138,8 +149,8 @@ class InvariantTests(unittest.TestCase):
     def test_failed_full_refit_preserves_valid_split_submission(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
-            cfg=RunConfig(total_seconds=150,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1)
-            with patch('mlmom.pipeline.installed_tools',only_sklearn):result=Pipeline(task,cfg,run_dir=root/'run',client=RepairLLM(refit_failure=True)).run()
+            cfg=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1)
+            with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=RepairLLM(refit_failure=True)).run()
             self.assertEqual(result['status'],'completed',result)
             self.assertEqual(result['submission']['model_role'],'evaluation')
             self.assertEqual(file_hash(Path(result['submission']['path'])),result['submission']['sha256'])

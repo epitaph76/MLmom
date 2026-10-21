@@ -54,7 +54,7 @@ class PipelineIntegrationTests(unittest.TestCase):
         for kind in ['regression','multiclass_classification']:
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp); task=dataset(root/'input',kind)
-                config=RunConfig(total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
+                config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
                     prediction_seconds=10,experiment_seconds=20,reserve_cpus=0,reserve_memory_gb=0)
                 client=OfflineLLM()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
@@ -64,8 +64,11 @@ class PipelineIntegrationTests(unittest.TestCase):
                 core={'candidate_sdk','validation','metrics','preprocessing'}
                 for role,payload in client.calls:
                     if role in {'hypothesis_generator','planner','plan_validator'}:
-                        self.assertLessEqual(core,{s['skill_id'] for s in payload['skill_instructions']})
+                        required=core-{'candidate_sdk'} if role=='plan_validator' else core
+                        self.assertLessEqual(required,{s['skill_id'] for s in payload['skill_instructions']})
                         if role=='plan_validator':self.assertIn('sklearn',{s['skill_id'] for s in payload['skill_instructions']})
+                    if role=='coding_agent':
+                        self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in payload['skills']})
                 read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
                 self.assertEqual(read.status,'ok')
                 self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in read.data})
@@ -80,9 +83,17 @@ class PipelineIntegrationTests(unittest.TestCase):
                 splits=store.list('split');runs=store.list('experiment');evaluations=store.list('evaluation')
                 self.assertEqual(len(splits),2)
                 self.assertNotEqual(splits[0]['holdout_indices'],splits[1]['holdout_indices'])
+                self.assertNotEqual(splits[0]['split_id'],splits[1]['split_id'])
+                self.assertEqual([s['seed'] for s in splits],[config.seed,config.seed+1])
                 incumbent=[r for r in runs if r['incumbent']]
                 self.assertEqual(len(incumbent),1)
                 self.assertEqual(incumbent[0]['split_id'],splits[1]['split_id'])
+                prior=next(r for r in runs if r['experiment_id']==store.get('round_result','r1')['champion']['run']['experiment_id'])
+                self.assertEqual(incumbent[0]['candidate_id'],prior['candidate_id'])
+                self.assertEqual(incumbent[0]['best_params'],prior['best_params'])
+                self.assertEqual(incumbent[0]['stop_reason'],'fixed_configuration')
+                reference=next(e['score'] for e in evaluations if e['experiment_id']==incumbent[0]['experiment_id'])
+                self.assertTrue(all(d['reference_score']==reference for d in store.get('analysis','r2')['decisions']))
                 self.assertTrue(all(r['split_id']!='all-train' for r in evaluations))
                 self.assertTrue(all(s['status']=='ready' for c in store.list('candidate') for s in c['skill_versions'].values()))
                 self.assertTrue(all({'candidate_sdk','validation','metrics','preprocessing','sklearn'} <= set(c['skill_versions'])
@@ -96,7 +107,7 @@ class PipelineIntegrationTests(unittest.TestCase):
     def test_failure_without_llm_does_not_create_fallback_submission(self):
         with tempfile.TemporaryDirectory() as temp:
             task=dataset(Path(temp)/'input')
-            result=Pipeline(task,RunConfig(total_seconds=60,final_reserve_seconds=10),run_dir=Path(temp)/'run',client=OfflineLLM(fail=True)).run()
+            result=Pipeline(task,RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=Path(temp)/'run',client=OfflineLLM(fail=True)).run()
             self.assertEqual(result['status'],'failed')
             self.assertFalse((task.parent/'submission.csv').exists())
 

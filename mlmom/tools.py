@@ -50,9 +50,10 @@ class ToolSet:
 
 
 class Workspace:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, revision_dir: Path | None = None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.revision_dir = revision_dir
 
     def path(self, path: str):
         p = inside(self.root, path)
@@ -74,6 +75,16 @@ class Workspace:
         p = self.path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding='utf-8')
+        if self.revision_dir is not None:
+            import hashlib
+            from .persistence import atomic_json
+            revision = self.revision_dir / f'{time.time_ns()}-{hashlib.sha256(content.encode()).hexdigest()[:12]}'
+            revision.mkdir(parents=True)
+            for source in self.root.rglob('*.py'):
+                target = revision/source.relative_to(self.root)
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(source.read_bytes())
+            atomic_json(revision/'change.json',dict(path=path,sha256=hashlib.sha256(content.encode()).hexdigest()))
         return path
 
     def apply_patch(self, path: str, old_text: str, new_text: str) -> str:

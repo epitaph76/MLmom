@@ -183,6 +183,24 @@ def better(new: float, old: float, direction: str, delta=0.) -> bool:
     return gain > max(delta, 1e-12 * max(1., abs(new), abs(old)))
 
 
+def compact_diagnostics(value):
+    """Keep numerical evidence in prompts; full matrices remain in artifacts."""
+    result={k:v for k,v in value.items() if k in {'artifact_ref','absolute_error_quantiles','mean_residual','cluster_sizes'}}
+    report=value.get('classification_report',{})
+    classes=[(k,v) for k,v in report.items() if isinstance(v,dict) and k not in {'macro avg','weighted avg','micro avg'}]
+    if classes:result['worst_classes']=dict(sorted(classes,key=lambda item:item[1].get('f1-score',0))[:5])
+    if 'macro avg' in report:result['macro_average']=report['macro avg']
+    result['worst_slices']=sorted(value.get('safe_slices',[]),key=lambda row:-row['mean_error'])[:6]
+    inspection=value.get('model_inspection',{})
+    for key in ['feature_importance','permutation_importance','contributions']:
+        data=inspection.get(key)
+        if data:
+            result[key]={k:v for k,v in data.items() if k in {'status','reason','baseline'}}
+            scores=data.get('values',data.get('mean_absolute',{}))
+            result[key]['top']=dict(sorted(scores.items(),key=lambda item:-item[1])[:5])
+    return result
+
+
 def evaluate(experiment_id: str, split_id: str, y, prediction, context: TaskContext, *, X=None, groups=None, weights=None, label_prediction=None) -> EvaluationResult:
     return EvaluationResult(experiment_id=experiment_id, split_id=split_id,
         metric=metric_name(context.task.primary_metric), direction=context.task.metric_direction,

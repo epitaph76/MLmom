@@ -32,10 +32,29 @@ class RunConfig(StrictModel):
     reserve_memory_gb: float = Field(4, ge=0)
     smoke_seconds: float = Field(30, gt=0)
     llm_timeout_seconds: float = Field(300, gt=0)
+    task_definition_seconds: float = Field(180, gt=0)
+    hypothesis_seconds: float = Field(210, gt=0)
+    planner_seconds: float = Field(210, gt=0)
+    validator_seconds: float = Field(210, gt=0)
+    coding_verification_seconds: float = Field(60, gt=0)
+    coding_direct_first: bool = True
+    coding_tool_steps: int = Field(3, ge=1, le=12)
+    planning_direct_first: bool = True
+    planning_context_reads: int = Field(2, ge=0, le=5)
     # Legacy configuration key retained for resume compatibility; ignored by clients.
     llm_max_tokens: int | None = None
     metric_options: dict[str, Any] = Field(default_factory=dict)
     submission_kind: str | None = None
+    hpo_enabled: bool = True
+    hpo_batch_size: int = Field(5, ge=1)
+    hpo_max_trials: int = Field(15, ge=1)
+    hpo_gain_threshold: float = Field(.005, ge=0)
+    hpo_seconds: float = Field(600, gt=0)
+    diagnostic_seconds: float = Field(60, ge=0)
+    diagnostic_rows: int = Field(1000, ge=1)
+    diagnostic_features: int = Field(20, ge=1)
+    target_completed_rounds: int = Field(0, ge=0)
+    fixed_outer_split: bool = False
 
     @model_validator(mode='after')
     def valid_reserve(self):
@@ -110,6 +129,7 @@ class Hypothesis(StrictModel):
     rationale: str
     baseline: bool = False
     based_on: str | None = None
+    based_on_hypothesis_id: str | None = None
 
 
 class HypothesisBatch(StrictModel):
@@ -130,9 +150,10 @@ class HypothesisPlan(StrictModel):
     memory_gb: float = Field(4, gt=0)
     max_trials: int = Field(20, ge=1, le=1000)
     patience_trials: int | None = Field(5, ge=1)
-    min_delta: float = Field(0, ge=0)
+    min_delta: float = Field(0, ge=0, description='Legacy absolute comparison threshold; NOT the HPO continuation threshold. Batched search uses RunConfig.hpo_gain_threshold; keep min_delta=0 to retain every improvement.')
     prediction_kind: str = 'value'
     ensemble_components: list[dict[str, Any]] = Field(default_factory=list)
+    execution_mode: Literal['custom', 'adapter_only'] = 'custom'
 
 
 class PlanBatch(StrictModel):
@@ -175,6 +196,7 @@ class TrialResult(StrictModel):
     score: float | None = None
     duration_seconds: float
     error: str | None = None
+
     kind: str = 'optuna'
 
 
@@ -197,6 +219,8 @@ class ExperimentRun(StrictModel):
     resource_memory_gb: float = 2
     native_history_ref: str | None = None
     error: str | None = None
+    study_ref: str | None = None
+    hpo_batches: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvaluationResult(StrictModel):
@@ -220,6 +244,7 @@ class SelectedPreviousResults(StrictModel):
     selected: list[dict[str, Any]] = Field(default_factory=list)
     failures: list[dict[str, Any]] = Field(default_factory=list)
     champion_id: str | None = None
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SubmissionArtifact(StrictModel):

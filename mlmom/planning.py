@@ -7,8 +7,8 @@ from .pipeline_contracts import (HypothesisBatch, PlanBatch, HypothesisPlan, Val
                                   BudgetSnapshot, TaskContext)
 from .evaluation import prediction_kind
 from .registry import LIGHTAUTOML_OBJECTIVES
-from .agents import LLMUnavailable
-from .tracing import bind
+from .agents import LLMUnavailable, StructuredOutputError, role_window
+from .tracing import bind, emit
 
 
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
@@ -26,6 +26,8 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             errors.append('Native adapter has no trial-patience callback; set patience_trials=null')
         if not set(tool.skill_ids) <= set(plan.skill_ids): errors.append('Required library skills are missing')
     if lightweight:
+        if plan.execution_mode == 'adapter_only' and plan.preprocessing:
+            errors.append('adapter_only uses existing adapter preprocessing; preprocessing must be empty')
         if plan.strategy != 'single' or plan.search_space or plan.max_trials != 1:
             errors.append('Lightweight plans require strategy=single, empty search_space and max_trials=1')
         if plan.ensemble_components: errors.append('Lightweight plans cannot contain ensembles')
@@ -89,12 +91,15 @@ class PlanningState(TypedDict, total=False):
     attempts: int
     errors: list[dict]
     valid: bool
+    warnings: list[dict]
 
 
 def build_planning_graph(client, context, tools, skills, budget, max_attempts=3, max_candidates=2,
                          role_tools=None, known_candidates=None, *, lightweight=None,
                          initial_experiment_seconds=300, hypothesis_ids=None, planning_mode='all',
-                         probe_tool=None, evaluation_reserve_seconds=0):
+                         probe_tool=None, evaluation_reserve_seconds=0, candidate_hypotheses=None,
+                         hypothesis_seconds=210, planner_seconds=210, validator_seconds=210,
+                         saved_progress=None,save_progress=None):
     """Plan hypotheses independently; callers can publish a baseline before alternatives.
 
     Pass a previous output's ``hypotheses`` in the input state to reuse the same
@@ -103,6 +108,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
     if not 1 <= max_candidates <= 2: raise ValueError('max_candidates must be between 1 and 2')
     if planning_mode not in {'all', 'baseline', 'alternatives'}: raise ValueError('Unknown planning mode')
     core_instructions=skills.load([],context.task.task_type)
+    progress=dict(saved_progress or {})
+    progress.setdefault('proposed',{})
+    progress.setdefault('accepted',{})
+    def persist():
+        if save_progress:save_progress(progress)
 
     def is_light(state):
         return lightweight if lightweight is not None else state['payload'].get('round_number',1) == 1
@@ -111,6 +121,16 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         with bind(hypothesis_id=hypothesis.hypothesis_id):
             return function(*args, **kwargs)
 
+    def generate(role, instruction, payload, schema, role_tools=None):
+        key = str(payload.get('round_number',1))
+        key += f":p{payload.get('planning_attempt',0)}"
+        if role != 'hypothesis_generator':
+            key += ':' + payload['hypotheses']['hypotheses'][0]['hypothesis_id']
+        seconds = {'hypothesis_generator':hypothesis_seconds,'planner':planner_seconds,
+                   'plan_validator':validator_seconds}[role]
+        with role_window(client, role, key, seconds):
+            return client.generate(role,instruction,payload,schema,role_tools)
+
     def hypotheses(state):
         errors=[]
         for _ in range(max_attempts):
@@ -118,17 +138,23 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 if state.get('hypotheses'):
                     batch=HypothesisBatch.model_validate(state['hypotheses'])
                 else:
-                    batch = client.generate('hypothesis_generator',
-                        f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 requires a fast baseline. '
+                    batch = generate('hypothesis_generator',
+                        f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 or first_candidate_required=true requires a fast baseline. '
                         'When lightweight=true, propose simple fixed-configuration fits only: no HPO, AutoML, neural '
-                        'networks or ensembles. Use history to improve strong approaches and avoid failed configurations.',
+                        'networks or ensembles. Use only an existing LibraryCandidate adapter with fixed parameters; '
+                        'no custom preprocessing, target transformations or internal cross-validation. '
+                        'Use supplied history; empty history is normal before the first fit. '
+                        'After baseline, cite numeric observations or previous experiments in rationale and propose '
+                        'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
+                        'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage.',
                         dict(state['payload'],lightweight=is_light(state),feedback=errors,
                              skill_instructions=core_instructions), HypothesisBatch, role_tools)
                 if len(batch.hypotheses)>max_candidates: raise ValueError('Too many hypotheses for this round')
                 ids=[h.hypothesis_id for h in batch.hypotheses]
                 if len(ids)!=len(set(ids)): raise ValueError('Duplicate hypothesis ID')
-                if state['payload'].get('round_number',1)==1 and not any(h.baseline for h in batch.hypotheses):
+                if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and not any(h.baseline for h in batch.hypotheses):
                     raise ValueError('Round 1 requires a baseline')
+                progress['hypotheses']=batch.model_dump(mode='json');persist()
                 return {'hypotheses':batch.model_dump(mode='json'), 'attempts':0, 'errors':[]}
             except ValueError as error:
                 errors=[str(error)]
@@ -136,7 +162,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         raise ValueError('Hypothesis generation failed: '+'; '.join(errors))
 
     def plan(state):
-        accepted=[]; rejected=[]; attempts=0
+        accepted=[]; rejected=[]; attempts=0; warnings=[]
         source=HypothesisBatch.model_validate(state['hypotheses']).hypotheses
         chosen=[h for h in source if hypothesis_ids is None or h.hypothesis_id in hypothesis_ids]
         if planning_mode=='baseline': chosen=[h for h in chosen if h.baseline][:1]
@@ -148,29 +174,54 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             feedback=[]
             for _ in range(max_attempts):
                 attempts+=1
+                validating=False
                 try:
-                    batch = for_hypothesis(hypothesis,client.generate,'planner',
+                    saved=progress['proposed'].get(hypothesis.hypothesis_id)
+                    batch = PlanBatch(plans=[saved]) if saved else for_hypothesis(hypothesis,generate,'planner',
                         'Turn exactly the supplied hypothesis into one executable plan, preserving its ID, '
                         'meaning and baseline flag. Use available tools and skills, or an installed backend whose '
                         'reason is exactly "adapter probe required": selected backends will be probed before '
                         'validation. Never select missing libraries or version mismatches. Native AutoML requires '
                         'strategy=native and patience_trials=null. Core candidate_sdk, validation, metrics and '
-                        'preprocessing instructions load automatically. Read backend/technique instructions using '
-                        'read_skills. Select backend skills, hpo for Optuna, feature_engineering for new features, '
+                        'preprocessing instructions load automatically. Use the supplied context to return final JSON first; '
+                        'request backend/technique instructions only if a specific essential contract is missing. '
+                        'Select backend skills, hpo for Optuna, feature_engineering for new features, '
                         'imbalance for weighting/thresholds, and ensembles plus component skills for ensembles. '
                         'When lightweight=true require strategy=single, max_trials=1, empty search_space, no '
                         'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
                         f'{min(300,initial_experiment_seconds)}. Never override orchestration resources; '
-                        'exclude targets, IDs and evaluation data from features.',
+                        'exclude targets, IDs and evaluation data from features. In lightweight mode use '
+                        'execution_mode=adapter_only, preprocessing=[], existing adapter preprocessing and fixed '
+                        'model parameters only; no custom CV, target transformations or extra preprocessing. '
+                        'After baseline use strategy=optuna with a small compatible search_space for ordinary estimators; '
+                        'never implement HPO in candidate.fit. Respect improvement_policy and do not use ensembles. '
+                        'Prefer execution_mode=adapter_only for model-only changes. For text use sklearn estimator=linear '
+                        'with C for classification or alpha for regression. '
+                        'based_on must be one of known_candidates; hypothesis lineage uses based_on_hypothesis_id.',
                         dict(state['payload'],lightweight=is_light(state),
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              feedback=feedback,skill_instructions=core_instructions), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
+                    if is_light(state):
+                        item.execution_mode='adapter_only'
+                    normalized=[]
+                    for name in ('n_jobs','num_threads','thread_count','num_cpus'):
+                        if item.model_params.get(name)==item.cpus:
+                            item.model_params.pop(name);normalized.append(name)
+                    if normalized:
+                        emit('planning.normalized_resources',{'parameters':normalized,'cpus':item.cpus})
                     if item.hypothesis.hypothesis_id!=hypothesis.hypothesis_id or item.hypothesis.baseline!=hypothesis.baseline:
                         raise ValueError('Plan must preserve the hypothesis ID and baseline flag')
                     if item.hypothesis.based_on and known_candidates is not None and item.hypothesis.based_on not in known_candidates:
-                        raise ValueError('based_on must reference an existing candidate_id')
+                        alias=item.hypothesis.based_on
+                        lineage={h.hypothesis_id for h in source} | set((candidate_hypotheses or {}).values())
+                        if alias not in lineage:
+                            raise ValueError('based_on must reference an existing verified candidate_id')
+                        matches=[key for key,value in (candidate_hypotheses or {}).items() if value==alias and key in known_candidates]
+                        item.hypothesis.based_on_hypothesis_id=alias
+                        item.hypothesis.based_on=matches[-1] if matches else None
+                        emit('planning.normalized_lineage',item.hypothesis)
                     if probe_tool is not None:
                         # Probe only the proposed backends, never the full heavy
                         # registry. Forbidden initial plans must not trigger
@@ -188,26 +239,60 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                          initial_experiment_seconds=initial_experiment_seconds,
                                          evaluation_reserve_seconds=evaluation_reserve_seconds)
                     if not report.valid: raise ValueError('; '.join(report.errors))
+                    progress['proposed'][hypothesis.hypothesis_id]=item.model_dump(mode='json');persist()
+                    if progress['accepted'].get(hypothesis.hypothesis_id)==item.model_dump(mode='json'):
+                        accepted.append(item.model_dump(mode='json'))
+                        emit('planning.validation_reused',{'hypothesis_id':hypothesis.hypothesis_id})
+                        break
                     instructions=for_hypothesis(hypothesis,skills.load,item.skill_ids,context.task.task_type)
-                    report=for_hypothesis(hypothesis,client.generate,'plan_validator',
+                    validating=True
+                    report=for_hypothesis(hypothesis,generate,'plan_validator',
+                        'min_delta is a legacy absolute comparison field, NOT the batched HPO continuation threshold. '
+                        'min_delta=0 is correct: the runner separately enforces hpo_gain_threshold=0.005 and keeps tiny gains. '
                         'Review feasibility, leakage and methodological validity against the supplied skill '
-                        'instructions. Return findings; never rewrite plans.',
-                        dict(state['payload'],lightweight=is_light(state),plans=[item.model_dump(mode='json')],
-                             skill_instructions=instructions),ValidationReport)
+                        'instructions. Return a concise validation JSON; never rewrite plans. '
+                        'For adapter_only, the executor verifies the exact LibraryCandidate forwarding wrapper, '
+                        'excludes target/ID from features and owns all splits; do not require custom CV or preprocessing.',
+                        dict(round_number=state['payload'].get('round_number',1),
+                             planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
+                             task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else
+                                  dict(task_type=context.task.task_type,primary_metric=context.task.primary_metric),
+                             features=getattr(context,'feature_columns',[]),budget=budget.model_dump(),
+                             plans=[item.model_dump(mode='json')],
+                             hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
+                             skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)
                     if not report.valid or report.errors:
                         raise ValueError('; '.join(report.errors) or 'Semantic validator rejected the plan without an explanation')
                     accepted.append(item.model_dump(mode='json'))
+                    progress['accepted'][hypothesis.hypothesis_id]=item.model_dump(mode='json');persist()
                     break
-                except LLMUnavailable as error:
+                except StructuredOutputError as error:
+                    if not validating:
+                        feedback=[str(error)]
+                        continue
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break
-                except ValueError as error: feedback=[str(error)]
+                except LLMUnavailable as error:
+                    transient=str(error) in {'APITimeoutError','APIConnectionError','HTTP 500','HTTP 502','HTTP 503','HTTP 504'}
+                    if validating and transient and item.execution_mode=='adapter_only':
+                        warning=dict(hypothesis_id=hypothesis.hypothesis_id,
+                            warning='LLM semantic review unavailable; adapter-only deterministic validation used',reason=str(error))
+                        warnings.append(warning)
+                        emit('planning.validation_degraded',warning)
+                        accepted.append(item.model_dump(mode='json'))
+                        break
+                    rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
+                    break
+                except ValueError as error:
+                    feedback=[str(error)]
+                    progress['proposed'].pop(hypothesis.hypothesis_id,None)
+                    progress['accepted'].pop(hypothesis.hypothesis_id,None);persist()
             else: rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':feedback})
         # A rejected alternative never discards an already accepted baseline.
         valid=bool(accepted)
-        if state['payload'].get('round_number',1)==1 and planning_mode!='alternatives':
+        if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and planning_mode!='alternatives':
             valid=valid and any(p['hypothesis']['baseline'] for p in accepted)
-        return {'plans':accepted,'attempts':attempts,'errors':rejected,'valid':valid}
+        return {'plans':accepted,'attempts':attempts,'errors':rejected,'valid':valid,'warnings':warnings}
 
     graph = StateGraph(PlanningState)
     graph.add_node('hypotheses',hypotheses); graph.add_node('plan',plan)

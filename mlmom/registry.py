@@ -45,6 +45,22 @@ def installed_tools() -> dict[str, MLToolSpec]:
     return result
 
 
+def capability_matrix(tools, verified=()):
+    """Recognition and installed execution are distinct from verified task paths."""
+    rows=[]
+    for task in TaskType:
+        backends=[t.tool_id for t in tools.values() if task in t.task_types and t.available]
+        reason=('time-series executor deferred' if task==TaskType.TIME_SERIES_FORECASTING else
+                'unknown task or output contract' if task==TaskType.UNKNOWN else
+                'finite numeric metric features required' if task==TaskType.CLUSTERING else
+                'explicit evaluation labels required' if task==TaskType.ANOMALY_DETECTION else None)
+        rows.append(dict(task_type=task.value,recognized=task!=TaskType.UNKNOWN,
+            executable=bool(backends),verified=task.value in verified,backends=backends,reason=reason))
+    rows.append(dict(task_type='free_text_output',recognized=False,executable=False,verified=False,
+        backends=[],reason='free text output contract not implemented'))
+    return rows
+
+
 class SkillRegistry:
     def __init__(self, root: Path):
         self.root = root.resolve()

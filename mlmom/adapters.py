@@ -15,6 +15,17 @@ from .sdk import FitContext
 from .registry import LIGHTAUTOML_OBJECTIVES
 
 
+def text_values(values):
+    # A constant token also makes an all-empty / punctuation-only fold valid.
+    return ('__document__ '+values.fillna('').astype(str)).to_numpy()
+
+
+def text_columns(X):
+    """Conservative content-based detection; explicit tfidf can override it."""
+    return [c for c in X.select_dtypes(exclude=['number','bool']) if (
+        X[c].dropna().astype(str).str.len().median()>40 and X[c].nunique()>min(20,len(X)*.1))]
+
+
 def classification(kind):
     return kind in {'binary_classification', 'multiclass_classification', 'multilabel_classification'}
 
@@ -53,6 +64,8 @@ class LibraryCandidate:
         X = self._clean(X)
         kind = context.task_type
         p = dict(self.params)
+        if self.tool == 'sklearn' and (p.get('estimator')=='linear' or text_columns(X) or 'tfidf' in self.config.get('preprocessing',[])):
+            return self._fit_text(X,y,context,p)
         if self.tool in {'autogluon', 'lightautoml', 'flaml'}:
             return self._fit_automl(X, y, context, p)
         if self.tool == 'catboost':
@@ -76,10 +89,32 @@ class LibraryCandidate:
             class TimeLimit:
                 def after_iteration(self,info):return context.remaining_seconds>1.5
             kwargs['callbacks']=[TimeLimit()]
+            if context.validation_X is not None and kind in {'regression','binary_classification','multiclass_classification'}:
+                valid=self._clean(context.validation_X[self.columns])
+                for c in self.category:valid[c]=valid[c].fillna('__missing__').astype(str)
+                kwargs.update(eval_set=(valid,context.validation_y),early_stopping_rounds=50,use_best_model=True)
+                if context.validation_weight is not None:
+                    from catboost import Pool
+                    kwargs['eval_set']=Pool(valid,context.validation_y,cat_features=self.category,weight=context.validation_weight)
+                name=metric_name(context.metric)
+                if name=='f1_macro':self.model.set_params(eval_metric='TotalF1:average=Macro;use_weights='+('true' if context.validation_weight is not None else 'false'))
+                elif name in {'rmse','mae','accuracy','log_loss'}:
+                    self.model.set_params(eval_metric={'rmse':'RMSE','mae':'MAE','accuracy':'Accuracy',
+                        'log_loss':'MultiClass' if kind=='multiclass_classification' else 'Logloss'}[name])
+                else:
+                    # No surrogate stopping metric is silently substituted.
+                    kwargs.pop('early_stopping_rounds');kwargs.pop('use_best_model');kwargs.pop('eval_set')
             self.model.fit(X, y, **kwargs)
             return self
-        self.preprocessor = preprocessor(X)
-        values = self.preprocessor.fit_transform(X)
+        self.native_categories={}
+        if self.tool=='lightgbm' and 'onehot' not in self.config.get('preprocessing',[]):
+            self.native_categories={c:sorted(X[c].dropna().astype(str).unique().tolist())
+                for c in X if not pd.api.types.is_numeric_dtype(X[c])}
+            for c,categories in self.native_categories.items():X[c]=pd.Categorical(X[c],categories=categories)
+            values=X
+        else:
+            self.preprocessor = preprocessor(X)
+            values = self.preprocessor.fit_transform(X)
         self.transformed_columns = values.shape[1]
         fit_params = {}
         if context.sample_weight is not None: fit_params['sample_weight'] = context.sample_weight
@@ -100,9 +135,38 @@ class LibraryCandidate:
             from lightgbm import LGBMClassifier, LGBMRegressor, LGBMRanker
             cls = LGBMClassifier if classification(kind) else LGBMRanker if kind == 'ranking' else LGBMRegressor
             self.model = cls(**(dict(n_estimators=200, random_state=context.seed, n_jobs=context.cpus, verbosity=-1) | p))
+            if context.validation_X is not None and kind in {'regression','binary_classification','multiclass_classification'}:
+                from lightgbm import early_stopping
+                valid=self._clean(context.validation_X[self.columns])
+                if self.preprocessor is not None:valid=self.preprocessor.transform(valid)
+                else:
+                    for c,categories in self.native_categories.items():valid[c]=pd.Categorical(valid[c],categories=categories)
+                fit_params.update(eval_set=[(valid,context.validation_y)],callbacks=[early_stopping(50,first_metric_only=True,verbose=False)])
+                if context.validation_weight is not None:fit_params['eval_sample_weight']=[context.validation_weight]
+                name=metric_name(context.metric)
+                if context.task_context is not None:
+                    from .evaluation import score_predictions,prediction_kind
+                    # sklearn's classes_ property is unavailable until fit ends.
+                    # LightGBM encodes training labels using this same ordering.
+                    training_classes=LabelEncoder().fit(np.asarray(y)).classes_ if classification(kind) else None
+                    def stopping_metric(truth, prediction):
+                        if classification(kind):
+                            classes=training_classes
+                            truth=classes[np.asarray(truth,dtype=int)]
+                            if prediction_kind(name,kind)=='label':
+                                prediction=classes[np.argmax(prediction,axis=1)] if prediction.ndim==2 else classes[(prediction>=.5).astype(int)]
+                            elif prediction.ndim==1:prediction=np.column_stack([1-prediction,prediction])
+                        score=score_predictions(truth,prediction,context.task_context,X=context.validation_X,weights=context.validation_weight)
+                        return name,score,context.direction=='maximize'
+                    self.model.set_params(metric='None')
+                    fit_params['eval_metric']=stopping_metric
+                elif name in {'rmse','mae','log_loss'}:
+                    fit_params['eval_metric']={'rmse':'rmse','mae':'l1','log_loss':'multi_logloss' if kind=='multiclass_classification' else 'binary_logloss'}[name]
+                else:
+                    fit_params.pop('eval_set');fit_params.pop('callbacks')
             if kind == 'ranking':
                 order = np.argsort(context.groups, kind='stable')
-                values, y = values[order], np.asarray(y)[order]
+                values, y = (values.iloc[order] if isinstance(values,pd.DataFrame) else values[order]), np.asarray(y)[order]
                 fit_params['group'] = np.unique(np.asarray(context.groups)[order], return_counts=True)[1].tolist()
                 if 'sample_weight' in fit_params: fit_params['sample_weight']=np.asarray(fit_params['sample_weight'])[order]
         elif self.tool == 'xgboost':
@@ -133,6 +197,38 @@ class LibraryCandidate:
         from threadpoolctl import threadpool_limits
         with threadpool_limits(limits=context.cpus):
             self.model.fit(values, None if unsupervised else y, **fit_params)
+        return self
+
+    def _fit_text(self,X,y,context,p):
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.preprocessing import FunctionTransformer
+        from sklearn.linear_model import LogisticRegression,Ridge
+        text=text_columns(X)
+        if not text and 'tfidf' in self.config.get('preprocessing',[]):
+            text=X.select_dtypes(exclude=['number','bool']).columns.tolist()
+        numeric=X.select_dtypes(include=['number','bool']).columns.tolist()
+        category=[c for c in X if c not in text and c not in numeric]
+        transforms=[]
+        for index,column in enumerate(text):
+            for suffix,analyzer,ngram in [('word','word',(1,2)),('char','char',(3,5))]:
+                transforms.append((f'text_{index}_{suffix}',Pipeline([
+                    ('strings',FunctionTransformer(text_values)),
+                    ('tfidf',TfidfVectorizer(analyzer=analyzer,ngram_range=ngram,max_features=15000,
+                        min_df=1,dtype=np.float32,token_pattern=r'(?u)\b\w+\b' if analyzer=='word' else None))]),column))
+        if numeric:transforms.append(('number',Pipeline([('fill',SimpleImputer(strategy='median',keep_empty_features=True)),
+            ('scale',StandardScaler(with_mean=False))]),numeric))
+        if category:transforms.append(('category',Pipeline([('fill',SimpleImputer(strategy='most_frequent',keep_empty_features=True)),
+            ('ohe',OneHotEncoder(handle_unknown='ignore',sparse_output=True))]),category))
+        self.preprocessor=ColumnTransformer(transforms,sparse_threshold=1.)
+        matrix=self.preprocessor.fit_transform(X)
+        p.pop('estimator',None)
+        self.model=(LogisticRegression(max_iter=1000,random_state=context.seed,**p) if classification(context.task_type)
+                    else Ridge(solver='lsqr',**p))
+        if context.task_type=='multilabel_classification':self.model=MultiOutputClassifier(self.model,n_jobs=1)
+        kwargs={'sample_weight':context.sample_weight} if context.sample_weight is not None else {}
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(limits=context.cpus):self.model.fit(matrix,y,**kwargs)
+        self.transformed_columns=matrix.shape[1]
         return self
 
     def _fit_automl(self, X, y, context, p):
@@ -207,6 +303,7 @@ class LibraryCandidate:
 
     def export_model_params(self):
         params=dict(self.params)
+        if self.tool=='lightgbm' and getattr(self.model,'best_iteration_',0):params['n_estimators']=int(self.model.best_iteration_)
         if self.tool=='catboost':params['iterations']=int(self.model.tree_count_)
         if self.tool=='flaml':
             if '__native_frozen' not in params:
@@ -276,6 +373,7 @@ class LibraryCandidate:
     def predict(self, X, prediction_spec):
         kind = prediction_spec.get('kind', 'value')
         X = self._clean(X[self.columns])
+        for c,categories in getattr(self,'native_categories',{}).items():X[c]=pd.Categorical(X[c],categories=categories)
         if self.tool == 'catboost':
             for c in self.category: X[c] = X[c].fillna('__missing__').astype(str)
         if self.preprocessor is not None: X = self.preprocessor.transform(X)
@@ -328,7 +426,7 @@ class LibraryCandidate:
         original_model=self.model
         from dataclasses import replace
         self.context = replace(context, groups=None, sample_weight=None, validation_X=None,
-                               validation_y=None, validation_groups=None, task_context=None)
+                               validation_y=None, validation_groups=None, validation_weight=None, task_context=None)
         try:
             if self.tool=='autogluon':
                 # Predictor pickles refer to external model files: bundle them in

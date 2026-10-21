@@ -34,7 +34,7 @@ def watchdog(request):
         time.sleep(.2)
 
 
-def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, groups=None, weights=None, validation_groups=None, seconds=None):
+def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, groups=None, weights=None, validation_groups=None, validation_weight=None, seconds=None):
     from .sdk import FitContext
     work_dir=Path(work_dir)/uuid.uuid4().hex[:8]
     work_dir.mkdir(parents=True,exist_ok=True)
@@ -43,7 +43,7 @@ def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, group
         cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=max(.1,seconds or request['worker_seconds']*.8),classes=context.classes,
         groups=groups,sample_weight=weights,validation_X=X_valid,validation_y=y_valid,
-        validation_groups=validation_groups,work_dir=str(work_dir))
+        validation_groups=validation_groups,validation_weight=validation_weight,work_dir=str(work_dir),task_context=context)
 
 
 def write_predictions(model, X, kinds, root):
@@ -169,7 +169,7 @@ def train(request, root):
     from .splitting import split_indices,group_keys
     from .sdk import load_module
     from .evaluation import score_predictions,prediction_kind,better
-    from .persistence import atomic_json,tree_hash
+    from .persistence import atomic_json,tree_hash,file_hash
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
     if tree_hash(Path(request['code_dir'])) != request['code_hash']: raise ValueError('Candidate hash mismatch')
@@ -185,6 +185,7 @@ def train(request, root):
     trials = []
     started = time.monotonic()
     best_model = None
+    search_result = {}
     config = plan.model_dump(mode='json')
     fit_budget = request['worker_seconds']*.85
 
@@ -199,7 +200,8 @@ def train(request, root):
             history_ref=str(artifact/'native-history.json')
             atomic_json(Path(history_ref),history)
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
-            best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref))
+            best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
+            study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[])))
 
     if request.get('fixed'):
         model = module.create_candidate(config)
@@ -212,50 +214,68 @@ def train(request, root):
         ya = y.iloc[a] if y is not None else None
         yb = y.iloc[b] if y is not None else None
         stale = 0
-        def objective(trial=None):
+        checkpoint=root/'progress.json'
+        if plan.strategy=='optuna' and checkpoint.exists():
+            saved=json.loads(checkpoint.read_text(encoding='utf-8'))
+            best_score=saved.get('internal_score');best_params=saved['best_params']
+            best_model=module.load_candidate(saved['model_artifact'])
+            trials=[TrialResult.model_validate(t) for t in saved.get('trials',[])]
+        def objective(sampled=None, number=None, seconds=None):
             nonlocal best_score,best_params,best_model,stale
             params = dict(plan.model_params)
-            if trial is not None:
-                for name,spec in plan.search_space.items():
-                    if spec['type']=='categorical': params[name]=trial.suggest_categorical(name,spec['choices'])
-                    elif spec['type']=='int': params[name]=trial.suggest_int(name,spec['low'],spec['high'],log=spec.get('log',False))
-                    else: params[name]=trial.suggest_float(name,spec['low'],spec['high'],log=spec.get('log',False))
+            params.update(sampled or {})
             t0 = time.monotonic()
             try:
                 model = module.create_candidate(dict(config,model_params=params))
                 remaining = max(.1,fit_budget-(time.monotonic()-started))
+                if seconds is not None: remaining=min(remaining,seconds)
                 c = fit_context(context,request,work_dir=root/f'trial-{len(trials)}',X_valid=xb,
                     y_valid=None if unsupervised else yb,groups=groups[a] if groups is not None else None,
                     validation_groups=groups[b] if groups is not None else None,
+                    validation_weight=weights[b] if weights is not None else None,
                     weights=weights[a] if weights is not None else None,seconds=remaining*.6 if plan.strategy!='native' else remaining)
                 model.fit(xa,None if unsupervised else ya,c)
                 prediction = model.predict(xb,{'kind':kind})
                 score = score_predictions(yb,prediction,context,X=xb,groups=groups[b] if groups is not None else None,
                     weights=weights[b] if weights is not None else None)
-                trials.append(TrialResult(number=len(trials),params=params,status='completed',score=score,
+                trials.append(TrialResult(number=number if number is not None else len(trials),params=params,status='completed',score=score,
                     duration_seconds=time.monotonic()-t0,kind='native_run' if plan.strategy=='native' else plan.strategy))
-                if best_score is None or better(score,best_score,context.task.metric_direction,plan.min_delta):
+                if best_score is None or better(score,best_score,context.task.metric_direction):
                     selected_params=model.export_model_params() if hasattr(model,'export_model_params') else params
                     best_score,best_params,best_model,stale = score,selected_params,model,0
                     save_progress(model,selected_params,score,'best_trial_checkpoint')
                 else: stale += 1
-                if trial is not None:
-                    trial.report(score,0)
-                    if trial.should_prune(): raise optuna.TrialPruned()
+                atomic_json(root/'trials.json',trials)
+                if (root/'progress.json').exists():
+                    progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
+                    progress['trials']=[t.model_dump(mode='json') for t in trials]
+                    atomic_json(root/'progress.json',progress)
                 return score
             except optuna.TrialPruned: raise
             except Exception as error:
                 stale += 1
-                trials.append(TrialResult(number=len(trials),params=params,status='failed',error=str(error)[:2000],duration_seconds=time.monotonic()-t0))
+                trials.append(TrialResult(number=number if number is not None else len(trials),params=params,status='failed',error=str(error)[:2000],duration_seconds=time.monotonic()-t0))
+                atomic_json(root/'trials.json',trials)
+                if (root/'progress.json').exists():
+                    progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
+                    progress['trials']=[t.model_dump(mode='json') for t in trials]
+                    atomic_json(root/'progress.json',progress)
                 raise
 
         if plan.strategy=='optuna':
-            optuna.logging.set_verbosity(optuna.logging.WARNING)
-            study = optuna.create_study(direction=context.task.metric_direction,
-                sampler=optuna.samplers.TPESampler(seed=request.get('seed',42)),pruner=optuna.pruners.MedianPruner())
-            def callback(study,trial):
-                if plan.patience_trials and stale >= plan.patience_trials: study.stop()
-            study.optimize(objective,n_trials=plan.max_trials,timeout=max(.1,fit_budget*.6),callbacks=[callback],catch=(Exception,))
+            from .hpo import run_search
+            search_result=run_search(objective,directory=root/'hpo',identity=dict(code=request['code_hash'],
+                train_hash=file_hash(Path(request['train_path'])),seed=request.get('seed',42),inner_fraction=request.get('inner_fraction',.2),
+                task=context.task.model_dump(mode='json'),metric_options=context.metric_options,
+                base_params=plan.model_params,tool_id=plan.tool_id,preprocessing=plan.preprocessing),
+                space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
+                max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
+                gain_threshold=request.get('hpo_gain_threshold',.005),seconds=min(request.get('hpo_seconds',600),fit_budget*.7),
+                baseline_score=request.get('baseline_score'))
+            trials=[TrialResult(number=t['number'],params=dict(plan.model_params,**t['params']),
+                status='completed' if t['status']=='complete' else 'failed',score=t['score'],
+                duration_seconds=t['duration_seconds'],error=t.get('error')) for t in search_result['trials']]
+            atomic_json(root/'trials.json',trials)
         else: objective()
         if best_model is None: raise ValueError('No successful internal trial')
         if plan.strategy!='native' and fit_budget-(time.monotonic()-started) > .2:
@@ -263,7 +283,7 @@ def train(request, root):
             model = module.create_candidate(dict(config,model_params=best_params))
             model.fit(X,None if unsupervised else y,fit_context(context,request,work_dir=root/'refit-round',
                 groups=groups,weights=weights,seconds=max(.1,fit_budget-(time.monotonic()-started))))
-            save_progress(model,best_params,best_score,'patience_reached' if plan.patience_trials and stale>=plan.patience_trials else 'completed')
+            save_progress(model,best_params,best_score,search_result.get('stop_reason') or 'completed')
         else:
             save_progress(best_model,best_params,best_score,'native_completed' if plan.strategy=='native' else 'budget_best_trial')
     return json.loads((root/'progress.json').read_text(encoding='utf-8'))
@@ -294,6 +314,21 @@ def main():
         if action in {'smoke','probe'}: result = smoke(request,root)
         elif action=='train': result = train(request,root)
         elif action=='predict': result = predict(request,root)
+        elif action=='diagnose':
+            from .sdk import load_module
+            from .inputs import read_table,features,targets
+            from .splitting import group_keys
+            from .pipeline_contracts import TaskContext
+            from .persistence import tree_hash
+            from .diagnostics import inspect_model
+            if tree_hash(Path(request['code_dir']))!=request['code_hash']:raise ValueError('Candidate hash mismatch')
+            context=TaskContext.model_validate(request['context'])
+            frame=read_table(request['holdout_path'])
+            candidate=load_module(request['code_dir']).load_candidate(request['model_artifact'])
+            result=dict(status='completed',diagnostics=inspect_model(candidate,features(frame,context),targets(frame,context),context,
+                seconds=max(.1,request['worker_seconds']-3),max_rows=request.get('max_rows',1000),
+                max_features=request.get('max_features',20),groups=group_keys(frame,context.task.group_columns),
+                weights=frame[context.task.weight_column].to_numpy() if context.task.weight_column else None))
         elif action=='inspect':
             from .data_inspector import DataInspector
             files = request['files']

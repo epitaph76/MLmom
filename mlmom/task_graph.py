@@ -64,13 +64,19 @@ def build_task_graph(client: ChatClient):
         }
 
     def validate(state: TaskGraphState) -> TaskGraphState:
+        task = state.get('task')
+        if task is not None:
+            exclusions = list(dict.fromkeys(task.excluded_feature_columns + task.target_columns + task.id_columns))
+            if exclusions != task.excluded_feature_columns:
+                emit('task_analysis.normalized_exclusions', {'before':task.excluded_feature_columns,'after':exclusions})
+                task = task.model_copy(update={'excluded_feature_columns':exclusions})
         report = validator.validate(
             state["profile"],
-            state.get("task"),
+            task,
             generation_error=state.get("generation_error"),
         )
         emit('task_analysis.validation', report)
-        return {"validation": report}
+        return {"validation": report, 'task':task}
 
     def route(state: TaskGraphState) -> str:
         if state["validation"].valid:

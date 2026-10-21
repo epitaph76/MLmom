@@ -81,6 +81,14 @@ class TaskAnalysisTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.findings, [])
 
+    def test_missing_mandatory_exclusions_are_added_without_llm_repair(self):
+        task=self.valid_task().model_copy(update={'excluded_feature_columns':['feature']})
+        client=FakeChatClient([task.model_dump_json()])
+        result=analyze_task(self.profile,client)
+        self.assertEqual(result.status,'validated')
+        self.assertEqual(len(client.messages),1)
+        self.assertEqual(result.task.excluded_feature_columns,['feature','price','id'])
+
     def test_validator_rejects_hallucinated_columns_metric_and_output(self) -> None:
         task = self.valid_task().model_copy(update={
             "target_columns": ["invented_target"],

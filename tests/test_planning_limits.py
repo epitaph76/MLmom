@@ -209,22 +209,22 @@ class CodingBudgetTests(unittest.TestCase):
             deadline=store.get('coding_budget','r1-base')['deadline']
             client.seconds=10
             second=build_coding_graph(client,**kwargs,runtime_feedback='Runtime failure').invoke({'payload':{}})
-            self.assertTrue(second['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],10)
+            self.assertTrue(second['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],20)
             self.assertEqual(budget.elapsed,300);self.assertEqual(client.deadline,original)
             third=build_coding_graph(client,**kwargs,runtime_feedback='Another failure').invoke({'payload':{}})
-            self.assertFalse(third['valid']);self.assertEqual(client.calls,2)
+            self.assertFalse(third['valid']);self.assertEqual(client.calls,1)
             self.assertEqual(store.get('coding_budget','r1-base')['deadline'],deadline)
             self.assertEqual(len(sandbox.calls),2)
 
     def test_research_deadline_is_tighter_than_coding_window(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);store=Store(root);budget=ClockBudget();budget.elapsed=880
+            root=Path(temp);store=Store(root);budget=ClockBudget();budget.elapsed=875
             sandbox=Sandbox(budget);context,tools,_,plan=case();plan.time_limit_seconds=5;client=Coder(budget,5)
             result=build_coding_graph(client,workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',
                 skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
                 config=RunConfig(prediction_seconds=5),round_id='r1').invoke({'payload':{}})
             self.assertTrue(result['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],5)
-            self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1890)
+            self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1885)
 
     def test_increased_final_reserve_protects_fit_and_prediction_during_repair(self):
         with tempfile.TemporaryDirectory() as temp:
