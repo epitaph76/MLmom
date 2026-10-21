@@ -15,8 +15,14 @@ from mlmom.persistence import atomic_json,file_hash
 
 def report(root):
     attempts=json.loads((root/'reports.json').read_text(encoding='utf-8'))
+    models=[]
+    for attempt in attempts:
+        manifest=Path(attempt['run_dir'])/'input_manifest.json'
+        if manifest.exists():
+            model=json.loads(manifest.read_text(encoding='utf-8')).get('model')
+            if model and model not in models:models.append(model)
     lines=['# Реальные циклы улучшения MLmom','',
-        'Организаторская Qwen, реальные обучение и Optuna. Метрики — локальный внешний holdout; '
+        'Модели API: '+', '.join(models or ['не указаны'])+'. Реальные обучение и Optuna. Метрики — локальный внешний holdout; '
         'test-разметка и платформенный score недоступны. Отдельный audit не использовался. Активные попытки добавляются после завершения.','',
         'Лимиты: час на задачу с учётом повторов и проверки; 4 CPU / 4 ГБ workers, один worker. '
         'Исходные ZIP сохранены. Ключи в отчёт и runtime ZIP не включаются.','',
@@ -45,6 +51,10 @@ def report(root):
             experiments=list(objects.get('experiment',{}).values()),evaluations=objects.get('evaluation',{}),
             stop_reason=summary.get('stop_reason'),failure_causes=summary.get('failure_causes',[]),
             planning_failures=[dict(planning_id=k,errors=v.get('errors',[]),warnings=v.get('warnings',[])) for k,v in objects.get('planning',{}).items() if v.get('errors') or v.get('warnings')])
+        manifest=run/'input_manifest.json'
+        if manifest.exists():
+            provider=json.loads(manifest.read_text(encoding='utf-8'))
+            entry['provider']={k:provider.get(k) for k in ('model','base_url')}
         evidence.append(entry)
         if summary.get('submission') and attempt.get('verification',{}).get('status')=='passed':
             output=deliverables/f"{attempt['case']}-attempt-{attempt['attempt']}-submission.csv"

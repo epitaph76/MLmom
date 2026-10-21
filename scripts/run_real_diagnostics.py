@@ -93,11 +93,13 @@ def main():
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--seconds',type=float,default=3600)
     parser.add_argument('--quiet',action='store_true',help='Skip periodic log reads and progress printing; keep resource/deadline guards.')
+    parser.add_argument('--expected-model',default='qwen/qwen3.8-27b',
+                        help='Explicit local test model; defaults to the organizer Qwen. Credentials remain in .env.')
     args=parser.parse_args();root=args.output.resolve();root.mkdir(parents=True,exist_ok=True)
     from dotenv import load_dotenv
     load_dotenv(ROOT/'.env',override=True)  # Explicit local diagnostics credentials.
     settings=LLMSettings.from_env(str(ROOT/'.env'))
-    if settings.model!='qwen/qwen3.8-27b': raise ValueError('Expected organizer Qwen model; check existing environment')
+    if settings.model!=args.expected_model: raise ValueError('Configured model differs from --expected-model; check the local environment')
     reports_path=root/'reports.json'
     reports=json.loads(reports_path.read_text(encoding='utf-8')) if reports_path.exists() else []
     specs=[('regression','Регрессия-20261020T130119Z-1-001.zip',22449),
