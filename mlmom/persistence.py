@@ -74,8 +74,12 @@ class ExperimentStore:
         return [json.loads(row[0]) for row in reversed(rows)]
 
     def event(self, kind: str, key: str, value: Any) -> None:
+        from .tracing import emit, current_sink
+        sink=current_sink()
+        if sink is not None: value=sink.scrub(plain(value))
         with self.lock, self.db:
             self.db.execute('INSERT INTO events(kind,object_id,body) VALUES (?,?,?)', (kind, key, dumps(value)))
+        emit('runtime.'+kind,value,object_id=key)
 
     def close(self):
         self.db.close()

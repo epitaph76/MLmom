@@ -54,6 +54,21 @@ def _normalise_metric(value: str | None) -> str:
         "mean_absolute_percentage_error": "mape",
         "area_under_roc_curve": "roc_auc",
         "roc_auc_score": "roc_auc",
+        "balanced_accuracy_score": "balanced_accuracy",
+        "average_precision_score": "average_precision",
+        "mean_squared_logarithmic_error": "msle",
+        "root_mean_squared_logarithmic_error": "rmsle",
+        "root_mean_squared_log_error": "rmsle",
+        "symmetric_mean_absolute_percentage_error": "smape",
+        "f1_score": "f1",
+        "f1_macro": "macro_f1",
+        "f1_micro": "micro_f1",
+        "f1_weighted": "weighted_f1",
+        "mean_absolute_error": "mae",
+        "mean_squared_error": "mse",
+        "r2_score": "r2",
+        "mean_average_precision": "map",
+        "mean_reciprocal_rank": "mrr",
     }
     return aliases.get(text, text)
 
@@ -79,6 +94,11 @@ class TaskValidator:
             actual: Any | None = None,
             severity: Severity = Severity.ERROR,
         ) -> None:
+            # New profiles distinguish evidence from suggestions. Legacy
+            # profiles without provenance retain their previous strict checks.
+            if (field and code.endswith('mismatch') and
+                    profile.task.field_sources.get(field, 'explicit') != 'explicit'):
+                severity = Severity.WARNING
             findings.append(TaskValidationFinding(
                 code=code,
                 severity=severity,

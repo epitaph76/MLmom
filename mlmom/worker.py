@@ -174,7 +174,7 @@ def train(request, root):
     plan = HypothesisPlan.model_validate(request['plan'])
     if tree_hash(Path(request['code_dir'])) != request['code_hash']: raise ValueError('Candidate hash mismatch')
     module = load_module(request['code_dir'])
-    frame = read_table(request['train_path'])
+    frame = read_table(request['train_path'],table_format=context.table_formats.get(request['train_path']))
     X,y = features(frame,context), targets(frame,context)
     groups = group_keys(frame,context.task.group_columns)
     weights = frame[context.task.weight_column].to_numpy() if context.task.weight_column else None

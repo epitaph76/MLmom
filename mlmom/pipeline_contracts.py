@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import Field, model_validator
-from .contracts import StrictModel, TaskDefinition, TaskType
+from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
 
 
 class RunConfig(StrictModel):
@@ -12,10 +12,12 @@ class RunConfig(StrictModel):
     final_reserve_seconds: float = Field(2400, ge=0)
     first_submission_seconds: float = Field(600, gt=0)
     experiment_seconds: float = Field(1800, gt=0)
+    initial_experiment_seconds: float = Field(300, gt=0, le=300)
+    coding_seconds: float = Field(300, gt=0, le=300)
     prediction_seconds: float = Field(180, gt=0)
     max_rounds: int = Field(100, ge=1)
     plateau_rounds: int = Field(5, ge=1)
-    max_candidates: int = Field(3, ge=1, le=3)
+    max_candidates: int = Field(2, ge=1, le=2)
     max_workers: int = Field(3, ge=1, le=3)
     max_attempts: int = Field(3, ge=1, le=10)
     runtime_repairs: int = Field(2, ge=0, le=5)
@@ -30,7 +32,8 @@ class RunConfig(StrictModel):
     reserve_memory_gb: float = Field(4, ge=0)
     smoke_seconds: float = Field(30, gt=0)
     llm_timeout_seconds: float = Field(300, gt=0)
-    llm_max_tokens: int = Field(12000, ge=256)
+    # Legacy configuration key retained for resume compatibility; ignored by clients.
+    llm_max_tokens: int | None = None
     metric_options: dict[str, Any] = Field(default_factory=dict)
     submission_kind: str | None = None
 
@@ -61,6 +64,7 @@ class TaskContext(StrictModel):
     dataset_hash: str
     metric_options: dict[str, Any] = Field(default_factory=dict)
     submission_kind: str = 'value'
+    table_formats: dict[str, TableReadOptions] = Field(default_factory=dict)
 
 
 class SkillManifest(StrictModel):
@@ -109,7 +113,7 @@ class Hypothesis(StrictModel):
 
 
 class HypothesisBatch(StrictModel):
-    hypotheses: list[Hypothesis] = Field(min_length=1, max_length=3)
+    hypotheses: list[Hypothesis] = Field(min_length=1, max_length=2)
 
 
 class HypothesisPlan(StrictModel):
@@ -132,7 +136,7 @@ class HypothesisPlan(StrictModel):
 
 
 class PlanBatch(StrictModel):
-    plans: list[HypothesisPlan] = Field(min_length=1, max_length=3)
+    plans: list[HypothesisPlan] = Field(min_length=1, max_length=2)
 
 
 class ValidationReport(StrictModel):

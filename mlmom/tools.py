@@ -10,6 +10,7 @@ from typing import Any, Callable
 from pydantic import create_model,ConfigDict
 from .inputs import inside
 from .pipeline_contracts import ToolResult, ValidationReport
+from .tracing import span, emit
 
 
 class ToolSet:
@@ -31,6 +32,12 @@ class ToolSet:
                 for name, (_, model, description) in self.tools.items()]
 
     def invoke(self, name: str, arguments: str | dict) -> ToolResult:
+        with span('tool', {'name':name,'arguments':arguments}, tool_name=name):
+            result = self._invoke(name,arguments)
+            emit('tool.result', result, status=result.status)
+            return result
+
+    def _invoke(self, name: str, arguments: str | dict) -> ToolResult:
         start = time.monotonic()
         try:
             fn, model, _ = self.tools[name]

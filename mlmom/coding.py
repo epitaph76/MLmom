@@ -56,6 +56,20 @@ class CodingState(TypedDict, total=False):
 def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, tools, context,
                        sandbox, budget, config, round_id, previous=None, runtime_feedback=None):
     workspace = Workspace(workspace)
+    budget_key=f'{round_id}-{plan.hypothesis.hypothesis_id}'
+    def coding_capacity():
+        # Preserve a complete selected fit and prediction window, including
+        # when previous experiments increase the final-training reserve.
+        return max(0.,budget.snapshot().research_seconds-plan.time_limit_seconds-config.prediction_seconds)
+
+    window=store.get('coding_budget',budget_key)
+    if window is None:
+        started=budget.now()
+        window=dict(started=started,deadline=started+min(300,config.coding_seconds,coding_capacity()))
+        store.put('coding_budget',budget_key,window,immutable=True)
+
+    def remaining():
+        return max(0.,min(window['deadline']-budget.now(),coding_capacity()))
     # Synthetic checks must keep the task's column names and types: generated
     # feature engineering may legitimately refer to those names explicitly.
     schema=[]
@@ -78,7 +92,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     def smoke_check() -> dict:
         report = verify_source(workspace.root)
         if not report.valid: return report.model_dump()
-        seconds = min(config.smoke_seconds,budget.snapshot().research_seconds)
+        seconds = min(config.smoke_seconds,remaining())
         if seconds < .5: return {'status':'failed','error':'No verification time remains'}
         directory = store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-{time.time_ns()}'
         return sandbox.run(dict(action='smoke',code_dir=str(workspace.root),config=plan.model_dump(mode='json'),
@@ -87,7 +101,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     role_tools.register('run_smoke_check',smoke_check,'Run a bounded synthetic fit/predict/save/load check. No real data.')
 
     def inspect_api(module: str,symbol: str) -> dict:
-        seconds=min(15.,budget.snapshot().research_seconds)
+        seconds=min(15.,remaining())
         if seconds<.5:raise ValueError('No API inspection budget remains')
         return sandbox.run(dict(action='inspect_api',module=module,symbol=symbol),
             store.root/'checks'/f'api-{time.time_ns()}',seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
@@ -95,7 +109,13 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
 
     def generate(state):
         attempts = state.get('attempts',0)+1
+        original_deadline=getattr(client,'deadline',None)
         try:
+            if remaining()<.5: raise LLMUnavailable('Hypothesis coding deadline reached')
+            if original_deadline is not None:
+                # All API steps and their retries share the same persisted
+                # deadline as source repairs and smoke/inspection workers.
+                client.deadline=min(original_deadline,time.time()+remaining())
             bundle = client.generate('coding_agent',SDK_PROMPT,
                 dict(state['payload'],feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
                      current_files={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py')}),
@@ -114,6 +134,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 return {'attempts':attempts,'errors':[],
                         'warnings':['Using tool-written source after interrupted generation: '+str(error)]}
             return {'attempts':attempts,'errors':[str(error)]}
+        finally:
+            if original_deadline is not None: client.deadline=original_deadline
 
     def verify(state):
         report = verify_source(workspace.root)
@@ -129,7 +151,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             shutil.copyfile(source,dest)
         digest = tree_hash(snapshot)
         if report.valid:
-            seconds = min(config.smoke_seconds,budget.snapshot().research_seconds)
+            seconds = min(config.smoke_seconds,remaining())
             if seconds < .5:
                 report.errors.append('No smoke-check budget remains')
             else:
@@ -152,6 +174,6 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     graph = StateGraph(CodingState)
     graph.add_node('generate',generate); graph.add_node('verify',verify)
     graph.add_edge(START,'generate'); graph.add_edge('generate','verify')
-    graph.add_conditional_edges('verify',lambda s:'finish' if s['valid'] or s['attempts']>=config.max_attempts else 'generate',
+    graph.add_conditional_edges('verify',lambda s:'finish' if s['valid'] or s['attempts']>=config.max_attempts or remaining()<.5 else 'generate',
                                 {'finish':END,'generate':'generate'})
     return graph.compile()

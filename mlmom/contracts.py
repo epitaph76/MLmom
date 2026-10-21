@@ -119,6 +119,7 @@ class TaskSpec(StrictModel):
     classes: list[str] = Field(default_factory=list)
     inference_confidence: InferenceConfidence = InferenceConfidence.LOW
     inference_evidence: list[str] = Field(default_factory=list)
+    field_sources: dict[str, Literal['explicit', 'heuristic', 'default']] = Field(default_factory=dict)
     result_format: ResultFormat = Field(default_factory=ResultFormat)
     requirements: list[str] = Field(default_factory=list)
 
@@ -233,6 +234,11 @@ class DatasetChecks(StrictModel):
     dictionary_covers_all_train_columns: bool | None = None
 
 
+class TableReadOptions(StrictModel):
+    encoding: str = 'utf-8-sig'
+    delimiter: str = ','
+
+
 class DatasetProfile(StrictModel):
     """Full deterministic output of the universal Data Inspector."""
 
@@ -248,3 +254,4 @@ class DatasetProfile(StrictModel):
     issues: list[DataIssue] = Field(default_factory=list)
     preprocessing_hints: list[str] = Field(default_factory=list)
     report_notes: list[str] = Field(default_factory=list)
+    table_formats: dict[str, TableReadOptions] = Field(default_factory=dict)

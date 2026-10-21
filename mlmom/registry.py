@@ -7,6 +7,7 @@ import importlib.util
 from pathlib import Path
 from .contracts import TaskType
 from .pipeline_contracts import MLToolSpec, SkillManifest
+from .tracing import span, emit
 
 SUPERVISED = ['regression','binary_classification','multiclass_classification']
 MULTI = SUPERVISED + ['multioutput_regression','multilabel_classification']
@@ -60,6 +61,12 @@ class SkillRegistry:
         return [s.model_dump(mode='json') for s in self.manifests.values()]
 
     def load(self, ids: list[str], task_type: str, *, max_chars=24000):
+        with span('skills', {'requested_ids':ids,'automatic_ids':CORE_SKILLS,'task_type':task_type}):
+            loaded = self._load(ids,task_type,max_chars=max_chars)
+            emit('skills.loaded', loaded, skill_ids=[item['skill_id'] for item in loaded])
+            return loaded
+
+    def _load(self, ids: list[str], task_type: str, *, max_chars=24000):
         loaded = []
         used = 0
         # Every candidate receives the same contract, even when a planner only

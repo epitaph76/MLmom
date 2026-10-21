@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import re
+import csv
 from pathlib import Path
 import pandas as pd
 from .pipeline_contracts import InputFiles, TaskContext
 from .persistence import file_hash
+from .contracts import TableReadOptions
 
 
 def inside(root: Path, name: str) -> Path:
@@ -62,14 +64,48 @@ def resolve_inputs(task_path: Path) -> InputFiles:
                       manifest=str(manifest_path) if manifest_path.exists() else None)
 
 
-def read_table(path: str | Path, **kwargs) -> pd.DataFrame:
-    return pd.read_csv(path, sep='\t' if Path(path).suffix.lower() == '.tsv' else ',',
-                       encoding='utf-8-sig', **kwargs)
+def detect_table_format(path: str | Path, *, encoding: str = 'utf-8-sig') -> TableReadOptions:
+    """Read a bounded text sample; never load an entire CSV to sniff its header."""
+    with Path(path).open(encoding=encoding, newline='') as stream:
+        sample = stream.read(16_384)
+    if Path(path).suffix.lower() == '.tsv':
+        delimiter = '\t'
+    else:
+        try:
+            delimiter = csv.Sniffer().sniff(sample, delimiters=',;\t|').delimiter
+        except csv.Error:
+            try:
+                delimiter = csv.Sniffer().sniff(sample.splitlines()[0], delimiters=',;\t|').delimiter
+            except (csv.Error, IndexError):
+                delimiter = ','
+    return TableReadOptions(encoding=encoding, delimiter=delimiter)
+
+
+def read_table(path: str | Path, *, table_format: TableReadOptions | dict | None = None, **kwargs) -> pd.DataFrame:
+    """Shared reader for inspection, execution and submission templates.
+
+    Persisted options are authoritative. Older callers/profiles detect the same
+    supported encodings and delimiters on demand.
+    """
+    kwargs.setdefault('low_memory', False)
+    if table_format is not None:
+        options = TableReadOptions.model_validate(table_format)
+        frame = pd.read_csv(path, sep=options.delimiter, encoding=options.encoding, **kwargs)
+        frame.attrs['table_format'] = options.model_dump()
+        return frame
+    last_error = None
+    for encoding in ('utf-8-sig', 'cp1251'):
+        try:
+            options = detect_table_format(path, encoding=encoding)
+            return read_table(path, table_format=options, **kwargs)
+        except UnicodeDecodeError as error:
+            last_error = error
+    raise ValueError(f'Could not decode table {path}: {last_error}')
 
 
 def validate_tables(context: TaskContext) -> None:
-    train = read_table(context.files.train, nrows=0)
-    test = read_table(context.files.test, nrows=0)
+    train = read_table(context.files.train, table_format=context.table_formats.get(context.files.train), nrows=0)
+    test = read_table(context.files.test, table_format=context.table_formats.get(context.files.test), nrows=0)
     required = context.feature_columns + context.task.id_columns + context.task.group_columns
     missing = set(required) - set(test.columns)
     if missing:

@@ -9,7 +9,6 @@ context for an LLM.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import re
@@ -20,6 +19,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
+from .inputs import read_table, detect_table_format
 
 from .contracts import (
     ColumnProfile,
@@ -119,6 +119,7 @@ class DataInspector:
         self.top_values = top_values
         self.histogram_bins = histogram_bins
         self.high_missing_threshold = high_missing_threshold
+        self.table_formats = {}
 
     def inspect_directory(
         self,
@@ -276,25 +277,12 @@ class DataInspector:
 
     @staticmethod
     def _sniff_delimiter(path: Path, encoding: str) -> str:
-        if path.suffix.lower() == ".tsv":
-            return "\t"
-        sample = path.read_text(encoding=encoding, errors="replace")[:16_384]
-        try:
-            return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-        except csv.Error:
-            return ","
+        return detect_table_format(path, encoding=encoding).delimiter
 
     def _read_table(self, path: Path, *, nrows: int | None = None) -> pd.DataFrame:
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        errors: list[str] = []
-        for encoding in ("utf-8-sig", "utf-8", "cp1251"):
-            try:
-                delimiter = self._sniff_delimiter(path, encoding)
-                return pd.read_csv(path, sep=delimiter, encoding=encoding, nrows=nrows, low_memory=False)
-            except (UnicodeDecodeError, pd.errors.ParserError) as error:
-                errors.append(f"{encoding}: {error}")
-        raise ValueError(f"Could not read {path}: {'; '.join(errors)}")
+        frame = read_table(path, nrows=nrows, low_memory=False)
+        self.table_formats[str(path.resolve())] = frame.attrs['table_format']
+        return frame
 
     def _read_task_text(self, path: Path | None) -> str | None:
         if path is None or not path.is_file():
@@ -307,13 +295,14 @@ class DataInspector:
         return None
 
     def _inspect_layout(self, layout: InputLayout) -> DatasetProfile:
+        self.table_formats = {}
         train = self._read_table(layout.train_path)
         task_text = self._read_task_text(layout.task_path)
         metadata = self._read_dictionaries(layout.dictionary_paths)
 
         targets = self._infer_targets(train, metadata, layout.target_columns, task_text)
         ids = self._infer_ids(train, metadata, layout.id_columns, targets)
-        time_column = self._infer_time_column(train, metadata, layout.time_column, targets, ids)
+        time_column = self._infer_time_column(train, metadata, layout.time_column, targets, ids, task_text)
         groups = self._infer_role_columns(metadata, ColumnRole.GROUP, train.columns, layout.group_columns)
         weight = layout.weight_column or self._first_role_column(metadata, ColumnRole.WEIGHT, train.columns)
         task = self._infer_task(
@@ -328,6 +317,22 @@ class DataInspector:
             explicit_type=layout.task_type,
             explicit_metric=layout.primary_metric,
         )
+        declared = lambda role: any(name in train.columns and self._normalise_role(meta.get('role')) == role
+                                    for name, meta in metadata.items())
+        text_targets = self._targets_from_text(train.columns, task_text or '')
+        explicit_type_text = bool(re.search(r'classification|классификац|regression|регрес|ranking|ранжир|forecasting|time series|временн\w* ряд', task_text or '', re.I))
+        task.field_sources = {
+            'target_columns': 'explicit' if layout.target_columns or declared(ColumnRole.TARGET) or text_targets else 'heuristic',
+            'id_columns': 'explicit' if layout.id_columns or declared(ColumnRole.ID) else 'heuristic',
+            'time_column': 'explicit' if layout.time_column or declared(ColumnRole.TIME) else 'heuristic',
+            'group_columns': 'explicit' if layout.group_columns or declared(ColumnRole.GROUP) else 'heuristic',
+            'weight_column': 'explicit' if layout.weight_column or declared(ColumnRole.WEIGHT) else 'heuristic',
+            'task_type': 'explicit' if layout.task_type or explicit_type_text else 'heuristic',
+            'primary_metric': 'explicit' if layout.primary_metric or self._metric_from_text((task_text or '').lower()) else 'default',
+        }
+        header_explicit = bool(re.search(r'```csv\s*[\r\n]+', task_text or '', re.I))
+        for name in ('columns', 'id_columns', 'prediction_columns'):
+            task.field_sources['result_format.' + name] = 'explicit' if header_explicit else 'heuristic'
 
         columns: list[ColumnProfile] = []
         issues: list[DataIssue] = []
@@ -374,6 +379,7 @@ class DataInspector:
             issues=issues,
             preprocessing_hints=hints,
             report_notes=notes,
+            table_formats=dict(self.table_formats),
         )
 
     def _read_dictionaries(self, paths: Iterable[Path]) -> dict[str, dict[str, str | None]]:
@@ -441,23 +447,9 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared
-        text = task_text or ""
-        mentioned: list[tuple[int, str]] = []
-        target_tokens = ("target", "таргет", "целевая", "предсказать", "predict")
-        lowered = text.lower()
-        for name in train.columns:
-            positions = [match.start() for match in re.finditer(re.escape(name.lower()), lowered)]
-            if not positions:
-                continue
-            score = 0
-            for position in positions:
-                context = lowered[max(0, position - 100): position + len(name) + 100]
-                score = max(score, sum(token in context for token in target_tokens))
-            if score:
-                mentioned.append((score, name))
+        mentioned = self._targets_from_text(train.columns, task_text or '')
         if mentioned:
-            best_score = max(score for score, _ in mentioned)
-            return [name for score, name in mentioned if score == best_score]
+            return mentioned
         conventional = [
             name for name in train.columns
             if _normalise_name(name) in {"target", "label", "response", "outcome", "y"}
@@ -465,6 +457,23 @@ class DataInspector:
         if conventional:
             return conventional
         return []
+
+    @staticmethod
+    def _targets_from_text(columns: Iterable[str], text: str) -> list[str]:
+        names = sorted(columns, key=len, reverse=True)
+        if not names:
+            return []
+        name = r"[`'\"]?(?:" + '|'.join(re.escape(value) for value in names) + r")(?![\w])[`'\"]?"
+        pattern = (r'\b(?:predict|предсказать|target(?:\s+columns?)?|таргет|целевая\s+(?:колонка|переменная))'
+                   r'\s*(?::|=|is|—|-)?\s*(' + name + r'(?:\s*(?:,|and|и)\s*' + name + r')*)')
+        matches = []
+        by_name = {column.casefold(): column for column in names}
+        for match in re.finditer(pattern, text, re.I):
+            for found in re.finditer(name, match.group(1), re.I):
+                column = by_name[found.group(0).strip('`\'"').casefold()]
+                if column not in matches:
+                    matches.append(column)
+        return matches
 
     def _infer_ids(
         self,
@@ -500,6 +509,7 @@ class DataInspector:
         explicit: str | None,
         targets: list[str],
         ids: list[str],
+        task_text: str | None = None,
     ) -> str | None:
         if explicit:
             self._validate_columns([explicit], train, "time")
@@ -508,6 +518,9 @@ class DataInspector:
         declared = [name for name in declared if name in train.columns]
         if declared:
             return declared[0]
+        # A datetime-valued feature alone does not establish a temporal split.
+        if not re.search(r'time.series|forecasting|временн\w*\s+ряд|прогнозирован|temporal\s+split|time.based\s+split', task_text or '', re.I):
+            return None
         # A description such as "response time" or "Время SYN -> SYN-ACK" is a
         # duration, not an ordering key.  Automatic inference therefore relies
         # on the column name or declared dtype; descriptions alone are too
@@ -691,11 +704,17 @@ class DataInspector:
         )
         focused_text = task_text[section_match.end():] if section_match else task_text
         lower = focused_text.lower()
-        file_match = re.search(
-            r"(?:файл|file)\s+[`'\"]?([\w.\-]+\.csv)",
-            focused_text,
-            flags=re.IGNORECASE,
-        )
+        file_name = None
+        for match in re.finditer(r"(?<![\w/\\])([\w.\-]+\.csv)\b", focused_text, re.I):
+            candidate = match.group(1)
+            before = focused_text[max(0, match.start()-90):match.start()].lower()
+            # An input-file mention is never an output instruction.
+            if candidate.lower() in {'train.csv', 'test.csv', 'sample_submission.csv', 'data_dictionary.csv'}:
+                continue
+            if section_match or re.search(r'submission|predictions?|result|answer|ответ|результат', candidate, re.I) or re.search(
+                    r'(?:save|write|output|result|submit|сохран\w*|запис\w*|результат|ответ)\s+(?:(?:to|as|in|в|как|файл|file)\s+)*[`\'\"]?$', before):
+                file_name = candidate
+                break
         header_match = re.search(r"```csv\s*[\r\n]+([^\r\n`]+)", focused_text, flags=re.IGNORECASE)
         columns = [part.strip() for part in header_match.group(1).split(",")] if header_match else []
         if not columns and ids and targets:
@@ -737,7 +756,7 @@ class DataInspector:
             requirements.append("Preserve the row order of the inference input.")
 
         result = ResultFormat(
-            file_name=file_match.group(1) if file_match else None,
+            file_name=file_name,
             encoding=encoding,
             delimiter=delimiter,
             include_index=include_index,
@@ -754,21 +773,49 @@ class DataInspector:
 
     @staticmethod
     def _metric_from_text(text: str) -> str | None:
+        text = re.sub(r'[_-]+', ' ', text.lower())
         metrics = (
-            ("macro_f1", ("macro f1", "macro-f1", "macro_f1")),
-            ("weighted_f1", ("weighted f1", "weighted-f1", "weighted_f1")),
-            ("roc_auc", ("roc auc", "roc-auc", "roc_auc", "auc")),
+            ("macro_f1", ("macro f1", "f1 macro")),
+            ("micro_f1", ("micro f1", "f1 micro")),
+            ("weighted_f1", ("weighted f1", "f1 weighted")),
+            ("balanced_accuracy", ("balanced accuracy",)),
+            ("average_precision", ("average precision",)),
+            ("roc_auc", ("roc auc", "area under roc curve", "auc")),
             ("log_loss", ("log loss", "logloss", "cross entropy")),
-            ("rmse", ("rmse", "root mean squared")),
-            ("mae", ("mae", "mean absolute")),
-            ("mse", ("mse", "mean squared")),
-            ("mape", ("mape", "mean absolute percentage")),
+            ("rmsle", ("rmsle", "root mean squared log error", "root mean squared logarithmic error")),
+            ("smape", ("smape", "symmetric mean absolute percentage error")),
+            ("mape", ("mape", "mean absolute percentage error", "mean absolute percentage")),
+            ("rmse", ("rmse", "root mean squared error", "root mean square error")),
+            ("mae", ("mae", "mean absolute error")),
+            ("mse", ("mse", "mean squared error")),
             ("r2", ("r2", "r^2", "coefficient of determination")),
             ("accuracy", ("accuracy", "точност")),
-            ("f1", ("f1", "f-score")),
+            ("f1", ("f1", "f score")),
+            ("precision", ("precision",)),
+            ("recall", ("recall",)),
             ("ndcg", ("ndcg",)),
+            ("map", ("mean average precision", "map")),
+            ("mrr", ("mean reciprocal rank", "mrr")),
+            ("silhouette", ("silhouette",)),
+            ("calinski_harabasz", ("calinski harabasz",)),
+            ("davies_bouldin", ("davies bouldin",)),
         )
-        return next((name for name, tokens in metrics if any(token in text for token in tokens)), None)
+        def matches_in(value):
+            return [(match.start(), -len(token), index, name)
+                    for index, (name, tokens) in enumerate(metrics) for token in tokens
+                    for match in re.finditer(r'(?<!\w)' + re.escape(token) + r'(?!\w)', value)]
+
+        # Auxiliary metrics can have longer names than the primary metric.
+        # Honour explicit declarations before comparing alias specificity.
+        declaration = (r'\b(?:основн\w*\s+метрик\w*|(?:primary|main|evaluation)\s+metric|метрика\s+оценки)'
+                       r'\s*(?:(?:[:—=]|выбран[ао]?|является|is|equals)\s*)*')
+        for explicit in re.finditer(declaration, text):
+            clause = re.split(r'[.;\n]', text[explicit.end():], maxsplit=1)[0]
+            matches = matches_in(clause)
+            if matches:
+                return min(matches)[3]
+        matches = matches_in(text)
+        return min(matches, key=lambda item: (item[1], item[2], item[0]))[3] if matches else None
 
     @staticmethod
     def _default_metric(task_type: TaskType) -> str | None:

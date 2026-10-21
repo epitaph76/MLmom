@@ -8,10 +8,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import psutil
 from .persistence import atomic_json
 from .pipeline_contracts import BudgetSnapshot, RunConfig
+
+
+class ResourceUnavailable(ValueError):
+    """Admission refused without starting a process."""
+
+
+def trace_event(kind, data):
+    from .tracing import emit
+    emit(kind, data)
 
 
 def capacity(config: RunConfig):
@@ -72,10 +81,18 @@ class Job:
     stderr: object
     peak_memory_gb: float = 0.
     reason: str | None = None
-    descendants: set = None
-    cpu_ids: list = None
+    descendants: set = field(default_factory=set)
+    cpu_ids: list = field(default_factory=list)
+    result: dict | None = None
+    released: bool = False
+    release_callback: object = None
+    trace_context: dict | None = None
 
     def poll(self):
+        # A controller can inspect a completed process after its wall-time
+        # allocation. The worker watchdog, not this delayed poll, decides that case.
+        code=self.process.poll()
+        if code is not None: return code
         try:
             parent = psutil.Process(self.process.pid)
             children = parent.children(recursive=True)
@@ -89,6 +106,7 @@ class Job:
         return self.process.poll()
 
     def finish(self):
+        if self.result is not None: return self.result
         self.process.wait()
         self.stdout.close(); self.stderr.close()
         for pid,created in self.descendants:
@@ -98,21 +116,79 @@ class Job:
             except psutil.Error: pass
         result_path = self.directory/'result.json'
         limit_path = self.directory/'limit.json'
-        if limit_path.exists(): self.reason=json.loads(limit_path.read_text(encoding='utf-8'))['reason']
-        result = json.loads(result_path.read_text(encoding='utf-8')) if result_path.exists() else {}
+        result = {}
+        artifact_error = None
+        try:
+            if limit_path.exists():
+                limit=json.loads(limit_path.read_text(encoding='utf-8'))
+                if not isinstance(limit,dict) or not isinstance(limit.get('reason'),str):
+                    raise ValueError('Invalid worker limit artifact')
+                self.reason=limit['reason']
+            if result_path.exists():
+                result=json.loads(result_path.read_text(encoding='utf-8'))
+                if not isinstance(result,dict): raise ValueError('Invalid worker result artifact')
+        except (OSError,ValueError,TypeError) as error:
+            artifact_error='Invalid worker artifact: '+str(error)
+            self.reason=self.reason or 'invalid_worker_artifact'
+            result={}
         if self.reason or self.process.returncode != 0 or not result:
+            try: stderr=(self.directory/'stderr.log').read_text(encoding='utf-8',errors='replace')[-6000:]
+            except OSError: stderr=''
             result = dict(result,status='failed',stop_reason=self.reason or 'worker_error',
-                          error=result.get('error') or (self.directory/'stderr.log').read_text(encoding='utf-8',errors='replace')[-6000:])
+                          error=artifact_error or result.get('error') or stderr)
         result.update(duration_seconds=time.monotonic()-self.started,peak_memory_gb=self.peak_memory_gb)
+        self.result = result
+        self.released = True
+        if self.release_callback: self.release_callback(self, result)
         return result
 
 
 class SandboxManager:
-    def __init__(self): self.jobs = []
+    def __init__(self, *, budget=None, max_workers=3):
+        self.jobs = []
+        self.budget = budget
+        self.cpus, self.memory_gb = (budget.cpus, budget.memory_gb) if budget else capacity(RunConfig())
+        self.max_workers = max_workers
     def __enter__(self):return self
     def __exit__(self,*args):self.close()
 
+    def reap(self):
+        # Cache results before releasing leases; the controller may consume them later.
+        for job in self.jobs:
+            if not job.released and job.poll() is not None: job.finish()
+
+    def available(self):
+        self.reap()
+        active = [job for job in self.jobs if not job.released]
+        return dict(cpus=self.cpus-sum(j.cpus for j in active),
+                    memory_gb=self.memory_gb-sum(j.memory_gb for j in active),
+                    workers=self.max_workers-len(active))
+
+    def can_start(self, *, cpus, memory_gb):
+        free = self.available()
+        return free['workers'] > 0 and cpus <= free['cpus'] and memory_gb <= free['memory_gb']
+
+    def released(self, job, result):
+        from .tracing import bind
+        with bind(**(job.trace_context or {})):
+            trace_event('scheduler.released', dict(directory=str(job.directory),cpus=job.cpus,
+                memory_gb=job.memory_gb,status=result.get('status'),stop_reason=result.get('stop_reason'),
+                duration_seconds=result.get('duration_seconds'),peak_memory_gb=result.get('peak_memory_gb')))
+
+    def time_left(self, request):
+        if self.budget is None: return float('inf')
+        deadline = self.budget.deadline
+        if request.get('phase') != 'final' and request.get('action') != 'predict':
+            deadline -= self.budget.reserve
+        return max(0., deadline-self.budget.now())
+
     def start(self, request: dict, directory: Path, *, seconds: float, memory_gb: float, cpus: int):
+        seconds = min(seconds, self.time_left(request))
+        free = self.available()
+        if seconds <= 0 or cpus < 1 or memory_gb <= 0 or not self.can_start(cpus=cpus,memory_gb=memory_gb):
+            trace_event('scheduler.denied',dict(action=request.get('action'),directory=str(directory),
+                cpus=cpus,memory_gb=memory_gb,seconds=seconds,available=free))
+            raise ResourceUnavailable('Worker resources or deadline unavailable')
         directory.mkdir(parents=True,exist_ok=True)
         for name in ['result.json','limit.json']:
             (directory/name).unlink(missing_ok=True)
@@ -133,32 +209,62 @@ class SandboxManager:
         out = (directory/'stdout.log').open('w',encoding='utf-8')
         err = (directory/'stderr.log').open('w',encoding='utf-8')
         kwargs = {'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {'start_new_session':True}
-        process = subprocess.Popen([sys.executable,'-m','mlmom.worker',str(directory/'request.json')],
-            cwd=directory,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,**kwargs)
+        try:
+            process = subprocess.Popen([sys.executable,'-m','mlmom.worker',str(directory/'request.json')],
+                cwd=directory,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,**kwargs)
+        except Exception:
+            out.close(); err.close()
+            raise
         selected=[]
         try:
             parent = psutil.Process()
             if hasattr(parent,'cpu_affinity'):
                 available = parent.cpu_affinity()
-                used={cpu for job in self.jobs if job.process.poll() is None for cpu in (job.cpu_ids or [])}
+                used={cpu for job in self.jobs if not job.released for cpu in (job.cpu_ids or [])}
                 free=[cpu for cpu in available if cpu not in used]
                 if len(free)<cpus:
                     terminate_tree(process.pid)
+                    out.close(); err.close()
                     raise ValueError('No disjoint CPU affinity allocation remains')
                 selected=free[-cpus:]
                 psutil.Process(process.pid).cpu_affinity(selected)
         except psutil.Error: pass
-        job = Job(process,directory,time.monotonic(),seconds,memory_gb,cpus,out,err,descendants=set(),cpu_ids=selected)
+        from .tracing import current_context
+        job = Job(process,directory,time.monotonic(),seconds,memory_gb,cpus,out,err,descendants=set(),cpu_ids=selected,
+                  release_callback=self.released,trace_context=current_context())
         self.jobs.append(job)
+        trace_event('scheduler.admitted',dict(action=request.get('action'),directory=str(directory),pid=process.pid,
+            cpus=cpus,cpu_ids=selected,memory_gb=memory_gb,seconds=seconds))
         return job
 
     def run(self, request, directory, **limits):
+        if limits['cpus'] > self.cpus or limits['memory_gb'] > self.memory_gb:
+            raise ResourceUnavailable('Worker request exceeds run capacity')
+        until = time.monotonic()+min(limits['seconds'],self.time_left(request))
+        while not self.can_start(cpus=limits['cpus'],memory_gb=limits['memory_gb']):
+            if time.monotonic() >= until: raise ResourceUnavailable('Worker admission deadline reached')
+            time.sleep(.05)
+        limits['seconds'] = min(limits['seconds'],until-time.monotonic())
         job = self.start(request,directory,**limits)
-        while job.poll() is None: time.sleep(.05)
+        while job.poll() is None:
+            self.reap()
+            time.sleep(.05)
         return job.finish()
 
     def close(self):
+        # Stop every process before parsing artifacts or invoking logging callbacks.
         for job in self.jobs:
-            if job.process.poll() is None: terminate_tree(job.process.pid)
-            if not job.stdout.closed: job.stdout.close()
-            if not job.stderr.closed: job.stderr.close()
+            if job.process.poll() is None:
+                job.reason=job.reason or 'controller_closed'
+                terminate_tree(job.process.pid)
+        errors=[]
+        for job in self.jobs:
+            try:
+                if not job.released:
+                    job.finish()
+            except Exception as error:
+                errors.append(error)
+            finally:
+                if not job.stdout.closed: job.stdout.close()
+                if not job.stderr.closed: job.stderr.close()
+        if errors: raise errors[0]

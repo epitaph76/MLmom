@@ -38,7 +38,7 @@ class OfflineLLM:
         if role=='planner':
             from mlmom.evaluation import prediction_kind
             return PlanBatch(plans=[HypothesisPlan(hypothesis=h,tool_id=self.tool_id,skill_ids=[self.tool_id],model_params=self.params,
-                time_limit_seconds=self.seconds,cpus=self.cpus,memory_gb=2,
+                time_limit_seconds=self.seconds,cpus=self.cpus,memory_gb=2,max_trials=1,
                 prediction_kind=prediction_kind(payload['task']['primary_metric'],payload['task']['task_type'])) for h in payload['hypotheses']['hypotheses']])
         if role=='plan_validator':return ValidationReport(valid=True)
         if role=='coding_agent':return CodeBundle(files={'candidate.py':ADAPTER_CODE})

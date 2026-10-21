@@ -18,6 +18,7 @@ from .contracts import (
 from .llm_client import ChatClient, LLMSettings, RouterAIChatClient
 from .task_analyzer import TaskAnalyzer
 from .task_validator import TaskValidator
+from .tracing import span, emit, TraceSink
 
 
 class TaskGraphState(TypedDict, total=False):
@@ -38,6 +39,8 @@ def build_task_graph(client: ChatClient):
 
     def generate(state: TaskGraphState) -> TaskGraphState:
         result = analyzer.analyze(state["profile"])
+        emit('task_analysis.attempt', {'raw_response':result.raw_response,'error':result.error,'task':result.task},
+             attempt=state.get('attempts',0)+1)
         return {
             "task": result.task,
             "raw_response": result.raw_response,
@@ -51,6 +54,8 @@ def build_task_graph(client: ChatClient):
             previous_task=state.get("task"),
             feedback=state["validation"].findings,
         )
+        emit('task_analysis.attempt', {'raw_response':result.raw_response,'error':result.error,'task':result.task},
+             attempt=state['attempts']+1)
         return {
             "task": result.task,
             "raw_response": result.raw_response,
@@ -64,6 +69,7 @@ def build_task_graph(client: ChatClient):
             state.get("task"),
             generation_error=state.get("generation_error"),
         )
+        emit('task_analysis.validation', report)
         return {"validation": report}
 
     def route(state: TaskGraphState) -> str:
@@ -100,11 +106,12 @@ def analyze_task(
 
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
-    final = build_task_graph(client).invoke({
-        "profile": profile,
-        "attempts": 0,
-        "max_attempts": max_attempts,
-    })
+    with span('task_analysis', stage='inspection'):
+        final = build_task_graph(client).invoke({
+            "profile": profile,
+            "attempts": 0,
+            "max_attempts": max_attempts,
+        })
     validation = final["validation"]
     return TaskAnalysisResult(
         status="validated" if validation.valid else "failed",
@@ -127,11 +134,17 @@ def main() -> None:
 
     profile = DatasetProfile.model_validate_json(args.profile.read_text(encoding="utf-8"))
     settings = LLMSettings.from_env(args.env_file)
-    result = analyze_task(
-        profile,
-        RouterAIChatClient(settings),
-        max_attempts=args.max_attempts,
-    )
+    import uuid
+    run_id='task-analysis-'+uuid.uuid4().hex
+    trace = TraceSink(args.output.parent/'trace'/run_id,run_id=run_id,
+                      task_id=profile.dataset_name,secrets=[settings.api_key])
+    client = RouterAIChatClient(settings,trace=trace)
+    try:
+        with trace.activate(stage='inspection',role='task_definition'):
+            result = analyze_task(profile,client,max_attempts=args.max_attempts)
+    finally:
+        client.close()
+        trace.close()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2),

@@ -43,12 +43,14 @@ class AgentProtocolTests(unittest.TestCase):
 
     def test_standard_environment_overrides_legacy_provider(self):
         env={'OPENAI_API_KEY':'standard-test-key','OPENAI_MODEL':'provided-model','OPENAI_BASE_URL':'https://example.invalid/v1',
-             'ROUTERAI_API_KEY':'legacy-test-key','ROUTERAI_MODEL':'legacy-model','ROUTERAI_BASE_URL':'https://legacy.invalid/v1'}
+             'ROUTERAI_API_KEY':'legacy-test-key','ROUTERAI_MODEL':'legacy-model','ROUTERAI_BASE_URL':'https://legacy.invalid/v1',
+             'ROUTERAI_MAX_TOKENS':'4000'}
         with tempfile.TemporaryDirectory() as tmp,patch.dict('os.environ',env,clear=True):
             settings=LLMSettings.from_env(str(Path(tmp)/'absent.env'))
         self.assertEqual(settings.api_key,'standard-test-key')
         self.assertEqual(settings.model,'provided-model')
         self.assertEqual(settings.base_url,'https://example.invalid/v1')
+        self.assertIsNone(settings.max_tokens)
 
     def test_platform_model_optional_and_never_uses_local_credentials(self):
         with patch.dict('os.environ',{'OPENAI_API_KEY':'test-only','OPENAI_BASE_URL':'https://proxy.invalid/v1',
@@ -91,7 +93,7 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertTrue(all(0<call.kwargs['timeout']<=10 for call in options.call_args_list))
         self.assertNotIn('test-only',json.dumps(events+usage))
 
-    def test_reasoning_exhaustion_has_explicit_diagnostic(self):
+    def test_provider_truncation_has_explicit_diagnostic_without_client_limit(self):
         usage=[]
         client=RoleClient(LLMSettings(api_key='test-only'),deadline=time.time()+10,usage_callback=usage.append)
         self.addCleanup(client.client.close)
@@ -99,7 +101,7 @@ class AgentProtocolTests(unittest.TestCase):
             choices=[SimpleNamespace(finish_reason='length',message=SimpleNamespace(model_dump=lambda **kwargs:{'role':'assistant'}))])
         with patch.object(client.client,'with_options') as options:
             options.return_value.chat.completions.create.return_value=response
-            with self.assertRaisesRegex(ValueError,'reasoning and final JSON share this limit'):
+            with self.assertRaisesRegex(ValueError,'the client did not request an output token limit'):
                 client.generate('coding_agent','Test',{},CodeBundle)
         self.assertEqual(usage[0]['finish_reason'],'length')
 
