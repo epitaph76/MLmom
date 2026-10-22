@@ -261,7 +261,7 @@ class Pipeline:
         payload = dict(round_number=state['round_number'],task=context.task.model_dump(mode='json'),
             planning_attempt=state.get('planning_attempt',0),dataset_profile=profile_summary(profile),
             ml_tools=[{k:v for k,v in t.model_dump(mode='json').items() if k in
-                {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version'}}
+                {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version','validation_strategies'}}
                 for t in self.tools.values()],
             skills=self.skills.list(role='planner'),
             technique_skills=self.skills.technique_catalog(context.task.task_type),

@@ -61,7 +61,9 @@ class InvariantTests(unittest.TestCase):
                 skills=SkillRegistry(ROOT/'skills')
                 budget=BudgetSnapshot(remaining_seconds=200,research_seconds=100,available_cpus=4,available_memory_gb=8,spent_seconds=0)
                 with patch('mlmom.registry.importlib.metadata.version',return_value='test'):
-                    for metric,valid in [(accepted,True),(rejected,False)]:
+                    # The compatibility adapter's objective mapping is distinct
+                    # from admission of unverified generated native protocols.
+                    for metric,valid in [(accepted,False),(rejected,False)]:
                         context.task.primary_metric=metric;plan.prediction_kind=prediction_kind(metric,kind)
                         report=validate_plan(plan,context,tools,skills,budget)
                         self.assertEqual(report.valid,valid,report)

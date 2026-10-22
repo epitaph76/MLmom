@@ -22,7 +22,7 @@ class Skills:
 
 def case():
     context=NS(task=NS(task_type='regression',primary_metric='rmse',group_columns=[],weight_column=None,
-                      target_columns=['target']),profile_ref='',feature_columns=['x'],classes=[])
+                      target_columns=['target'],validation_strategy='holdout',validation_folds=5),profile_ref='',feature_columns=['x'],classes=[])
     tools=installed_tools()
     for tool in tools.values(): tool.available=True
     budget=BudgetSnapshot(remaining_seconds=1000,research_seconds=900,available_cpus=4,

@@ -125,7 +125,13 @@ def smoke(request, root):
         classes=sorted(y.unique().tolist()) if y is not None and getattr(y,'ndim',1)==1 and ('classification' in kind) else [],
         groups=groups,work_dir=str(root/'native'))
     Path(context.work_dir).mkdir(parents=True,exist_ok=True)
-    model.fit(X,y,context)
+    if request.get('native_holdout'):
+        from sklearn.model_selection import train_test_split
+        a,b=train_test_split(np.arange(len(X)),test_size=.25,random_state=42,
+                            stratify=y if 'classification' in kind else None)
+        model.fit(X.iloc[a],y.iloc[a],replace(context,validation_X=X.iloc[b],validation_y=y.iloc[b]))
+    else:
+        model.fit(X,y,context)
     if hasattr(model,'export_model_params'):
         frozen=model.export_model_params()
         json.dumps(frozen,allow_nan=False)
@@ -172,6 +178,11 @@ def train(request, root):
     from .persistence import atomic_json,tree_hash,file_hash
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
+    from .registry import NATIVE_VALIDATION
+    if not request.get('fixed') and plan.tool_id in NATIVE_VALIDATION:
+        if (plan.strategy != 'native' or context.task.validation_strategy not in NATIVE_VALIDATION[plan.tool_id]
+                or context.task.group_columns):
+            raise ValueError('Native internal validation protocol is not verified for this task')
     if tree_hash(Path(request['code_dir'])) != request['code_hash']: raise ValueError('Candidate hash mismatch')
     module = load_module(request['code_dir'])
     frame = read_table(request['train_path'],table_format=context.table_formats.get(request['train_path']))
@@ -296,6 +307,8 @@ def train(request, root):
                     atomic_json(root/'trials.json',trials)
                     predictions.append(prediction);positions.extend(b.tolist())
                     if holdout and hasattr(model,'export_model_params'):selected_params=model.export_model_params()
+                if plan.strategy=='native' and not selected_params.get('__native_frozen'):
+                    raise ValueError('Native AutoML must export a frozen configuration for search-free refit')
                 order=np.argsort(positions);indices=np.asarray(positions)[order]
                 combined=np.concatenate(predictions,axis=0)[order]
                 trial.oof_score=score_predictions(y.iloc[indices] if y is not None else None,combined,context,X=X.iloc[indices],

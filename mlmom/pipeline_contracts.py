@@ -121,6 +121,7 @@ class MLToolSpec(StrictModel):
     supports_groups: bool = False
     supports_patience: bool = False
     adapter: str
+    validation_strategies: list[str] = Field(default_factory=lambda: ['holdout','kfold','stratified_kfold','group_kfold'])
 
 
 class BudgetSnapshot(StrictModel):

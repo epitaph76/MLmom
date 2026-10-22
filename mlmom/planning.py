@@ -17,6 +17,10 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     tool = tools.get(plan.tool_id)
     if not tool or not tool.available: errors.append(f'Tool unavailable: {plan.tool_id}')
     else:
+        if context.task.validation_strategy not in tool.validation_strategies:
+            errors.append('Tool has no verified support for the confirmed internal validation strategy')
+        if tool.native_hpo and context.task.group_columns:
+            errors.append('Native group-aware validation has not been verified')
         if context.task.task_type not in tool.task_types: errors.append('Tool does not support the task type')
         if context.task.group_columns and not tool.supports_groups and context.task.task_type == 'ranking': errors.append('Ranking requires a group-aware adapter')
         if context.task.weight_column and not tool.supports_weights: errors.append('Adapter does not support sample weights')
@@ -207,7 +211,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'available shared contracts only. Backend implementation references belong to the coders. '
                         'Use supplied context to return final JSON first; '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
-                        'imbalance for weighting/thresholds, and ensembles plus component skills for ensembles. '
+                        'imbalance for weighting/thresholds. Candidate ensembles and AutoML blending/stacking are disabled. '
                         'When lightweight=true require strategy=single, max_trials=1, no '
                         'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
                         f'{min(300,initial_experiment_seconds)}. Never override orchestration resources; '
@@ -216,7 +220,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'keep preprocessing cheap and parameters fixed for the initial fit. Declare a small compatible '
                         'search_space even for a single baseline: it is used only after the first CSV is saved. '
                         'Describe required transforms in preprocessing, including column names and prediction '
-                        'constraints. No internal CV. '
+                        'constraints. The runner executes the confirmed internal validation strategy; '
+                        'budget all folds plus a mandatory full-train refit. Do not implement CV in candidate.fit. '
+                        'Native AutoML requires a verified validation_strategies entry matching the confirmed task. '
                         'After baseline use strategy=optuna with a small compatible search_space for ordinary estimators; '
                         'never implement HPO in candidate.fit. Respect improvement_policy and do not use ensembles. '
                         'Backend skills are references, not hidden runtime adapters. The code must consume every '

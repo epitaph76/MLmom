@@ -233,7 +233,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             else:
                 result = sandbox.run(dict(action='smoke',code_dir=str(snapshot),code_hash=digest,
                     config=plan.model_dump(mode='json'),task_type=context.task.task_type,
-                    metric=context.task.primary_metric,prediction_kind=plan.prediction_kind,**smoke_schema),
+                    metric=context.task.primary_metric,prediction_kind=plan.prediction_kind,
+                    verify_frozen=plan.strategy=='native',native_holdout=plan.strategy=='native',**smoke_schema),
                     store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
                     seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
                 if result['status']!='completed': report.errors.append(result.get('error') or result.get('stop_reason','Smoke failed'))

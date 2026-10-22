@@ -1,15 +1,71 @@
-> Role boundary: the SDK supplies already transformed X and validation_X. Any feature cleaning/encoding in the standalone API excerpts below belongs to the preprocessing agent; omit it from model code. Use preprocessing_spec for category indices/dtypes. Persist only estimator and output/target state; SDK persists preprocessing.
+# Direct FLAML holdout reference
 
-# Direct FLAML reference
-Instantiate flaml.AutoML in the generated Candidate. strategy=native owns the single search.
+The SDK supplies transformed features. Only holdout is verified; no outer Optuna,
+native CV, blending or stacking. Keep preprocessing outside this estimator.
+The runner refits the exported frozen configuration before external evaluation.
+
 ```python
+from pathlib import Path
+import cloudpickle
+import numpy as np
 from flaml import AutoML
-self.model = AutoML()
-self.model.fit(X_train=X, y_train=y, X_val=context.validation_X, y_val=context.validation_y,
-    task='classification' if 'classification' in context.task_type else 'regression',
-    metric='macro_f1' if context.metric in {'macro_f1','f1_macro'} else context.metric,
-    time_budget=max(1., context.remaining_seconds), n_jobs=context.cpus, seed=context.seed,
-    estimator_list=['lgbm','rf','extra_tree'], max_iter=config.get('max_trials', 15),
-    log_file_name=str(Path(context.work_dir)/'flaml-trials.jsonl'), log_type='all', verbose=0)
+
+class Candidate:
+    def __init__(self, config):
+        self.config = config
+        self.params = dict(config.get('model_params', {}))
+
+    def fit(self, X, y, context):
+        self.classes = list(context.classes)
+        params = dict(self.params)
+        frozen = params.pop('__native_frozen', None)
+        automl = AutoML()
+        task = 'classification' if 'classification' in context.task_type else 'regression'
+        if frozen:
+            from flaml.automl.training_log import training_log_writer
+            log = Path(context.work_dir) / 'fixed.jsonl'
+            with training_log_writer(str(log)) as writer:
+                writer.append(0, None, 0., 0., frozen['validation_loss'], frozen['config'], frozen['estimator'], len(X))
+            automl.retrain_from_log(str(log), X_train=X, y_train=y, record_id=0,
+                train_full=True, task=task, n_jobs=context.cpus,
+                time_budget=max(.1, context.remaining_seconds))
+            self.frozen = frozen
+            self.history = {'mode':'fixed_configuration', 'new_trials':0}
+        else:
+            if context.validation_X is None:
+                raise ValueError('Native search requires an explicit internal holdout')
+            metric = {'f1_macro':'macro_f1', 'macro_f1':'macro_f1'}.get(context.metric, context.metric)
+            automl.fit(X_train=X, y_train=y, X_val=context.validation_X, y_val=context.validation_y,
+                task=task, metric=metric, time_budget=max(.1, context.remaining_seconds),
+                n_jobs=context.cpus, seed=context.seed, estimator_list=['lgbm','extra_tree'],
+                max_iter=self.config.get('max_trials',15), eval_method='holdout',
+                ensemble=False, retrain_full=False, verbose=0, **params)
+            self.frozen = {'estimator':automl.best_estimator, 'config':automl.best_config,
+                           'validation_loss':float(automl.best_loss)}
+            self.history = {'mode':'native_holdout', 'best_configuration':self.frozen}
+        self.model = automl.model.estimator
+        return self
+
+    def predict(self, X, prediction_spec):
+        if prediction_spec['kind'] == 'probability':
+            p = self.model.predict_proba(X)
+            return p[:, [list(self.model.classes_).index(c) for c in self.classes]]
+        return self.model.predict(X)
+
+    def export_model_params(self):
+        return dict(self.params, __native_frozen=self.frozen)
+
+    def native_history(self):
+        return self.history
+
+    def save(self, artifact_dir):
+        (Path(artifact_dir) / 'candidate.pkl').write_bytes(cloudpickle.dumps(self))
+
+def create_candidate(config):
+    return Candidate(config)
+
+def load_candidate(artifact_dir):
+    return cloudpickle.loads((Path(artifact_dir) / 'candidate.pkl').read_bytes())
 ```
-Implement predict/predict_proba ordering, inference-state persistence and native_history. export_model_params exports __native_frozen with best_estimator, best_config and best_loss. For a fixed refit write that selected configuration via flaml.automl.training_log.training_log_writer and call retrain_from_log(record_id=0, train_full=True) on allowed rows; never run another search. Generate this logic explicitly; infrastructure does not supply it. No outer Optuna.
+
+Adapt metric aliases to the confirmed primary metric; never substitute an objective.
