@@ -23,7 +23,7 @@ def main():
         if set(archive.namelist())!={'solution.py','requirements.txt','mlmom_bundle.py'}:
             raise ValueError('Unexpected archive members')
         archive.extractall(platform)
-    code='''import json,sys,time,unittest,platform
+    code='''import json,sys,time,unittest,platform as platform_info
 from pathlib import Path
 platform,repository,report=map(Path,sys.argv[1:])
 sys.path.insert(0,str(platform))
@@ -38,7 +38,7 @@ result=unittest.TextTestRunner(verbosity=2).run(suite)
 report.write_text(json.dumps(dict(status='passed' if result.wasSuccessful() else 'failed',
     count=result.testsRun,failures=len(result.failures),errors=len(result.errors),
     skipped=len(result.skipped),duration_seconds=time.monotonic()-started,runtime=str(runtime),
-    python=platform.python_version(),os=platform.system(),source='extracted ZIP'),indent=2),encoding='utf-8')
+    python=platform_info.python_version(),os=platform_info.system(),source='extracted ZIP'),indent=2),encoding='utf-8')
 raise SystemExit(0 if result.wasSuccessful() else 1)
 '''
     with (output/'tests.log').open('w',encoding='utf-8') as log:

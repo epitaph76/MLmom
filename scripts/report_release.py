@@ -32,6 +32,8 @@ def cases(reports, sha, mode):
             if (r.get('mode')!=mode or r.get('environment')!='linux/docker' or v.get('status')!='passed'
                     or v.get('completed_cycles',0)<3 or not v.get('generated_path') or not v.get('relocated_model_equal')):
                 check=dict(status='failed',reason='Missing Linux/generated/three-cycle/relocation evidence',report=r)
+            if mode=='real' and r.get('model')!='qwen/qwen3.8-27b':
+                check=dict(status='failed',reason='Required Qwen model not verified',report=r)
         checks[name]=check
     status='passed' if all(c['status']=='passed' for c in checks.values()) else 'failed' if any(c['status']=='failed' for c in checks.values()) else 'not_verified'
     return dict(status=status,cases=checks)

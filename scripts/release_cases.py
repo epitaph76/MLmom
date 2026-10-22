@@ -34,7 +34,8 @@ def verify_run(run_dir, expected_rows, expected_metric):
     import pandas as pd
     from mlmom.pipeline_contracts import TaskContext
     from mlmom.inputs import read_table,features
-    from mlmom.resources import SandboxManager
+    from mlmom.resources import SandboxManager,Budget
+    from mlmom.pipeline_contracts import RunConfig
     from mlmom.persistence import tree_hash
     from mlmom.evaluation import metric_name
     import sqlite3
@@ -64,7 +65,8 @@ def verify_run(run_dir, expected_rows, expected_metric):
     if not code.exists():shutil.copytree(metadata['code_dir'],code)
     if not model.exists():shutil.copytree(metadata['model_artifact'],model)
     x=features(test,context).head(128);path=replay/'features.csv';x.to_csv(path,index=False)
-    with SandboxManager() as manager:
+    replay_config=RunConfig(total_seconds=40,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
+    with SandboxManager(budget=Budget(replay_config,time.time()),max_workers=1) as manager:
         result=manager.run(dict(action='predict',code_dir=str(code),code_hash=tree_hash(code),
             model_artifact=str(model),features_path=str(path),kinds=[context.submission_kind]),
             replay/'worker',seconds=30,memory_gb=3,cpus=2)
@@ -92,6 +94,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--mode',choices=['offline','real'],default='offline')
     parser.add_argument('--image',help='Docker image with the provided Python 3.12 dependencies')
+    parser.add_argument('--model',choices=['qwen/qwen3.8-27b'],help='Explicit per-run model selection; never edits .env')
     parser.add_argument('--seconds',type=float,default=1800)
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--regression-task',type=Path,default=ROOT.parent/'data/Регрессия/task.md')
@@ -112,6 +115,9 @@ def main():
     if args.mode=='real':
         from mlmom.llm_client import LLMSettings,PLATFORM_MODEL
         settings=LLMSettings.from_env(str(ROOT/'.env'))
+        if args.model:
+            from dataclasses import replace
+            settings=replace(settings,model=args.model)
         if settings.model!=PLATFORM_MODEL:raise ValueError('Configured model differs from organizer Qwen; no substitution allowed')
         secrets=dict(OPENAI_API_KEY=settings.api_key,OPENAI_BASE_URL=settings.base_url,OPENAI_MODEL=settings.model)
     specs=[('regression',args.regression_task,22449,'rmse'),('multiclass',args.multiclass_task,41166,'f1_macro')]
@@ -169,6 +175,7 @@ def main():
         report=dict(case=name,attempt=ledger['attempts'],archive_sha256=sha,mode=args.mode,
             environment='linux/docker' if args.image else sys.platform,command=['python3' if args.image else sys.executable,'solution.py','task.md'],
             run_dir=str(platform_dir/'run'),status='failed')
+        if args.mode=='real':report['model']=settings.model
         started=time.monotonic()
         try:
             with (attempt/'run.log').open('w',encoding='utf-8') as log:
@@ -184,10 +191,15 @@ def main():
                         stdout=log,stderr=subprocess.STDOUT,timeout=available)
                     if checked.returncode==0 and report.get('exit_code')==0:
                         report.update(status='passed',verification=json.loads((platform_dir/'verification.json').read_text(encoding='utf-8')))
+                    else:report.setdefault('reason','Independent acceptance failed; see run.log')
         except Exception as error:report['reason']=str(error)
         finally:
             if (control/'api.env').exists():(control/'api.env').unlink()
         report['duration_seconds']=time.monotonic()-started
+        summary_path=platform_dir/'run/summary.json'
+        if summary_path.exists():
+            summary=json.loads(summary_path.read_text(encoding='utf-8'))
+            report.update(pipeline_stop_reason=summary.get('stop_reason'),process_acceptance=summary.get('process_acceptance'))
         reports.append(report);write(reports_path,reports);write(attempt/'report.json',report)
         print(json.dumps(report,ensure_ascii=False),flush=True)
     latest={r['case']:r for r in reports}

@@ -19,7 +19,7 @@ class ReleaseGateTests(unittest.TestCase):
     def test_complete_local_acceptance_keeps_platform_separate(self):
         test=dict(status='passed',archive_sha256='zip',python='3.12.15',os='Linux')
         def cases(mode):
-            return [dict(case=name,status='passed',archive_sha256='zip',mode=mode,environment='linux/docker',
+            return [dict(case=name,status='passed',archive_sha256='zip',mode=mode,environment='linux/docker',model='qwen/qwen3.8-27b',
                 verification=dict(status='passed',completed_cycles=3,generated_path=True,relocated_model_equal=True))
                 for name in ['regression','multiclass']]
         report=gate('zip',test,test,test,cases('offline'),cases('real'))
