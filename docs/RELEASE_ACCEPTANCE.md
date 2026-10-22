@@ -15,7 +15,9 @@ torch с суффиксом +cpu допустим. Версии окружени
 6. Только после автоматической приёмки: та же команда с `--mode real`, новым output
    и `--seconds 1800`. Она читает существующее подключение Qwen, не меняет модель
    или provider. Лимит каждой задачи включает все попытки, простой и проверку.
-7. `python scripts/report_release.py --source-tests artifacts/release-abc/source/tests.json --tests artifacts/release-abc/packaged/tests.json --linux-tests artifacts/release-abc/linux-packaged/tests.json --offline-reports artifacts/release-abc/offline/reports.json --real-reports artifacts/release-abc/real/reports.json`
+7. `python scripts/check_environment.py --output artifacts/release-abc/environment.json`
+   выполнить в том же Linux-образе; проверяются все предоставленные версии.
+8. `python scripts/report_release.py --source-tests artifacts/release-abc/source/tests.json --tests artifacts/release-abc/packaged/tests.json --linux-tests artifacts/release-abc/linux-packaged/tests.json --offline-reports artifacts/release-abc/offline/reports.json --real-reports artifacts/release-abc/real/reports.json --environment artifacts/release-abc/environment.json`
 
 release_cases копирует только объявленные входы и три корневых файла ZIP в
 отдельный каталог. В контейнере запускается точная команда
@@ -28,6 +30,10 @@ Offline использует внешний sitecustomize и fixtures/tests.fake
 реальны. Runtime загружается из ZIP до подключения тестовых fixtures. Real
 запускается без этой подмены; ключи передаются через временный env-file и затем
 удаляются. В отчёты ключи не записываются.
+Для явно согласованного выбора Qwen при другом локальном default используйте
+`--model qwen/qwen3.8-27b`; подключение и ключ можно передать через OPENAI_*
+только процессу приёмки, не редактируя .env. Параметр --supplemental у report_release
+добавляет отдельные проверки того же SHA256, выполненные после основного набора.
 
 Обе задачи должны завершить три цикла с разными внешними split и повторным
 обучением incumbent. Проверяются RMSE/site_eui и Macro F1/attack_cat, точные

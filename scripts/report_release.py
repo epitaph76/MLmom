@@ -75,6 +75,7 @@ def main():
     for name in ['source-tests','tests','linux-tests','offline-reports','real-reports']:parser.add_argument('--'+name,type=Path)
     parser.add_argument('--output',type=Path,default=ROOT/'submission/validation.json')
     parser.add_argument('--environment',type=Path)
+    parser.add_argument('--supplemental',type=Path,nargs='*',default=[])
     args=parser.parse_args()
     read=lambda p:json.loads(p.read_text(encoding='utf-8')) if p and p.exists() else None
     info=package_info(args.archive)
@@ -84,6 +85,8 @@ def main():
         environment.get('status')=='passed' and environment.get('requirements_sha256')==info['requirements_sha256'] else 'failed',report=environment)
     if report['checks']['environment']['status']!='passed':
         report['status']='failed' if report['status']=='failed' or report['checks']['environment']['status']=='failed' else 'not_verified'
+    report['supplemental_tests']=[evidence(read(p),info['sha256']) for p in args.supplemental]
+    if any(r['status']!='passed' for r in report['supplemental_tests']):report['status']='failed'
     report.update(created_utc=datetime.now(timezone.utc).isoformat(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),package=info,
         environment_limits=['Docker image approximates provided dependencies; organizer infrastructure is not verified.',
                             'Offline LLM is an external test fixture; production runtime has no offline fallback.',
