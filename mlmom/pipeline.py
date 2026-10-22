@@ -27,7 +27,7 @@ from .planning import build_planning_graph
 from .planning_context import profile_summary,plan_summary,experiment_summary,evaluation_summary
 from .context_agent import prepare_planner_context
 from .registry import SkillRegistry,installed_tools,capability_matrix
-from .resources import Budget,SandboxManager,terminate_tree
+from .resources import Budget,SandboxManager,terminate_tree,WorkerRuntimeError,worker_runtime,runtime_versions
 from .splitting import make_split,group_keys
 from .submission import publish_submission
 from .tools import ToolSet
@@ -163,6 +163,37 @@ class Pipeline:
             spec.available = result['status']=='completed'
             spec.reason = None if spec.available else (result.get('error') or result.get('stop_reason','Probe failed'))[-2000:]
             self.store.put('capability',name,spec)
+
+    def preflight_runtime(self):
+        """Check the real child process before spending tokens or training budget."""
+        seconds = min(30., self.budget.snapshot().research_seconds)
+        if seconds <= 0 and self.last_submission:
+            return  # Preserve an existing submission when resuming an expired run.
+        expected = worker_runtime(Path(__file__).resolve().parents[1])
+        report = dict(controller=expected)
+        try:
+            versions = runtime_versions()
+            result = self.sandbox.run(dict(action='runtime_check'), self.run_dir/'runtime-check',
+                seconds=max(.1, seconds), memory_gb=min(2., self.budget.memory_gb), cpus=1)
+            report['result'] = result
+            if result.get('status') != 'completed':
+                raise WorkerRuntimeError(result.get('error') or result.get('stop_reason') or 'Worker did not start')
+            actual = result['runtime']
+            for key in ('executable', 'prefix', 'base_prefix'):
+                if os.path.normcase(os.path.abspath(actual[key])) != os.path.normcase(os.path.abspath(expected[key])):
+                    raise WorkerRuntimeError(f'{key} differs: controller={expected[key]}, worker={actual[key]}')
+            if result['versions'] != versions:
+                raise WorkerRuntimeError(f'Package versions differ: controller={versions}, worker={result["versions"]}')
+            report['status'] = 'passed'
+            self.store.put('runtime_check', 'startup', report)
+            emit('worker.runtime_checked', report)
+        except Exception as error:
+            report.update(status='failed', error=self.trace.scrub(str(error)))
+            self.store.put('runtime_check', 'startup', report)
+            self.store.event('worker_runtime_failed', 'startup', report)
+            emit('worker.runtime_failed', report)
+            raise WorkerRuntimeError(f'Worker environment check failed before LLM calls. '
+                f'Python={expected["executable"]}; prefix={expected["prefix"]}. {error}') from error
 
     def inspect(self,state):
         existing = self.store.get('context','task')
@@ -929,6 +960,7 @@ class Pipeline:
         try:
             emit('run.resumed' if resume else 'run.started',dict(deadline=self.budget.deadline,
                 cpus=self.budget.cpus,memory_gb=self.budget.memory_gb,config=self.config.model_dump()))
+            self.preflight_runtime()
             graph=self.graph()
             graph_config={'configurable':{'thread_id':'run'},'recursion_limit':max(100,self.config.max_rounds*5+10)}
             graph.invoke(None if resume and self.checkpointer.get_tuple(graph_config) else {},graph_config)
@@ -941,7 +973,7 @@ class Pipeline:
             atomic_json(self.run_dir/'summary.json',output)
             return output
         except Exception as error:
-            output=dict(status='completed' if self.last_submission else 'failed',stop_reason='error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())
+            output=dict(status='completed' if self.last_submission else 'failed',stop_reason='worker_runtime_error' if isinstance(error,WorkerRuntimeError) else 'error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())
             emit('run.error',output)
             emit('run.completed' if self.last_submission else 'run.failed',output)
             atomic_json(self.run_dir/'summary.json',output)
@@ -961,7 +993,7 @@ class Pipeline:
 
     def failure_causes(self):
         rows=self.store.db.execute("SELECT kind,object_id,body FROM events WHERE kind IN "
-            "('planning_failed','coding_failed','llm_unavailable','submission_failed','refit_failed','experiment_failed','adapter_failure') ORDER BY seq").fetchall()
+            "('planning_failed','coding_failed','llm_unavailable','submission_failed','refit_failed','experiment_failed','adapter_failure','worker_runtime_failed') ORDER BY seq").fetchall()
         return [dict(kind=kind,object_id=key,details=json.loads(body)) for kind,key,body in rows]
 
     def index_artifacts(self):

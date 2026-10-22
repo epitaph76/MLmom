@@ -330,14 +330,28 @@ def main():
     request_path = Path(sys.argv[1]).resolve()
     root = request_path.parent
     request = json.loads(request_path.read_text(encoding='utf-8'))
+    # Imports can fail before main (notably in package __init__). The launcher's
+    # controller snapshot still exists in that case, alongside stderr.log.
+    runtime_path = root/'runtime.json'
+    runtime = json.loads(runtime_path.read_text(encoding='utf-8')) if runtime_path.exists() else {}
+    runtime['worker'] = dict(executable=sys.executable, version=sys.version,
+        prefix=sys.prefix, base_prefix=sys.base_prefix, sys_path=sys.path)
+    from .persistence import atomic_json
+    atomic_json(runtime_path, runtime)
     import faulthandler
     faulthandler.enable()
     faulthandler.dump_traceback_later(max(.1,request['worker_seconds']*.95))
     threading.Thread(target=watchdog,args=(request,),daemon=True).start()
-    from .persistence import atomic_json
     try:
         action = request['action']
-        if action in {'smoke','probe'}: result = smoke(request,root)
+        if action == 'runtime_check':
+            import importlib
+            from .resources import RUNTIME_MODULES, runtime_versions, worker_runtime
+            for name in RUNTIME_MODULES:
+                importlib.import_module(name)
+            result = dict(status='completed', runtime=worker_runtime(Path(__file__).resolve().parents[1]),
+                          versions=runtime_versions())
+        elif action in {'smoke','probe'}: result = smoke(request,root)
         elif action=='train': result = train(request,root)
         elif action=='predict': result = predict(request,root)
         elif action=='csv':

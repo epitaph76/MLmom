@@ -18,9 +18,36 @@ class ResourceUnavailable(ValueError):
     """Admission refused without starting a process."""
 
 
+class WorkerRuntimeError(RuntimeError):
+    """The worker cannot use the controller's Python environment."""
+
+
+RUNTIME_MODULES = {'pydantic': 'pydantic', 'psutil': 'psutil', 'numpy': 'numpy',
+    'pandas': 'pandas', 'cloudpickle': 'cloudpickle', 'sklearn': 'scikit-learn',
+    'polars': 'polars', 'pyarrow': 'pyarrow'}
+
+
+def runtime_versions():
+    from importlib.metadata import version
+    return {name: version(distribution) for name, distribution in RUNTIME_MODULES.items()}
+
+
 def trace_event(kind, data):
     from .tracing import emit
     emit(kind, data)
+
+
+def worker_runtime(root: Path):
+    """Keep the interpreter path intact and preserve its effective import paths.
+
+    Packages may be supplied by PYTHONPATH, .pth files or the user's site.
+    Replacing HOME/PYTHONPATH must not hide packages visible to the controller.
+    Do not resolve sys.executable: on Unix that can escape a symlinked venv.
+    """
+    paths = list(dict.fromkeys([str(root.resolve()),
+        *(os.path.abspath(path) for path in sys.path if isinstance(path, str))]))
+    return dict(executable=sys.executable, version=sys.version,
+                prefix=sys.prefix, base_prefix=sys.base_prefix, sys_path=paths)
 
 
 def capacity(config: RunConfig):
@@ -196,10 +223,13 @@ class SandboxManager:
                        worker_seconds=seconds,worker_cpus=cpus,worker_memory_gb=memory_gb)
         atomic_json(directory/'request.json',request)
         root = Path(__file__).resolve().parent.parent
+        runtime = worker_runtime(root)
+        atomic_json(directory/'runtime.json', {'controller': runtime,
+            'command': [sys.executable, '-m', 'mlmom.worker', str(directory/'request.json')]})
         allowed={'PATH','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','LD_LIBRARY_PATH'}
         if os.name=='nt':allowed|={'SystemDrive','SYSTEMDRIVE','ProgramData','PROGRAMDATA','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA'}
         env = {k:v for k,v in os.environ.items() if k in allowed}
-        env.update(PYTHONPATH=str(root),PYTHONIOENCODING='utf-8',PYTHONUTF8='1',PYTHONDONTWRITEBYTECODE='1',
+        env.update(PYTHONPATH=os.pathsep.join(runtime['sys_path']),PYTHONIOENCODING='utf-8',PYTHONUTF8='1',PYTHONDONTWRITEBYTECODE='1',
             HOME=str(directory),USERPROFILE=str(directory),TEMP=str(directory),TMP=str(directory),
             CUDA_VISIBLE_DEVICES='',HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',
             LANGCHAIN_TRACING_V2='false',LANGSMITH_TRACING='false')

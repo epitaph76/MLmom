@@ -43,7 +43,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             manager=SandboxManager(budget=budget(),max_workers=3)
             manager.jobs=[SimpleNamespace(released=False,cpus=1,memory_gb=3,poll=lambda:None)]
-            for action in ['inspect','probe','smoke','train','predict','inspect_api']:
+            for action in ['runtime_check','inspect','probe','smoke','train','predict','inspect_api']:
                 with self.subTest(action=action),patch('mlmom.resources.subprocess.Popen') as popen:
                     with self.assertRaises(ResourceUnavailable):
                         manager.start({'action':action},Path(tmp)/action,seconds=10,memory_gb=2,cpus=1)
