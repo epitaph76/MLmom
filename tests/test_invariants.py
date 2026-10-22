@@ -150,7 +150,9 @@ class InvariantTests(unittest.TestCase):
             store=ExperimentStore(root/'run');self.assertEqual(store.get('experiment','final-refit')['status'],'failed');store.close()
 
     def test_cpu_affinity_is_disjoint_and_worker_keys_are_removed(self):
-        with tempfile.TemporaryDirectory() as tmp,SandboxManager() as manager:
+        from mlmom.resources import Budget
+        config=RunConfig(total_seconds=60,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=2)
+        with tempfile.TemporaryDirectory() as tmp,SandboxManager(budget=Budget(config,time.time()),max_workers=2) as manager:
             root=Path(tmp);code=root/'code';code.mkdir()
             source='import os\nassert "OPENAI_API_KEY" not in os.environ\nassert "ROUTERAI_API_KEY" not in os.environ\n'+ADAPTER_CODE
             (code/'candidate.py').write_text(source,encoding='utf-8')
