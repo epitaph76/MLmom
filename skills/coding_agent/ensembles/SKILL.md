@@ -19,3 +19,11 @@ Choose fixed weights in the plan, or fit weights using only internal OOF data.
 Stacking folds must have enough groups and every required class; fail with a
 concrete reason rather than silently changing the protocol. Retain component
 configuration, class order and any fixed iteration counts for search-free refit.
+
+For model_params.method='stack', implement fit_stack(X,y,context,create_preprocessor).
+The SDK passes raw features to this hook and raw features to predict. Compose each base with
+mlmom.sdk.PreparedCandidate(base_config, create_base, create_preprocessor); base_config must
+not declare the outer stacking ensemble. Use fresh wrappers in each OOF fold and full refit.
+Slice groups/weights to fold training rows and clear validation metadata for each base fold.
+Save/load wrapped bases and meta learner together. Do not stack on globally transformed X.
+Native AutoML components are not admitted until frozen component refit is verified.

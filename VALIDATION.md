@@ -1,3 +1,15 @@
+# Исправления ревью — 22.10.2026
+
+Текущий ZIP SHA256 `d00c03291f75bfe0c75c002480c60da5379a169fbab0da91bed895ec815e1f2c`.
+199 source tests прошли (Windows, Python 3.12.10), 0 ошибок и пропусков.
+8 новых regression tests также прошли на извлечённом runtime ZIP.
+Машинный статус — submission/validation.json: not_verified до полной Linux/API-приёмки новой сборки.
+[Изменения и ограничения](docs/REVIEW_FIXES_20261022.md).
+
+Далее сохранены исторические сведения, относящиеся к прежним сборкам.
+
+---
+
 <!-- abc-release:start -->
 # Приёмка A → B → C — 22.10.2026
 

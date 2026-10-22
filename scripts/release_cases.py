@@ -66,13 +66,13 @@ def verify_run(run_dir, expected_rows, expected_metric):
     if not code.exists():shutil.copytree(metadata['code_dir'],code)
     if not model.exists():shutil.copytree(metadata['model_artifact'],model)
     x=features(test,context).head(128);path=replay/'features.csv';x.to_csv(path,index=False)
-    replay_config=RunConfig(total_seconds=40,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
+    replay_config=RunConfig(timeouts_enabled=True,total_seconds=40,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
     with SandboxManager(budget=Budget(replay_config,time.time()),max_workers=1) as manager:
         result=manager.run(dict(action='predict',code_dir=str(code),code_hash=tree_hash(code),
             model_artifact=str(model),features_path=str(path),kinds=[context.submission_kind]),
             replay/'worker',seconds=30,memory_gb=3,cpus=2)
     if result['status']!='completed':raise ValueError('Relocated model failed: '+str(result))
-    prediction=pd.read_csv(result['predictions'][context.submission_kind]).to_numpy()
+    prediction=read_table(result['predictions'][context.submission_kind]).to_numpy()
     reference=values[:len(x)]
     equal=np.array_equal(prediction,reference) if 'classification' in context.task.task_type else np.allclose(prediction.astype(float),reference.astype(float),rtol=1e-9,atol=1e-9)
     if not equal:raise ValueError('Relocated predictions differ')

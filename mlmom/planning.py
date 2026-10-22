@@ -82,6 +82,10 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             entry = tools.get(component.get('tool_id'))
             if not entry or not entry.available or context.task.task_type not in entry.task_types:
                 errors.append('Unavailable/incompatible ensemble component')
+            if entry and entry.native_hpo:
+                errors.append('Native AutoML ensemble components have no verified frozen refit protocol')
+            if lightweight and entry and entry.cost_tag == 'slow':
+                errors.append('Lightweight ensemble components cannot use slow backends')
             if entry and not set(entry.skill_ids)<=set(plan.skill_ids):errors.append('Required ensemble component skills are missing')
             if entry and context.task.validation_strategy not in entry.validation_strategies:
                 errors.append('Ensemble component has no verified support for the internal validation strategy')

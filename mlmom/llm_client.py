@@ -78,7 +78,8 @@ class RouterAIChatClient:
         # Lazy import avoids the task-analyzer/client dependency cycle.
         from .agents import RoleClient
         self.model = settings.model
-        self._role = RoleClient(settings,deadline=deadline or time.time()+3*settings.timeout_seconds+30,trace=trace)
+        self._role = RoleClient(settings,deadline=deadline if deadline is not None else (time.time()+3*settings.timeout_seconds+30 if settings.timeout_seconds is not None else float('inf')),
+            timeouts_enabled=settings.timeout_seconds is not None,trace=trace)
         self._client = self._role.client
 
     def complete(self, messages: list[dict[str, str]]) -> str:

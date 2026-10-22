@@ -52,8 +52,8 @@ def write_predictions(model, X, kinds, root):
     result = {}
     for kind in dict.fromkeys(kinds):
         predictions = checked_predictions(model.predict(X,{'kind':kind}),len(X),kind)
-        path = root/f'prediction-{kind}.csv'
-        pd.DataFrame(predictions).to_csv(path,index=False)
+        path = root/f'prediction-{kind}.parquet'
+        pd.DataFrame(predictions).to_parquet(path,index=False)
         result[kind] = str(path)
     return result
 
@@ -179,6 +179,8 @@ def train(request, root):
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
     from .registry import NATIVE_VALIDATION
+    if any(c.get('tool_id') in NATIVE_VALIDATION for c in plan.ensemble_components):
+        raise ValueError('Native AutoML ensemble components have no verified frozen refit protocol')
     if not request.get('fixed') and plan.tool_id in NATIVE_VALIDATION:
         if (plan.strategy != 'native' or context.task.validation_strategy not in NATIVE_VALIDATION[plan.tool_id]
                 or context.task.group_columns):

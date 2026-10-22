@@ -60,11 +60,6 @@ class DeferredTask(RuntimeError):
 class Pipeline:
     def __init__(self, task_path: Path, config: RunConfig, *, run_dir: Path | None=None, client=None, resume=False, started=None):
         self.config = config
-        settings=None
-        if client is None:
-            from dataclasses import replace
-            settings=LLMSettings.from_platform_env() if config.profile=='platform' else LLMSettings.from_env()
-            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds if config.timeouts_enabled else None)
         self.files = resolve_inputs(task_path)
         self.run_dir = (run_dir or Path(__file__).resolve().parent.parent/'artifacts'/f'{Path(self.files.root).name}-{uuid.uuid4().hex[:10]}').resolve()
         self.run_dir.mkdir(parents=True,exist_ok=True)
@@ -72,9 +67,16 @@ class Pipeline:
         if session_path.exists():
             if not resume: raise ValueError('Run already exists; use --resume')
             session = json.loads(session_path.read_text(encoding='utf-8'))
+            legacy_policy = 'timeouts_enabled' not in session['config']
+            if legacy_policy:
+                session['config']['timeouts_enabled'] = True
+            if 'timeouts_enabled' not in config.model_fields_set:
+                config = RunConfig.model_validate(dict(config.model_dump(), timeouts_enabled=session['config']['timeouts_enabled']))
+                self.config = config
             if session['task'] != self.files.task or RunConfig.model_validate(session['config']).model_dump(mode='json') != config.model_dump(mode='json'):
                 raise ValueError('Resume requires the same task and configuration')
             if session['input_hashes'] != self.input_hashes(): raise ValueError('Task inputs changed since this run')
+            if legacy_policy: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
             session = dict(run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
@@ -82,6 +84,11 @@ class Pipeline:
         if 'run_id' not in session:
             session['run_id']=uuid.uuid4().hex
             atomic_json(session_path,session)
+        settings=None
+        if client is None:
+            from dataclasses import replace
+            settings=LLMSettings.from_platform_env() if config.profile=='platform' else LLMSettings.from_env()
+            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds if config.timeouts_enabled else None)
         self.trace = TraceSink(self.run_dir,session['run_id'],
             task_id=hashlib.sha256(self.files.task.encode()).hexdigest()[:16],
             secrets=[settings.api_key] if settings else [])

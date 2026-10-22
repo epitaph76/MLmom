@@ -34,7 +34,13 @@ Prediction kinds: value, label, probability in context.classes order, cluster, r
 anomaly_score (larger is more anomalous). SDK separately fits and persists preprocessing per fit.
 Use mlmom.sdk and installed selected libraries directly; no LibraryCandidate or hidden adapters.
 Candidate ensembles, voting and stacking are allowed when planned. Use OOF base predictions
-for stacking meta learners, with all trainable preprocessing fitted inside their base folds.
+for stacking meta learners. For model_params.method='stack', implement
+fit_stack(X,y,context,create_preprocessor): the SDK supplies RAW X and validation_X to this hook.
+Wrap every base estimator with mlmom.sdk.PreparedCandidate using create_preprocessor, fitting
+fresh wrappers on each base-fold train; slice groups and sample_weight, clear validation metadata
+for those folds. Refit fresh wrapped bases on all current train after OOF. predict receives RAW X
+and uses the saved wrapped bases. save/load must persist those bases and meta learner. The SDK
+skips its outer preprocessing only for this explicit stack hook. Ordinary fit remains estimator-only.
 Implement the candidate in its own code using installed libraries; infrastructure imports
 remain forbidden except mlmom.sdk. ExtraTrees and other single
 estimators remain allowed. In CV, validation_X is absent: fit fixed parameters without early stopping.

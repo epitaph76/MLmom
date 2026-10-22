@@ -87,6 +87,8 @@ def read_table(path: str | Path, *, table_format: TableReadOptions | dict | None
     Persisted options are authoritative. Older callers/profiles detect the same
     supported encodings and delimiters on demand.
     """
+    if Path(path).suffix.lower() == '.parquet':
+        return pd.read_parquet(path, **kwargs)
     kwargs.setdefault('low_memory', False)
     if table_format is not None:
         options = TableReadOptions.model_validate(table_format)

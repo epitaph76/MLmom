@@ -39,8 +39,10 @@ def checked_predictions(value, rows: int, kind: str, *, classes=None):
         a = a.astype(float)
         if not np.isfinite(a).all():
             raise ValueError('Predictions must be finite')
-    if kind == 'label' and classes and a.ndim == 1:
-        if not set(a.tolist()) <= set(classes):
+    if kind == 'label' and classes:
+        if a.ndim == 2 and a.shape[1] != 1:
+            raise ValueError('Single-target labels require one column')
+        if not set(a.ravel().tolist()) <= set(classes):
             raise ValueError('Predictions contain unknown class labels')
     if kind == 'probability':
         if np.any(a < -1e-8) or np.any(a > 1 + 1e-8):
@@ -129,8 +131,16 @@ def score_predictions(y, prediction, context: TaskContext, *, X=None, groups=Non
             y = np.asarray(y) == context.classes[1]
         result = m.average_precision_score(y, p, **opts)
     elif name == 'log_loss':
-        if context.classes: opts.setdefault('labels', context.classes)
-        result = m.log_loss(y, p, **opts)
+        if context.task.task_type == 'multilabel_classification':
+            truth = np.asarray(y)
+            if truth.shape != p.shape or not np.isin(truth, [0, 1]).all():
+                raise ValueError('Multilabel log_loss requires matching binary targets and probabilities')
+            p = np.clip(p, np.finfo(float).eps, 1-np.finfo(float).eps)
+            losses = -(truth*np.log(p)+(1-truth)*np.log1p(-p)).mean(axis=1)
+            result = np.average(losses, weights=weights)
+        else:
+            if context.classes: opts.setdefault('labels', context.classes)
+            result = m.log_loss(y, p, **opts)
     elif name.startswith('f1'):
         opts.setdefault('average', name.removeprefix('f1_') if name != 'f1' else 'binary')
         if opts['average']=='binary' and len(context.classes)==2:opts.setdefault('pos_label',context.classes[1])

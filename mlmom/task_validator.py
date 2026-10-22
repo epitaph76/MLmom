@@ -289,6 +289,8 @@ class TaskValidator:
             )
 
     def _validate_strategy(self, task: TaskDefinition, add: Any) -> None:
+        if task.task_type == TaskType.MULTILABEL_CLASSIFICATION and task.validation_strategy == ValidationStrategy.STRATIFIED_KFOLD:
+            add('unsupported_multilabel_cv', 'Multilabel stratified CV is not implemented; use holdout or group_kfold.', field='validation_strategy')
         if task.task_type == TaskType.TIME_SERIES_FORECASTING or task.time_column:
             if task.validation_strategy != ValidationStrategy.TIME_SERIES_SPLIT:
                 add(

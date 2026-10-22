@@ -56,6 +56,14 @@ class PreparedCandidate:
         self.create_preprocessor = create_preprocessor
 
     def fit(self, X, y, context):
+        if self.config.get('ensemble_components') and self.config.get('model_params', {}).get('method') == 'stack':
+            self.estimator = self.create_model(self.config)
+            fit_stack = getattr(self.estimator, 'fit_stack', None)
+            if not callable(fit_stack):
+                raise ValueError('Stacking requires fit_stack(X,y,context,create_preprocessor) for fold-local preprocessing')
+            self.preprocessor = None
+            fit_stack(X, y, context, self.create_preprocessor)
+            return self
         try:
             self.preprocessor = self.create_preprocessor(self.config)
             train_context = replace(context, validation_X=None, validation_y=None,
@@ -73,6 +81,8 @@ class PreparedCandidate:
         return self
 
     def predict(self, X, prediction_spec):
+        if self.preprocessor is None:
+            return self.estimator.predict(X, prediction_spec)
         try:
             values = self.preprocessor.transform(X)
             if values.shape[0] != len(X): raise ValueError('Preprocessing must preserve inference rows')
@@ -124,6 +134,15 @@ def load_module(code_dir: str | Path):
     sys.path.insert(0, str(root))
     try:
         module = _execute_module(path, name)
+        preprocessing = root/'preprocessing.py'
+        separate = False
+        if preprocessing.is_file():
+            tree=ast.parse(preprocessing.read_text(encoding='utf-8'))
+            separate=any(isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='MLMOM_PREPROCESSOR_V1' for t in node.targets)
+                         and isinstance(node.value,ast.Constant) and node.value.value is True for node in tree.body)
+        if separate:
+            pre_name = name+'_pre_'+hashlib.sha256(preprocessing.read_bytes()).hexdigest()[:12]
+            pre_module = _execute_module(preprocessing, pre_name)
         import cloudpickle
         cloudpickle.register_pickle_by_value(module)
         for imported in list(sys.modules.values()):
@@ -136,15 +155,7 @@ def load_module(code_dir: str | Path):
         sys.modules.update(previous)
     if not callable(getattr(module, 'create_candidate', None)) or not callable(getattr(module, 'load_candidate', None)):
         raise ValueError('Candidate must export create_candidate(config), load_candidate(artifact_dir)')
-    preprocessing = root/'preprocessing.py'
-    separate = False
-    if preprocessing.is_file():
-        tree=ast.parse(preprocessing.read_text(encoding='utf-8'))
-        separate=any(isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='MLMOM_PREPROCESSOR_V1' for t in node.targets)
-                     and isinstance(node.value,ast.Constant) and node.value.value is True for node in tree.body)
     if separate:
-        pre_name = name+'_pre_'+hashlib.sha256(preprocessing.read_bytes()).hexdigest()[:12]
-        pre_module = _execute_module(preprocessing, pre_name)
         create_model, load_model = module.create_candidate, module.load_candidate
         factory = getattr(pre_module, 'create_preprocessor', None)
         if not callable(factory): raise ValueError('preprocessing.py must export create_preprocessor(config)')
