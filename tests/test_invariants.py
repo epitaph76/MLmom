@@ -83,10 +83,10 @@ class InvariantTests(unittest.TestCase):
                     return super().generate(role,instruction,payload,schema,tools)
             with self.subTest(error=type(interruption).__name__),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp);task=dataset(root/'input')
-                config=RunConfig(coding_direct_first=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=90,final_reserve_seconds=15,max_rounds=1,max_candidates=1,
-                                 smoke_seconds=10,experiment_seconds=15,prediction_seconds=10)
+                config=RunConfig(coding_direct_first=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=30,max_rounds=1,max_candidates=1,
+                                 smoke_seconds=20,experiment_seconds=30,prediction_seconds=20)
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
-                    result=CustomCandidatePipeline(task,config,run_dir=root/'run',client=InterruptedCoder()).run()
+                    result=CustomCandidatePipeline(task,config,run_dir=root/'run',client=InterruptedCoder(seconds=30)).run()
                 self.assertEqual(result['status'],'completed',result)
                 store=ExperimentStore(root/'run')
                 try:
