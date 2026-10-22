@@ -64,7 +64,7 @@ class SkillTests(unittest.TestCase):
                 self.assertEqual(manifest.ml_tools, [tool])
         for key, manifest in registry.manifests.items():
             with self.subTest(skill=key):
-                self.assertEqual(manifest.status, 'placeholder' if key in {'result_validator','hypothesis_generator','planner'} else 'ready')
+                self.assertEqual(manifest.status, 'ready')
                 self.assertRegex(manifest.version, r'^\d+\.\d+\.\d+$')
                 text = (registry.paths[key] / 'SKILL.md').read_text(encoding='utf-8')
                 self.assertTrue(text.isascii(), 'Runtime instructions must remain compact English text')
