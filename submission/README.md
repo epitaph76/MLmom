@@ -1,3 +1,13 @@
+# Выпуск A → B → C — 22.10.2026
+
+Текущая сборка: [mlmom-solution.zip](mlmom-solution.zip), SHA256
+`5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92`.
+Её актуальный статус находится в [validation.json](validation.json) и
+[отчёте приёмки](../VALIDATION.md). Архивы с другими именами и сведения ниже
+относятся к предыдущим сборкам.
+
+---
+
 # Исправление окружения worker — 22.10.2026
 
 Актуальная версия: [mlmom-organizers-20261022.zip](mlmom-organizers-20261022.zip),
