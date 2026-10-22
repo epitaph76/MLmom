@@ -66,7 +66,7 @@ def default_space(tool, params):
 
 
 def run_search(objective, *, directory, identity, space, direction, seed, max_trials,
-               batch_size=5, gain_threshold=.005, seconds=600, baseline_score=None, checkpoint=None, trial_checkpoint=None):
+               batch_size=5, gain_threshold=.005, seconds=600, baseline_score=None, checkpoint=None, trial_checkpoint=None,timeouts_enabled=True):
     """Continue a study in batches. Persist decisions and every finished trial."""
     directory=Path(directory); directory.mkdir(parents=True,exist_ok=True)
     digest=hashlib.sha256(json.dumps(dict(identity=identity,space=space,direction=direction),
@@ -74,10 +74,12 @@ def run_search(objective, *, directory, identity, space, direction, seed, max_tr
     database=directory/'studies.sqlite3'
     path=directory/f'{digest}.json'
     state=json.loads(path.read_text(encoding='utf-8')) if path.exists() else dict(
-        identity=identity,study_name=digest,batches=[],spent_seconds=0.,deadline=time.time()+seconds,
+        identity=identity,study_name=digest,batches=[],spent_seconds=0.,deadline=time.time()+seconds if timeouts_enabled else None,timeouts_enabled=timeouts_enabled,
         baseline_score=baseline_score,stop_reason=None)
     # Resume consumes the original wall-clock window, including interruptions.
-    until=min(state['deadline'],time.time()+seconds)
+    if state.get('timeouts_enabled',True)!=timeouts_enabled:raise ValueError('Resume requires the same timeout policy')
+    from .time_policy import UNBOUNDED_SECONDS
+    until=min(state['deadline'],time.time()+seconds) if timeouts_enabled else UNBOUNDED_SECONDS
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     from sqlalchemy.pool import NullPool
     storage=optuna.storages.RDBStorage('sqlite:///'+database.as_posix(),engine_kwargs={'poolclass':NullPool})

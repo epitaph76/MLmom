@@ -10,6 +10,9 @@ learns only from current training rows; validation uses transform. Fixed refit u
 on all permitted rows with selected model parameters. Preserve rows, groups, weights and class order.
 
 CPU only: respect context.cpus/memory_gb/remaining_seconds. No external data, network, credentials,
-pretrained models, shell or pip. Only mlmom.sdk and mlmom.ensemble infrastructure imports are allowed.
+pretrained models, shell or pip. Only mlmom.sdk infrastructure imports are allowed.
+Candidate ensembles, blending and OOF stacking are allowed. Persist every component;
+fit stack meta learners on OOF base predictions with preprocessing inside each base fold.
+Hard timeouts are opt-in; CPU, memory and data-isolation constraints always apply.
 Use work_dir for temporary state and artifact_dir for portable inference files. Never persist training
 records or FitContext. No training at import/load/predict. No nested HPO inside candidate.fit.

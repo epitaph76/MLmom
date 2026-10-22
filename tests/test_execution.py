@@ -35,7 +35,7 @@ def execution_case(root, kind, tool='sklearn'):
     outputs=names or ['cluster']
     task=TaskDefinition(objective='Synthetic integration',task_type=kind,target_columns=names,id_columns=['id'],
         group_columns=groups,excluded_feature_columns=['id']+names,primary_metric=metric,metric_direction=direction,
-        validation_strategy='group_kfold' if groups else 'stratified_kfold' if 'classification' in kind else 'kfold',
+        validation_strategy='group_kfold' if groups else 'holdout' if kind=='multilabel_classification' else 'stratified_kfold' if 'classification' in kind else 'kfold',
         result_format=ResultFormat(file_name='submission.csv',columns=['id']+outputs,id_columns=['id'],prediction_columns=outputs))
     files=InputFiles(task=str(root/'task.md'),root=str(root),train=str(data),test=str(data),dictionaries=[])
     context=TaskContext(task_id='test',task=task,files=files,profile_ref='',feature_columns=X.columns.tolist(),
@@ -64,7 +64,7 @@ class NamedCandidate(LibraryCandidate):
 def create_candidate(config):return NamedCandidate(config)
 def load_candidate(artifact_dir):return load_adapter(artifact_dir)
 '''
-        with tempfile.TemporaryDirectory() as temp,SandboxManager() as manager:
+        with tempfile.TemporaryDirectory() as temp,SandboxManager(timeouts_enabled=True) as manager:
             root=Path(temp);source=root/'code';source.mkdir();(source/'candidate.py').write_text(code,encoding='utf-8')
             result=manager.run(dict(action='smoke',code_dir=str(source),code_hash=tree_hash(source),
                 config={'tool_id':'sklearn','model_params':{'n_estimators':8}},task_type='multiclass_classification',
@@ -85,7 +85,7 @@ def load_candidate(artifact_dir):return load_adapter(artifact_dir)
                 frame,context,plan,code=execution_case(root,kind,tool)
                 split=make_split(frame,context,'r1',.25,42)
                 training=root/'allowed-train.csv';frame.iloc[split.train_indices].to_csv(training,index=False)
-                manager=SandboxManager();self.addCleanup(manager.close)
+                manager=SandboxManager(timeouts_enabled=True);self.addCleanup(manager.close)
                 request=dict(action='train',code_dir=str(code),code_hash=tree_hash(code),context=context.model_dump(mode='json'),
                     plan=plan.model_dump(mode='json'),train_path=str(training),seed=42)
                 result=manager.run(request,root/'fit',seconds=25,memory_gb=2,cpus=1)
@@ -109,7 +109,7 @@ def load_candidate(artifact_dir):return load_adapter(artifact_dir)
             root=Path(tmp);frame,context,plan,code=execution_case(root,'regression')
             plan.strategy='optuna';plan.search_space={'max_depth':{'type':'int','low':1,'high':4}}
             plan.max_trials=4;plan.patience_trials=2
-            manager=SandboxManager();self.addCleanup(manager.close)
+            manager=SandboxManager(timeouts_enabled=True);self.addCleanup(manager.close)
             result=manager.run(dict(action='train',code_dir=str(code),code_hash=tree_hash(code),context=context.model_dump(mode='json'),
                 plan=plan.model_dump(mode='json'),train_path=str(root/'train.csv'),seed=42),root/'hpo',seconds=25,memory_gb=2,cpus=1)
             self.assertEqual(result['status'],'completed',result)
@@ -124,7 +124,7 @@ def load_candidate(artifact_dir):return load_adapter(artifact_dir)
             with self.subTest(reason=reason),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);code=root/'code';code.mkdir()
                 (code/'candidate.py').write_text('import time\ndef create_candidate(config):\n    time.sleep(60)\ndef load_candidate(path):\n    pass\n',encoding='utf-8')
-                manager=SandboxManager();self.addCleanup(manager.close)
+                manager=SandboxManager(timeouts_enabled=True);self.addCleanup(manager.close)
                 before=time.monotonic()
                 result=manager.run(dict(action='smoke',code_dir=str(code),config={'tool_id':'sklearn'}),root/'job',seconds=seconds,memory_gb=memory,cpus=1)
                 self.assertEqual(result['status'],'failed')

@@ -24,7 +24,7 @@ Optuna scheduling and final refit. Never put targets, IDs, group/fold markers or
 information into model features unless the confirmed task explicitly makes them features.
 
 Match strategy to the backend and stage. A lightweight first fit is `single`, fixed,
-cheap, `max_trials=1`, without ensembles or native AutoML; a small compatible
+cheap, `max_trials=1`, without native AutoML; a small compatible
 `search_space` may describe later HPO. Later ordinary estimators use `optuna` when search
 is justified. Native AutoML uses `native` and its supported patience behavior. Parameters
 must be consumed by the implementation, and infrastructure controls such as thread counts,
@@ -52,3 +52,25 @@ Decision examples:
   estimator with bounded parameters, and compare on the runner's supplied split.
 - Reject: request 99 CPUs, hide an internal CV loop in candidate code, or repeat a backend
   that the previous failure reports as unavailable.
+
+Internal validation belongs to the runner: one trial completes every confirmed
+validation_folds with fresh model and preprocessing, then a fresh full-train
+refit. Ordinary CV provides no validation_X for early stopping. Native AutoML
+requires the backend verified validation_strategies and a saved configuration
+that refits without search. Do not silently replace CV by holdout.
+
+Ensembles are allowed: name components, their backend skills and blending or
+stacking operations. Stacking meta learners must use OOF base predictions, with
+trainable preprocessing and target encoding fitted within each base fold and
+groups kept separate. Persist every component and meta-model for portable load.
+Implement the ensemble in candidate code; do not forward to runtime adapters.
+
+Hard timeouts are off by default. When budget.timeouts_enabled=true, honor the
+explicit stage and project deadlines, including all folds and full refit. CPU,
+memory, trial-count and methodological constraints always apply.
+
+search_space uses typed dictionaries, never grid lists. Example:
+{"learning_rate":{"type":"float","low":0.03,"high":0.1},
+ "num_leaves":{"type":"int","low":15,"high":63},
+ "boosting_type":{"type":"categorical","choices":["gbdt"]}}
+Only include dimensions actually consumed by the candidate.

@@ -7,13 +7,14 @@ from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
 
 
 class RunConfig(StrictModel):
+    timeouts_enabled: bool = False
     profile: Literal['dev', 'platform'] = 'platform'
     total_seconds: float = Field(10800, gt=0)
     final_reserve_seconds: float = Field(2400, ge=0)
     first_submission_seconds: float = Field(600, gt=0)
     experiment_seconds: float = Field(1800, gt=0)
-    initial_experiment_seconds: float = Field(300, gt=0, le=300)
-    coding_seconds: float = Field(300, gt=0, le=300)
+    initial_experiment_seconds: float = Field(300, gt=0)
+    coding_seconds: float = Field(300, gt=0)
     prediction_seconds: float = Field(180, gt=0)
     max_rounds: int = Field(100, ge=1)
     plateau_rounds: int = Field(5, ge=1)
@@ -56,17 +57,17 @@ class RunConfig(StrictModel):
     diagnostic_features: int = Field(20, ge=1)
     target_completed_rounds: int = Field(0, ge=0)
     fixed_outer_split: bool = False
-    training_control_seconds: float = Field(30, gt=0, le=30)
+    training_control_seconds: float = Field(30, gt=0)
     initial_reconnaissance_seconds: float = Field(300, gt=0)
     reconnaissance_seconds: float = Field(120, gt=0)
     reconnaissance_steps: int = Field(20, ge=1, le=50)
     reconnaissance_query_seconds: float = Field(30, gt=0)
     context_seconds: float = Field(120, gt=0)
-    result_validation_seconds: float = Field(30, gt=0, le=60)
+    result_validation_seconds: float = Field(30, gt=0)
 
     @model_validator(mode='after')
     def valid_reserve(self):
-        if self.final_reserve_seconds >= self.total_seconds:
+        if self.timeouts_enabled and self.final_reserve_seconds >= self.total_seconds:
             raise ValueError('final_reserve_seconds must be smaller than total_seconds')
         return self
 
@@ -121,9 +122,11 @@ class MLToolSpec(StrictModel):
     supports_groups: bool = False
     supports_patience: bool = False
     adapter: str
+    validation_strategies: list[str] = Field(default_factory=lambda: ['holdout','kfold','stratified_kfold','group_kfold'])
 
 
 class BudgetSnapshot(StrictModel):
+    timeouts_enabled: bool = True
     remaining_seconds: float
     research_seconds: float
     available_cpus: int
@@ -207,6 +210,11 @@ class TrialResult(StrictModel):
     error: str | None = None
 
     kind: str = 'optuna'
+    validation_protocol_ref: str | None = None
+    fold_results: list[dict[str, Any]] = Field(default_factory=list)
+    score_std: float | None = None
+    oof_score: float | None = None
+    oof_ref: str | None = None
 
 
 class ExperimentRun(StrictModel):
@@ -230,6 +238,12 @@ class ExperimentRun(StrictModel):
     error: str | None = None
     study_ref: str | None = None
     hpo_batches: list[dict[str, Any]] = Field(default_factory=list)
+    validation_protocol_ref: str | None = None
+    fold_results: list[dict[str, Any]] = Field(default_factory=list)
+    score_std: float | None = None
+    oof_score: float | None = None
+    oof_ref: str | None = None
+    full_refit: bool = False
 
 
 class EvaluationResult(StrictModel):

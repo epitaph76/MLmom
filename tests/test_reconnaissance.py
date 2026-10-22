@@ -87,8 +87,8 @@ class CSVEngineTests(unittest.TestCase):
         self.assertEqual(self.run_csv('query',sql="SELECT 'read_csv' AS text FROM train LIMIT 1")['rows'][0]['text'],'read_csv')
 
     def test_csv_worker_uses_real_scheduler_and_obeys_deadline(self):
-        config=RunConfig(total_seconds=60,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0)
-        with SandboxManager(budget=Budget(config,time.time()),max_workers=1) as sandbox:
+        config=RunConfig(timeouts_enabled=True,total_seconds=60,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0)
+        with SandboxManager(timeouts_enabled=True,budget=Budget(config,time.time()),max_workers=1) as sandbox:
             req=dict(action='csv',operation='query',tables=self.tables,cache_dir=str(self.root/'cache'),sql='SELECT COUNT(*) AS n FROM train')
             result=sandbox.run(req,self.root/'worker',seconds=15,memory_gb=2,cpus=1)
             self.assertEqual(result['status'],'completed',result);self.assertEqual(result['rows'],[{'n':250}])
@@ -103,7 +103,7 @@ class ScoutingTests(unittest.TestCase):
         self.profile=DataInspector().inspect_directory(self.task.parent)
         self.store=ExperimentStore(self.root/'run');self.addCleanup(self.store.close)
         atomic_json(self.store.root/'inspection'/'profile.json',self.profile)
-        self.config=RunConfig(total_seconds=1000,final_reserve_seconds=0)
+        self.config=RunConfig(timeouts_enabled=True,total_seconds=1000,final_reserve_seconds=0)
         self.clock=[time.time()]
         self.budget=SimpleNamespace(now=lambda:self.clock[0],cpus=2,memory_gb=4,
                                     snapshot=lambda:SimpleNamespace(research_seconds=1000))
@@ -145,6 +145,22 @@ class ScoutingTests(unittest.TestCase):
         feedback=[json.loads(m['content']) for m in messages if m['role']=='tool']
         self.assertTrue(any(item.get('data',{}).get('valid') is False for item in feedback))
         self.assertEqual(client.max_steps,2)
+
+    def test_confirmation_accepts_json_string_with_unchanged_validation_and_deadline(self):
+        session=self.session();deadline=session.deadline
+        task=json.loads(OfflineLLM().complete([{'content':json.dumps({'dataset_inspection':{'task':self.profile.task.model_dump(mode='json')}})}]))
+        for invalid in ['{',json.dumps(task|dict(unexpected_field=True))]:
+            self.assertEqual(session.tools.invoke('confirm_task',{'task':invalid}).status,'error')
+            self.assertIsNone(self.store.get('confirmed_task','task'))
+        invalid=json.dumps(task|dict(target_columns=['invented']))
+        self.assertFalse(session.tools.invoke('confirm_task',{'task':invalid}).data['valid'])
+        self.assertIsNone(self.store.get('confirmed_task','task'))
+        result=session.tools.invoke('confirm_task',{'task':json.dumps(task)})
+        self.assertEqual(result.status,'ok',result)
+        self.assertTrue(result.data['valid'])
+        self.assertEqual(result.data,session.tools.invoke('confirm_task',{'task':task}).data)
+        self.assertEqual(session.tools.invoke('confirm_task',{'task':json.dumps(task|dict(primary_metric='mae'))}).status,'error')
+        self.assertEqual(session.deadline,deadline)
 
     def test_timeout_after_confirmation_keeps_findings_and_query_cache(self):
         parent=self

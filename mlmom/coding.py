@@ -33,6 +33,11 @@ export_model_params() should freeze selected tree counts/epochs/thresholds for v
 Prediction kinds: value, label, probability in context.classes order, cluster, ranking_score,
 anomaly_score (larger is more anomalous). SDK separately fits and persists preprocessing per fit.
 Use mlmom.sdk and installed selected libraries directly; no LibraryCandidate or hidden adapters.
+Candidate ensembles, voting and stacking are allowed when planned. Use OOF base predictions
+for stacking meta learners, with all trainable preprocessing fitted inside their base folds.
+Implement the candidate in its own code using installed libraries; infrastructure imports
+remain forbidden except mlmom.sdk. ExtraTrees and other single
+estimators remain allowed. In CV, validation_X is absent: fit fixed parameters without early stopping.
 CPU only; respect context resources and time. No network, pip, pretrained models, environment,
 shell, credentials or input-directory reads. Use X/y/context; save estimator files to artifact_dir.
 No training during import/load/predict. The SDK is installed; do not search for its source.
@@ -88,13 +93,17 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     window=store.get('coding_budget',budget_key)
     if window is None:
         started=budget.now()
-        window=dict(started=started,deadline=started+min(300,config.coding_seconds,coding_capacity()))
+        from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
+        window=dict(started=started,deadline=started+min(config.coding_seconds,coding_capacity()) if timeouts_enabled(config) else UNBOUNDED_SECONDS)
         store.put('coding_budget',budget_key,window,immutable=True)
 
     def remaining():
+        from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
+        if not timeouts_enabled(config):return UNBOUNDED_SECONDS
         return max(0.,min(window['deadline']-budget.now(),coding_capacity()))
     verification_reserve=min(config.coding_verification_seconds,
                              max(0,window['deadline']-window['started'])*.2)
+    if not getattr(config,'timeouts_enabled',True):verification_reserve=0
 
     def generation_remaining():
         return max(0.,remaining()-verification_reserve)
@@ -161,7 +170,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     def smoke_check() -> dict:
         report = source_report(workspace.root)
         if not report.valid: return report.model_dump()
-        seconds = min(config.smoke_seconds,remaining())
+        seconds = min(config.smoke_seconds,remaining()) if getattr(config,'timeouts_enabled',True) else remaining()
         if seconds < .5: return {'status':'failed','error':'No verification time remains'}
         directory = store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-{time.time_ns()}'
         return sandbox.run(dict(action='smoke',code_dir=str(workspace.root),config=plan.model_dump(mode='json'),
@@ -227,13 +236,14 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             shutil.copyfile(source,dest)
         digest = tree_hash(snapshot)
         if report.valid:
-            seconds = min(config.smoke_seconds,remaining())
+            seconds = min(config.smoke_seconds,remaining()) if getattr(config,'timeouts_enabled',True) else remaining()
             if seconds < .5:
                 report.errors.append('No smoke-check budget remains')
             else:
                 result = sandbox.run(dict(action='smoke',code_dir=str(snapshot),code_hash=digest,
                     config=plan.model_dump(mode='json'),task_type=context.task.task_type,
-                    metric=context.task.primary_metric,prediction_kind=plan.prediction_kind,**smoke_schema),
+                    metric=context.task.primary_metric,prediction_kind=plan.prediction_kind,
+                    verify_frozen=plan.strategy=='native',native_holdout=plan.strategy=='native',**smoke_schema),
                     store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
                     seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
                 if result['status']!='completed': report.errors.append(result.get('error') or result.get('stop_reason','Smoke failed'))

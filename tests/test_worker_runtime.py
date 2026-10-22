@@ -74,7 +74,7 @@ print(json.dumps(result))
                 root = Path(temp)
                 client = OfflineLLM()
                 pipeline = Pipeline(dataset(root/'input'),
-                    RunConfig(total_seconds=60, final_reserve_seconds=10),
+                    RunConfig(timeouts_enabled=True,total_seconds=60, final_reserve_seconds=10),
                     run_dir=root/'run', client=client)
                 with patch.object(pipeline.sandbox, 'run', return_value=response) as launch, \
                      patch.object(pipeline, 'graph') as graph:

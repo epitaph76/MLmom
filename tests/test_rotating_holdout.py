@@ -13,7 +13,7 @@ class RotatingHoldoutTests(unittest.TestCase):
     def test_failed_incumbent_recheck_does_not_complete_cycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             pipeline=object.__new__(Pipeline)
-            pipeline.config=RunConfig(max_rounds=6,target_completed_rounds=3)
+            pipeline.config=RunConfig(timeouts_enabled=True,max_rounds=6,target_completed_rounds=3)
             pipeline.store=ExperimentStore(Path(tmp))
             pipeline.review_results=lambda *args:None
             pipeline.scout=lambda *args:None

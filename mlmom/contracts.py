@@ -140,6 +140,7 @@ class TaskDefinition(StrictModel):
     metric_options: dict[str, Any] = Field(default_factory=dict)
     metric_direction: MetricDirection
     validation_strategy: ValidationStrategy
+    validation_folds: int = Field(5, ge=2)
     result_format: ResultFormat
     requirements: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)

@@ -4,6 +4,10 @@ description: Use LightAutoML 0.4.2 through the restricted untuned tabular lgb/cb
 ---
 # LightAutoML 0.4.2
 
+The generated path is not admitted yet: validation_strategies is empty until
+non-ensemble holdout search, frozen full refit and relocation are verified.
+The API notes below are compatibility references, not planner permission.
+
 Only regression/binary/multiclass; strategy='native', patience_trials=null. Supported metrics are rmse/roc_auc/log_loss but uses Task defaults: regression RMSE, binary AUC, multiclass cross-entropy. Require an exact task/metric match; an accepted name alone does not imply correct optimization.
 
 The generated candidate implements timeout, cpu_limit, memory_limit, gpu_ids='', general_params={'use_algos':[['lgb','cb']]} and reader_params cv=3/seed. Never override them, add *_tuned algorithms or nest Optuna. Leave memory headroom: preset memory management is limited. No text/pretrained pipelines.

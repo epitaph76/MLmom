@@ -298,7 +298,7 @@ class TaskValidator:
                     expected=ValidationStrategy.TIME_SERIES_SPLIT,
                     actual=task.validation_strategy,
                 )
-        elif task.group_columns and task.validation_strategy != ValidationStrategy.GROUP_KFOLD:
+        elif task.group_columns and task.validation_strategy not in {ValidationStrategy.GROUP_KFOLD, ValidationStrategy.HOLDOUT}:
             add(
                 "group_leakage_validation",
                 "Grouped data requires group-aware validation.",

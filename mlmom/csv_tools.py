@@ -195,6 +195,9 @@ class CSVTools:
         if saved:
             return saved
         seconds = min(self.query_seconds, self.deadline-self.budget.now(), self.budget.snapshot().research_seconds)
+        if not getattr(self.budget,'timeouts_enabled',True):
+            from .time_policy import UNBOUNDED_SECONDS
+            seconds=UNBOUNDED_SECONDS
         if seconds <= .1:
             raise ValueError('No reconnaissance calculation time remains')
         directory = self.store.root/'reconnaissance'/self.key/'queries'/identity

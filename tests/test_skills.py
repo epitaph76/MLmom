@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import shutil
 import tempfile
 import unittest
@@ -49,7 +50,9 @@ class SkillTests(unittest.TestCase):
             self.assertNotEqual(before['candidate_sdk'], after['candidate_sdk'])
             self.assertTrue(all(before[k] == after[k] for k in CORE_SKILLS[1:]))
             manifest = root / 'plan_validator' / 'validation' / 'manifest.json'
-            manifest.write_text(manifest.read_text(encoding='utf-8').replace('1.0.0', '1.0.1'), encoding='utf-8')
+            data=json.loads(manifest.read_text(encoding='utf-8'))
+            a,b,c=map(int,data['version'].split('.'));data['version']=f'{a}.{b}.{c+1}'
+            manifest.write_text(json.dumps(data),encoding='utf-8')
             changed = {s['skill_id']: s['sha256'] for s in registry.load([], 'regression')}
             self.assertNotEqual(after['validation'], changed['validation'])
 
@@ -100,7 +103,7 @@ class SkillTests(unittest.TestCase):
         regression = {s['skill_id']: s for s in registry.technique_catalog('regression')}
         classification = {s['skill_id']: s for s in registry.technique_catalog('multiclass_classification')}
         self.assertEqual(set(regression), {key for key, owner in registry.owners.items()
-                                          if owner == 'preprocessing_agent'})
+                        if owner == 'preprocessing_agent'} | {'ensembles'})
         self.assertEqual(set(classification), set(regression) | {'imbalance'})
         self.assertEqual(classification['imbalance']['owner'], 'coding_agent')
         for card in classification.values():

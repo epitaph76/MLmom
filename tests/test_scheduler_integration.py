@@ -41,7 +41,7 @@ class AlternativeFailure(OfflineLLM):
 class SchedulerIntegrationTests(unittest.TestCase):
     def test_all_worker_actions_share_cpu_memory_and_slot_admission(self):
         with tempfile.TemporaryDirectory() as tmp:
-            manager=SandboxManager(budget=budget(),max_workers=3)
+            manager=SandboxManager(timeouts_enabled=True,budget=budget(),max_workers=3)
             manager.jobs=[SimpleNamespace(released=False,cpus=1,memory_gb=3,poll=lambda:None)]
             for action in ['runtime_check','inspect','probe','smoke','train','predict','inspect_api']:
                 with self.subTest(action=action),patch('mlmom.resources.subprocess.Popen') as popen:
@@ -55,7 +55,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
             self.assertFalse(manager.can_start(cpus=1,memory_gb=1))
 
     def test_expired_research_still_protects_final_reserve(self):
-        manager=SandboxManager(budget=budget(now=85))
+        manager=SandboxManager(timeouts_enabled=True,budget=budget(now=85))
         self.assertEqual(manager.time_left({'action':'train','fixed':True}),0)
         self.assertEqual(manager.time_left({'action':'train','phase':'final'}),15)
         self.assertEqual(manager.time_left({'action':'predict'}),15)
@@ -79,7 +79,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
             (first/'result.json').write_text('{broken')
             exited=Mock(poll=Mock(return_value=0),returncode=0)
             active=Mock(poll=Mock(return_value=None),returncode=-1,pid=123456789)
-            manager=SandboxManager(budget=budget())
+            manager=SandboxManager(timeouts_enabled=True,budget=budget())
             manager.jobs=[Job(exited,first,time.monotonic(),10,1,1,Mock(),Mock()),
                           Job(active,second,time.monotonic(),10,1,1,Mock(),Mock())]
             with patch('mlmom.resources.terminate_tree') as stop:
@@ -90,7 +90,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
 
     def test_advanced_gate_requires_second_round_submission_and_budget(self):
         pipeline=object.__new__(Pipeline)
-        pipeline.config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,coding_seconds=100,prediction_seconds=10)
+        pipeline.config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,coding_seconds=100,prediction_seconds=10)
         pipeline.restore=lambda state:Mock()
         pipeline.preflight_tools=lambda **kwargs:None
         pipeline.client=OfflineLLM()
@@ -116,7 +116,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         from mlmom.persistence import ExperimentStore
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
-            config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20)
+            config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20)
             original=Pipeline(task,config,run_dir=root/'run',client=OfflineLLM())
             original.store.put('budget','current',{'final_reserve_seconds':55})
             cached={'valid':True,'plans':[{'marker':'exact saved parameters'}]}
@@ -136,7 +136,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             client=AlternativeFailure(task.parent/'submission.csv')
-            config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,max_rounds=1,max_attempts=1,
+            config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,max_rounds=1,max_attempts=1,
                              prediction_seconds=10,smoke_seconds=15,first_submission_seconds=.001)
             with patch('mlmom.pipeline.installed_tools',only_sklearn):
                 result=Pipeline(task,config,run_dir=root/'run',client=client).run()

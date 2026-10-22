@@ -4,5 +4,6 @@
   "final_reserve_seconds": 2400,
   "first_submission_seconds": 600,
   "max_workers": 3,
-  "plateau_rounds": 5
+  "plateau_rounds": 5,
+  "timeouts_enabled": false
 }

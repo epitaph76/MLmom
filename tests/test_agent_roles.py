@@ -31,6 +31,21 @@ def checkpoint(**updates):
 
 
 class RoleSkillTests(unittest.TestCase):
+    def test_review_distinguishes_comparable_gain_missing_evidence_and_unknown(self):
+        registry=SkillRegistry(ROOT/'skills')
+        cards=registry.load([], 'regression',role='result_validator')
+        class Reviewer:
+            def generate(self,role,instruction,payload,schema,tools=None):
+                if payload.get('invent_reference'):
+                    return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['invented'])
+                return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['r2-score'])
+        for comparable,expected in [(True,'supported'),(False,'inconclusive')]:
+            report=review_result(Reviewer(),dict(comparable_reference=comparable,evidence_refs=['r2-score']),cards,'review',1)
+            self.assertEqual(report.effect,expected)
+            self.assertEqual(report.implementation,'matches')
+        report=review_result(Reviewer(),dict(invent_reference=True,evidence_refs=['r2-score']),cards,'review',1)
+        self.assertEqual((report.implementation,report.effect),('unknown','inconclusive'))
+
     def test_each_role_cannot_read_another_role_cards(self):
         registry=SkillRegistry(ROOT/'skills')
         for role in ROLE_DEFAULTS:
@@ -41,7 +56,11 @@ class RoleSkillTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'not available'):
                         registry.load([key],'regression',role=role)
         placeholders=[s for s in registry.list() if s['status']=='placeholder']
-        self.assertEqual(placeholders,[])
+        self.assertEqual(placeholders, [])
+        for role in ['planner','hypothesis_generator','result_validator']:
+            loaded=registry.load([], 'regression',role=role)
+            self.assertIn(role,[card['skill_id'] for card in loaded])
+            self.assertTrue(all(card['status']=='ready' for card in loaded))
 
     def test_writes_are_checked_after_path_normalization(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,7 +94,7 @@ class SeparatePreprocessingTests(unittest.TestCase):
             context,tools,_,plan=case()
             result=build_coding_graph(client,workspace=root/'work',store=Store(root),plan=plan,
                 plan_ref=root/'plan.json',skill_data=[],tools=tools,context=context,sandbox=sandbox,
-                budget=budget,config=RunConfig(),round_id='r1').invoke({'payload':{}})
+                budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1').invoke({'payload':{}})
             self.assertTrue(result['valid'],result)
             self.assertEqual(client.pre_calls,2)
             self.assertEqual(client.calls,1)

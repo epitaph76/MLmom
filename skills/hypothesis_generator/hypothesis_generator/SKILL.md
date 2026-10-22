@@ -45,3 +45,8 @@ Decision examples:
 - Reject: "try depth 8 instead of 6" is another parameter trial, not a new hypothesis.
 - Reject: repeat target encoding after it already failed from leakage unless the new idea
   names and tests the fold-local correction.
+
+Blending and OOF stacking are allowed hypotheses when diverse errors justify
+them; account for every component and preprocessing cost. The runner owns
+validation_strategy, all internal folds and fresh full-train refit. Timeouts are
+opt-in; do not invent a hard deadline when timeouts_enabled=false.

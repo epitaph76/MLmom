@@ -64,7 +64,7 @@ class Pipeline:
         if client is None:
             from dataclasses import replace
             settings=LLMSettings.from_platform_env() if config.profile=='platform' else LLMSettings.from_env()
-            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds)
+            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds if config.timeouts_enabled else None)
         self.files = resolve_inputs(task_path)
         self.run_dir = (run_dir or Path(__file__).resolve().parent.parent/'artifacts'/f'{Path(self.files.root).name}-{uuid.uuid4().hex[:10]}').resolve()
         self.run_dir.mkdir(parents=True,exist_ok=True)
@@ -99,10 +99,13 @@ class Pipeline:
         self.checkpointer = SQLiteCheckpointer(str(self.run_dir/'checkpoints.sqlite3'))
         if client is None:
             client = RoleClient(settings,deadline=self.budget.deadline-self.budget.reserve,max_steps=config.agent_steps,
+                timeouts_enabled=config.timeouts_enabled,
                 planning_direct_first=config.planning_direct_first,planning_context_reads=config.planning_context_reads,
                 usage_callback=lambda usage:self.store.event('llm_usage','run',usage),
                 request_callback=lambda event:self.store.event('llm_request','run',event),budget_store=self.store)
         self.client = client
+        if isinstance(client,RoleClient):
+            client.timeouts_enabled=config.timeouts_enabled
         self.role_tools = ToolSet()
         self.role_tools.register('list_ml_tools',lambda:[s.model_dump(mode='json') for s in self.tools.values()], 'List installed, probed ML tools.')
         self.role_tools.register('list_skills',self.skills.list,'List registered instruction packages.')
@@ -261,7 +264,7 @@ class Pipeline:
         payload = dict(round_number=state['round_number'],task=context.task.model_dump(mode='json'),
             planning_attempt=state.get('planning_attempt',0),dataset_profile=profile_summary(profile),
             ml_tools=[{k:v for k,v in t.model_dump(mode='json').items() if k in
-                {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version'}}
+                {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version','validation_strategies'}}
                 for t in self.tools.values()],
             skills=self.skills.list(role='planner'),
             technique_skills=self.skills.technique_catalog(context.task.task_type),
@@ -279,11 +282,11 @@ class Pipeline:
         payload['improvement_policy']=dict(hpo_inside_hypothesis=self.config.hpo_enabled,
             batch_size=self.config.hpo_batch_size,relative_gain=self.config.hpo_gain_threshold,
             max_trials=self.config.hpo_max_trials,remaining_cycle_seconds=self.cycle_allowance(state['round_number']),
-            require_evidence=state['round_number']>1,ensembles=False,
+            require_evidence=state['round_number']>1,ensembles=True,timeouts_enabled=self.config.timeouts_enabled,
             outer_split_policy='fixed' if self.config.fixed_outer_split else 'reshuffle_each_cycle',
             comparison_policy='Retrain champion code with saved best parameters on this cycle train; compare only on this cycle holdout. Previous-cycle scores are historical, not a promotion threshold.',
             note='Use prior diagnostics/trials to change model logic or preprocessing; parameter trials are NOT new hypotheses. '
-                 'If custom code generation timed out, prefer a ready adapter or simpler implementation rather than repeating it. '
+                 'After implementation failure, simplify the candidate code or fix the specific diagnosed operation. '
                  'Use strategy=optuna with a small compatible space after baseline. For text use sklearn estimator=linear, C for classification or alpha for regression.')
         payload['first_candidate_required']=not bool(self.last_submission)
         payload['artifact_refs']=dict(profile=context.profile_ref,history='experiments.sqlite3',
@@ -360,6 +363,7 @@ class Pipeline:
                 job.seconds-(time.monotonic()-job.started),self.budget.snapshot().research_seconds))
             live=checkpoint.model_copy(update={'checkpoint_id':key,'remaining_seconds':remaining})
             seconds=min(self.config.training_control_seconds,remaining) if job.process.poll() is None else 0.
+            if not self.config.timeouts_enabled and job.process.poll() is None:seconds=remaining
             decision=decide(self.client,live,self.skills.load([],self.context.task.task_type,role='training_agent'),seconds=seconds) if seconds>.5 else TrainingDecision(action=checkpoint.default_action,reason='No control budget')
             # A worker timeout may have committed its fallback during the API call.
             decision=TrainingDecision.model_validate(commit_mailbox(response,decision))
@@ -623,7 +627,8 @@ class Pipeline:
                         duration_seconds=t['duration_seconds'],error=t['error'],kind='optuna') for t in state['trials']]
             if result.get('status')!='completed':
                 progress = Path(self.run_dir/'runs'/run.experiment_id/'progress.json')
-                if result.get('stop_reason')=='time_limit' and progress.exists():
+                if (result.get('stop_reason')=='time_limit' and progress.exists()
+                        and json.loads(progress.read_text(encoding='utf-8')).get('full_refit')):
                     result = dict(json.loads(progress.read_text(encoding='utf-8')),trials=result.get('trials',json.loads(progress.read_text(encoding='utf-8')).get('trials',[])),stop_reason='time_limit_best_model',
                                   duration_seconds=result['duration_seconds'],peak_memory_gb=result['peak_memory_gb'])
             run = ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
@@ -731,7 +736,8 @@ class Pipeline:
                             finished(candidate,plan,run,result);pending.remove(entry);continue
                     self.store.put('experiment',experiment_id,run)
                     req=dict(action='train',code_dir=candidate.code_dir,code_hash=candidate.code_hash,context=self.sanitized_context(train_path),
-                        plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent)
+                        plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent,
+                        outer_split_id=split.split_id, outer_train_indices=split.train_indices)
                     req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_gain_threshold','hpo_seconds')})
                     req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
                     initial=next((r for r in results if r['candidate']['candidate_id']==candidate.candidate_id and r['plan']['strategy']=='single'),None)
@@ -879,6 +885,7 @@ class Pipeline:
             key=row['run']['experiment_id']
             if self.store.get('result_review',key):continue
             seconds=min(self.config.result_validation_seconds,self.budget.snapshot().research_seconds)
+            if not self.config.timeouts_enabled:seconds=self.budget.snapshot().research_seconds
             if seconds<.5:continue
             code_root=Path(row['candidate']['code_dir'])
             sources={p.relative_to(code_root).as_posix():p.read_text(encoding='utf-8') for p in code_root.rglob('*.py')}

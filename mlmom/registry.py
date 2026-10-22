@@ -21,6 +21,9 @@ ROLE_DEFAULTS = {
                                   'context_agent', 'hypothesis_generator', 'planner')},
 }
 LIGHTAUTOML_OBJECTIVES = {'regression':'rmse','binary_classification':'roc_auc','multiclass_classification':'log_loss'}
+# Only independently exercised generated-code protocols are admitted. The old
+# compatibility adapters and a library's advertised CV do not establish support.
+NATIVE_VALIDATION = {'flaml': ['holdout'], 'autogluon': [], 'lightautoml': []}
 DEFINITIONS = [
     ('sklearn','scikit-learn','sklearn','1.5.2',MULTI+['clustering','anomaly_detection'],'fast',False,True,False),
     ('catboost','catboost','catboost','1.2.8',MULTI+['ranking'],'medium',False,True,True),
@@ -49,7 +52,8 @@ def installed_tools() -> dict[str, MLToolSpec]:
             prediction_kinds=['value','label','probability'] + (['ranking_score'] if 'ranking' in tasks else [])
             + (['cluster','anomaly_score'] if tool=='sklearn' else []), skill_ids=[tool],
             cost_tag=cost, native_hpo=native, supports_weights=weights, supports_groups=groups,
-            supports_patience=not native, adapter='generated_candidate')
+            supports_patience=not native, adapter='generated_candidate',
+            validation_strategies=NATIVE_VALIDATION[tool] if native else ['holdout','kfold','stratified_kfold','group_kfold'])
     return result
 
 
@@ -98,7 +102,7 @@ class SkillRegistry:
         return [dict(skill_id=s.skill_id, title=s.title, owner=self.owners[s.skill_id],
                      task_types=list(s.task_types))
                 for s in self.manifests.values()
-                if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id == 'imbalance')
+                if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id in {'imbalance','ensembles'})
                 and s.status == 'ready' and (not s.task_types or task_type in s.task_types)]
 
     def load(self, ids: list[str], task_type: str, *, role=None, max_chars=24000,include_references=False):

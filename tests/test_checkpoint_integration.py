@@ -31,7 +31,7 @@ class CheckpointIntegrationTests(unittest.TestCase):
     def test_worker_consumes_decisions_before_next_batch_and_review_cannot_block_submission(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
-            config=RunConfig(total_seconds=240,final_reserve_seconds=30,max_rounds=1,max_candidates=1,
+            config=RunConfig(timeouts_enabled=True,total_seconds=240,final_reserve_seconds=30,max_rounds=1,max_candidates=1,
                 hpo_batch_size=2,hpo_max_trials=4,hpo_seconds=20,experiment_seconds=30,
                 initial_experiment_seconds=15,diagnostic_seconds=0,smoke_seconds=20,prediction_seconds=15,
                 reserve_cpus=0,reserve_memory_gb=0,max_workers=1)

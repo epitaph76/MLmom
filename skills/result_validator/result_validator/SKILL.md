@@ -49,3 +49,8 @@ Decision examples:
 - Unknown/inconclusive: candidate source or effective parameters are missing.
 - Not supported: a comparable same-split run implements the claim but fails its stated
   metric acceptance condition.
+
+Internal arithmetic mean, fold dispersion and pooled OOF metric are different
+evidence; none replaces the current external holdout comparison. The reference
+champion must be refitted with saved parameters on the same cycle train. A
+failed incumbent recheck or incomplete fold protocol leaves effect inconclusive.

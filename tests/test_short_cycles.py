@@ -14,7 +14,7 @@ class ShortCycleTests(unittest.TestCase):
     def test_selected_fit_budget_leaves_real_coding_window(self):
         context,tools,_,plan=case();plan.time_limit_seconds=300
         budget=ClockBudget();budget.elapsed=780
-        config=RunConfig(total_seconds=180,final_reserve_seconds=20,coding_seconds=60,
+        config=RunConfig(timeouts_enabled=True,total_seconds=180,final_reserve_seconds=20,coding_seconds=60,
             prediction_seconds=5,target_completed_rounds=3)
         pipeline=object.__new__(Pipeline);pipeline.config=config;pipeline.budget=budget
         pipeline.store=SimpleNamespace(list=lambda *a,**kw:[])
@@ -39,7 +39,7 @@ class ShortCycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);client=Direct(budget,5)
             result=build_coding_graph(client,workspace=root/'work',store=Store(root),plan=plan,plan_ref=root/'plan.json',
-                skill_data=[],tools=tools,context=context,sandbox=Sandbox(budget),budget=budget,config=RunConfig(),round_id='r2').invoke({'payload':{}})
+                skill_data=[],tools=tools,context=context,sandbox=Sandbox(budget),budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r2').invoke({'payload':{}})
             self.assertTrue(result['valid']);self.assertEqual(client.max_steps,12)
 
     def test_validator_is_told_min_delta_is_not_hpo_continuation(self):

@@ -20,5 +20,5 @@ questions; it does not establish absence of risks.
 
 Canonical target, metric/options/direction, IDs, exclusions, output schema and
 prediction kind are attached without summarization. The Planner can read the
-original task with read_task if a nuance is unclear. Your default time window is
-120 seconds inside the research budget; retries and resume share that deadline.
+original task with read_task if a nuance is unclear. Hard timeouts are off by default. When explicitly enabled, context_seconds limits
+this role and retries/resume share the original deadline.

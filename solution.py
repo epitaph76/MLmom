@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -25,11 +26,13 @@ def main():
     args=parser.parse_args()
     from mlmom.pipeline_contracts import RunConfig
     from mlmom.pipeline import Pipeline
-    raw=json.loads(args.config.read_text(encoding='utf-8')) if args.config else {}
+    config_path=args.config or (Path(os.environ['MLMOM_CONFIG']) if os.getenv('MLMOM_CONFIG') else None)
+    raw=json.loads(config_path.read_text(encoding='utf-8')) if config_path else {}
     if args.profile:raw['profile']=args.profile
     config=RunConfig.model_validate(raw)
     try:
-        pipeline=Pipeline(args.task,config,run_dir=args.run_dir,resume=args.resume,started=STARTED)
+        run_dir=args.run_dir or (Path(os.environ['MLMOM_RUN_DIR']) if os.getenv('MLMOM_RUN_DIR') else None)
+        pipeline=Pipeline(args.task,config,run_dir=run_dir,resume=args.resume,started=STARTED)
         result=pipeline.run(resume=args.resume)
     except Exception as error:
         result={'status':'failed','error':str(error)}

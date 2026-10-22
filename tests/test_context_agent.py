@@ -36,7 +36,7 @@ class ContextAgentTests(unittest.TestCase):
             metric_options={'multioutput':'uniform_average'},submission_kind='value')
         self.clock=[time.time()]
         self.budget=SimpleNamespace(now=lambda:self.clock[0],snapshot=lambda:SimpleNamespace(research_seconds=1000))
-        self.config=RunConfig()
+        self.config=RunConfig(timeouts_enabled=True)
         self.reports={'initial':dict(status='completed',observations=[dict(observation_id='tail',topic='target_tail',
             description='Heavy upper tail',rows=180,numbers={'q99':12.5},source_ref='csv:measured')],proposals=[])}
 
@@ -138,7 +138,7 @@ class ContextAgentTests(unittest.TestCase):
         self.assertIn('original_task_description',result)
 
     def test_planning_and_hypotheses_share_one_prepared_brief(self):
-        config=RunConfig(total_seconds=1800,final_reserve_seconds=0,prediction_seconds=1)
+        config=RunConfig(timeouts_enabled=True,total_seconds=1800,final_reserve_seconds=0,prediction_seconds=1)
         client=OfflineLLM()
         with patch('mlmom.pipeline.installed_tools',only_sklearn):
             pipeline=Pipeline(self.path,config,run_dir=self.root/'pipeline',client=client)

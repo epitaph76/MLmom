@@ -34,7 +34,7 @@ class LLMSettings:
     api_key: str
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
-    timeout_seconds: float = 120.0
+    timeout_seconds: float | None = 120.0
     # Accepted for compatibility with older callers; never sent to the provider.
     max_tokens: int | None = None
 

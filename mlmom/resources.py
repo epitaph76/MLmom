@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import psutil
 from .persistence import atomic_json
 from .pipeline_contracts import BudgetSnapshot, RunConfig
+from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
 
 
 class ResourceUnavailable(ValueError):
@@ -68,8 +69,9 @@ def capacity(config: RunConfig):
 class Budget:
     def __init__(self, config: RunConfig, started: float, *, deadline=None):
         self.config = config; self.started = started
-        self.deadline = deadline or started+config.total_seconds
-        self.reserve = config.final_reserve_seconds
+        self.timeouts_enabled = timeouts_enabled(config)
+        self.deadline = (deadline or started+config.total_seconds) if self.timeouts_enabled else UNBOUNDED_SECONDS
+        self.reserve = config.final_reserve_seconds if self.timeouts_enabled else 0
         self.cpus, self.memory_gb = capacity(config)
         self.monotonic_start = time.monotonic()
         self.wall_start = time.time()
@@ -78,9 +80,10 @@ class Budget:
         return self.wall_start+(time.monotonic()-self.monotonic_start)
 
     def snapshot(self):
-        remaining = max(0.,self.deadline-self.now())
+        remaining = max(0.,self.deadline-self.now()) if self.timeouts_enabled else UNBOUNDED_SECONDS
         return BudgetSnapshot(remaining_seconds=remaining,research_seconds=max(0.,remaining-self.reserve),
-            available_cpus=self.cpus,available_memory_gb=self.memory_gb,spent_seconds=max(0.,self.now()-self.started))
+            available_cpus=self.cpus,available_memory_gb=self.memory_gb,spent_seconds=max(0.,self.now()-self.started),
+            timeouts_enabled=self.timeouts_enabled)
 
 
 def terminate_tree(pid: int):
@@ -114,6 +117,7 @@ class Job:
     released: bool = False
     release_callback: object = None
     trace_context: dict | None = None
+    timeouts_enabled: bool = True
 
     def poll(self):
         # A controller can inspect a completed process after its wall-time
@@ -128,7 +132,7 @@ class Job:
             self.peak_memory_gb = max(self.peak_memory_gb,rss)
             if rss > self.memory_gb: self.reason = 'memory_limit'
         except psutil.Error: pass
-        if time.monotonic()-self.started > self.seconds: self.reason = 'time_limit'
+        if self.timeouts_enabled and time.monotonic()-self.started > self.seconds: self.reason = 'time_limit'
         if self.reason and self.process.poll() is None: terminate_tree(self.process.pid)
         return self.process.poll()
 
@@ -171,9 +175,10 @@ class Job:
 
 
 class SandboxManager:
-    def __init__(self, *, budget=None, max_workers=3):
+    def __init__(self, *, budget=None, max_workers=3,timeouts_enabled=None):
         self.jobs = []
         self.budget = budget
+        self.timeouts_enabled = getattr(budget,'timeouts_enabled',False) if timeouts_enabled is None else timeouts_enabled
         self.cpus, self.memory_gb = (budget.cpus, budget.memory_gb) if budget else capacity(RunConfig())
         self.max_workers = max_workers
     def __enter__(self):return self
@@ -210,7 +215,7 @@ class SandboxManager:
         return max(0., deadline-self.budget.now())
 
     def start(self, request: dict, directory: Path, *, seconds: float, memory_gb: float, cpus: int):
-        seconds = min(seconds, self.time_left(request))
+        seconds = min(seconds, self.time_left(request)) if self.timeouts_enabled else UNBOUNDED_SECONDS
         free = self.available()
         if seconds <= 0 or cpus < 1 or memory_gb <= 0 or not self.can_start(cpus=cpus,memory_gb=memory_gb):
             trace_event('scheduler.denied',dict(action=request.get('action'),directory=str(directory),
@@ -220,7 +225,7 @@ class SandboxManager:
         for name in ['result.json','limit.json']:
             (directory/name).unlink(missing_ok=True)
         request = dict(request, parent_pid=os.getpid(),parent_created=psutil.Process().create_time(),
-                       worker_seconds=seconds,worker_cpus=cpus,worker_memory_gb=memory_gb)
+                       worker_seconds=seconds,worker_cpus=cpus,worker_memory_gb=memory_gb,timeouts_enabled=self.timeouts_enabled)
         atomic_json(directory/'request.json',request)
         root = Path(__file__).resolve().parent.parent
         runtime = worker_runtime(root)
@@ -261,7 +266,7 @@ class SandboxManager:
         except psutil.Error: pass
         from .tracing import current_context
         job = Job(process,directory,time.monotonic(),seconds,memory_gb,cpus,out,err,descendants=set(),cpu_ids=selected,
-                  release_callback=self.released,trace_context=current_context())
+                  release_callback=self.released,trace_context=current_context(),timeouts_enabled=self.timeouts_enabled)
         self.jobs.append(job)
         trace_event('scheduler.admitted',dict(action=request.get('action'),directory=str(directory),pid=process.pid,
             cpus=cpus,cpu_ids=selected,memory_gb=memory_gb,seconds=seconds))
@@ -270,7 +275,7 @@ class SandboxManager:
     def run(self, request, directory, **limits):
         if limits['cpus'] > self.cpus or limits['memory_gb'] > self.memory_gb:
             raise ResourceUnavailable('Worker request exceeds run capacity')
-        until = time.monotonic()+min(limits['seconds'],self.time_left(request))
+        until = time.monotonic()+min(limits['seconds'],self.time_left(request)) if self.timeouts_enabled else UNBOUNDED_SECONDS
         while not self.can_start(cpus=limits['cpus'],memory_gb=limits['memory_gb']):
             if time.monotonic() >= until: raise ResourceUnavailable('Worker admission deadline reached')
             time.sleep(.05)

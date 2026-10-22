@@ -76,7 +76,7 @@ class PlanningRecoveryTests(unittest.TestCase):
                 self.assertEqual(len(calls),int(bool(reason)))
 
     def test_three_and_half_minute_role_window_still_obeys_research_deadline(self):
-        config=RunConfig()
+        config=RunConfig(timeouts_enabled=True)
         self.assertEqual((config.hypothesis_seconds,config.planner_seconds,config.validator_seconds),(210,210,210))
         client=self.client();client.deadline=1300
         with patch('mlmom.agents.time.time',return_value=1000):
@@ -87,7 +87,7 @@ class PlanningRecoveryTests(unittest.TestCase):
 
     def test_planning_retry_stays_in_current_cycle_and_is_bounded(self):
         pipeline=object.__new__(Pipeline)
-        pipeline.config=RunConfig(max_rounds=2,max_attempts=3)
+        pipeline.config=RunConfig(timeouts_enabled=True,max_rounds=2,max_attempts=3)
         pipeline.store=SimpleNamespace(event=Mock(),list=lambda *a,**kw:[])
         pipeline.budget=SimpleNamespace(snapshot=lambda:SimpleNamespace(research_seconds=2000))
         pipeline.last_submission={'path':'existing.csv'}

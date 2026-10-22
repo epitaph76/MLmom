@@ -61,7 +61,9 @@ class InvariantTests(unittest.TestCase):
                 skills=SkillRegistry(ROOT/'skills')
                 budget=BudgetSnapshot(remaining_seconds=200,research_seconds=100,available_cpus=4,available_memory_gb=8,spent_seconds=0)
                 with patch('mlmom.registry.importlib.metadata.version',return_value='test'):
-                    for metric,valid in [(accepted,True),(rejected,False)]:
+                    # The compatibility adapter's objective mapping is distinct
+                    # from admission of unverified generated native protocols.
+                    for metric,valid in [(accepted,False),(rejected,False)]:
                         context.task.primary_metric=metric;plan.prediction_kind=prediction_kind(metric,kind)
                         report=validate_plan(plan,context,tools,skills,budget)
                         self.assertEqual(report.valid,valid,report)
@@ -81,10 +83,10 @@ class InvariantTests(unittest.TestCase):
                     return super().generate(role,instruction,payload,schema,tools)
             with self.subTest(error=type(interruption).__name__),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp);task=dataset(root/'input')
-                config=RunConfig(coding_direct_first=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=90,final_reserve_seconds=15,max_rounds=1,max_candidates=1,
-                                 smoke_seconds=10,experiment_seconds=15,prediction_seconds=10)
+                config=RunConfig(timeouts_enabled=True,coding_direct_first=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=30,max_rounds=1,max_candidates=1,
+                                 smoke_seconds=20,experiment_seconds=30,prediction_seconds=20)
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
-                    result=CustomCandidatePipeline(task,config,run_dir=root/'run',client=InterruptedCoder()).run()
+                    result=CustomCandidatePipeline(task,config,run_dir=root/'run',client=InterruptedCoder(seconds=30)).run()
                 self.assertEqual(result['status'],'completed',result)
                 store=ExperimentStore(root/'run')
                 try:
@@ -106,7 +108,7 @@ class InvariantTests(unittest.TestCase):
             from mlmom.inputs import read_table
             self.assertTrue(np.allclose(read_table(artifact.path)['t0'],.8))
     def test_api_inspection_is_bounded_and_does_not_expose_os(self):
-        with tempfile.TemporaryDirectory() as tmp,SandboxManager() as manager:
+        with tempfile.TemporaryDirectory() as tmp,SandboxManager(timeouts_enabled=True) as manager:
             root=Path(tmp)
             result=manager.run(dict(action='inspect_api',module='sklearn.ensemble',symbol='ExtraTreesRegressor.fit'),root/'good',seconds=15,memory_gb=2,cpus=1)
             self.assertEqual(result['status'],'completed',result)
@@ -119,7 +121,7 @@ class InvariantTests(unittest.TestCase):
             path=task.parent/'dataset_manifest.json'
             manifest=json.loads(path.read_text(encoding='utf-8'));manifest['time_column']='x'
             path.write_text(json.dumps(manifest),encoding='utf-8')
-            result=Pipeline(task,RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=root/'run',client=OfflineLLM()).run()
+            result=Pipeline(task,RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=root/'run',client=OfflineLLM()).run()
             self.assertEqual(result['status'],'deferred',result)
             self.assertEqual(result['stop_reason'],'deferred_time_series_support')
             self.assertFalse((task.parent/'submission.csv').exists())
@@ -128,7 +130,7 @@ class InvariantTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             client=RepairLLM()
-            cfg=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1,runtime_repairs=1)
+            cfg=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1,runtime_repairs=1)
             with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=client).run()
             self.assertEqual(result['status'],'completed',result)
             store=ExperimentStore(root/'run')
@@ -140,7 +142,7 @@ class InvariantTests(unittest.TestCase):
     def test_failed_full_refit_preserves_valid_split_submission(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
-            cfg=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1)
+            cfg=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1)
             with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=RepairLLM(refit_failure=True)).run()
             self.assertEqual(result['status'],'completed',result)
             self.assertEqual(result['submission']['model_role'],'evaluation')
@@ -148,7 +150,9 @@ class InvariantTests(unittest.TestCase):
             store=ExperimentStore(root/'run');self.assertEqual(store.get('experiment','final-refit')['status'],'failed');store.close()
 
     def test_cpu_affinity_is_disjoint_and_worker_keys_are_removed(self):
-        with tempfile.TemporaryDirectory() as tmp,SandboxManager() as manager:
+        from mlmom.resources import Budget
+        config=RunConfig(timeouts_enabled=True,total_seconds=60,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=2)
+        with tempfile.TemporaryDirectory() as tmp,SandboxManager(timeouts_enabled=True,budget=Budget(config,time.time()),max_workers=2) as manager:
             root=Path(tmp);code=root/'code';code.mkdir()
             source='import os\nassert "OPENAI_API_KEY" not in os.environ\nassert "ROUTERAI_API_KEY" not in os.environ\n'+ADAPTER_CODE
             (code/'candidate.py').write_text(source,encoding='utf-8')
