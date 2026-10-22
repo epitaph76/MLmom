@@ -158,6 +158,31 @@ class InnerExecutionTests(unittest.TestCase):
             with self.assertRaises(TimeoutError): train(request,job)
             self.assertEqual(json.loads((job/'training-window.json').read_text()),expired)
 
+    def test_resume_reuses_completed_single_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _,_,_,job,request=self.request(Path(tmp))
+            train(request,job)
+            result=train(request,job)
+            self.assertEqual(len(result['trials']),1)
+            sizes=[json.loads(p.read_text())['rows'] for p in job.rglob('fit.json')]
+            self.assertEqual(sorted(sizes),[48]*5+[60]*2)
+
+    def test_failed_study_trial_cannot_supply_selected_configuration(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            _,_,_,job,request=self.request(Path(tmp))
+            request['plan'].update(strategy='optuna',search_space={'offset':dict(type='float',low=0,high=1000)})
+            def interrupted_study(objective,**kwargs):
+                objective({'offset':0},0,10)
+                score=objective({'offset':1000},1,10)
+                # The first objective finished but its study transaction was
+                # interrupted before tell(); resume marks it FAIL.
+                return dict(trials=[dict(number=0,params={'offset':0},status='fail',score=None,duration_seconds=1,error='interrupted'),
+                    dict(number=1,params={'offset':1000},status='complete',score=score,duration_seconds=1,error=None)])
+            with patch('mlmom.hpo.run_search',side_effect=interrupted_study):result=train(request,job)
+            self.assertEqual(result['best_params']['offset'],1000)
+            self.assertEqual(result['internal_score'],result['trials'][1]['score'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -323,10 +323,13 @@ def train(request, root):
                 score=float(np.mean(scores));trial.score=score
                 trial.score_std=float(np.std(scores)) if len(scores)>1 else None
                 trial.status='completed';trial.duration_seconds=time.monotonic()-t0
+                details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
+                trial_selection=dict(protocol=protocol,number=trial_number,score=score,params=selected_params,details=details)
+                atomic_json(trial_root/'selection.json',trial_selection)
                 if best_score is None or better(score,best_score,context.task.metric_direction):
                     best_score,best_params=score,selected_params
-                    best_details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
-                    atomic_json(selection_path,dict(protocol=protocol,score=best_score,params=best_params,details=best_details))
+                    best_details=details
+                    if plan.strategy!='optuna':atomic_json(selection_path,trial_selection)
                 atomic_json(root/'trials.json',trials)
                 if len(trials)==1 and plan.strategy!='optuna':
                     control('initial_fit')
@@ -357,7 +360,16 @@ def train(request, root):
                 status='completed' if t['status']=='complete' else 'failed',score=t['score'],
                 duration_seconds=t['duration_seconds'],error=t.get('error'))) for t in search_result['trials']]
             atomic_json(root/'trials.json',trials)
-        else: objective()
+            successful=[t for t in trials if t.status=='completed']
+            if not successful:raise ValueError('No successful internal trial')
+            winner=(min if context.task.metric_direction=='minimize' else max)(successful,key=lambda t:t.score)
+            chosen=json.loads((root/f'trial-{winner.number}'/'selection.json').read_text(encoding='utf-8'))
+            if chosen['protocol']!=protocol or chosen['score']!=winner.score:
+                raise ValueError('Completed study trial differs from saved validation evidence')
+            best_score,best_params,best_details=chosen['score'],chosen['params'],chosen['details']
+            atomic_json(selection_path,chosen)
+        elif best_score is None: objective()
+        else: control('initial_fit')  # Reuse the completed trial and any committed decision.
         if best_score is None: raise ValueError('No successful internal trial')
         if deadline-time.time() <= .2: raise TimeoutError('No time for mandatory full-train refit')
         model = module.create_candidate(dict(config,model_params=best_params))
