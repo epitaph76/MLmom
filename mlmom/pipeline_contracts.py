@@ -207,6 +207,11 @@ class TrialResult(StrictModel):
     error: str | None = None
 
     kind: str = 'optuna'
+    validation_protocol_ref: str | None = None
+    fold_results: list[dict[str, Any]] = Field(default_factory=list)
+    score_std: float | None = None
+    oof_score: float | None = None
+    oof_ref: str | None = None
 
 
 class ExperimentRun(StrictModel):
@@ -230,6 +235,12 @@ class ExperimentRun(StrictModel):
     error: str | None = None
     study_ref: str | None = None
     hpo_batches: list[dict[str, Any]] = Field(default_factory=list)
+    validation_protocol_ref: str | None = None
+    fold_results: list[dict[str, Any]] = Field(default_factory=list)
+    score_std: float | None = None
+    oof_score: float | None = None
+    oof_ref: str | None = None
+    full_refit: bool = False
 
 
 class EvaluationResult(StrictModel):

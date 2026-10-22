@@ -22,6 +22,9 @@ RECONNAISSANCE_PROMPT = '''Read the supplied task description and deterministic 
 For initial reconnaissance, call confirm_task with a complete TaskDefinition BEFORE deep research.
 This is the only task-understanding role. Match explicit target, metric/options/direction, ID,
 excluded columns, validation and submission requirements from the task, dictionary and manifest.
+validation_strategy selects INTERNAL validation only; outer holdout rotates independently each cycle.
+Choose holdout explicitly when permitted, or kfold/stratified_kfold/group_kfold with validation_folds
+(default 5, minimum 2). Do not claim k-fold for a single split or reduce folds to hide infeasibility.
 Inspector heuristics are suggestions. Fix validator errors; never invent missing requirements.
 Once confirmed, the task is immutable. Later rounds must not change it.
 Investigate the registered train and test features using list_tables, preview_csv and query_csv.

@@ -623,7 +623,8 @@ class Pipeline:
                         duration_seconds=t['duration_seconds'],error=t['error'],kind='optuna') for t in state['trials']]
             if result.get('status')!='completed':
                 progress = Path(self.run_dir/'runs'/run.experiment_id/'progress.json')
-                if result.get('stop_reason')=='time_limit' and progress.exists():
+                if (result.get('stop_reason')=='time_limit' and progress.exists()
+                        and json.loads(progress.read_text(encoding='utf-8')).get('full_refit')):
                     result = dict(json.loads(progress.read_text(encoding='utf-8')),trials=result.get('trials',json.loads(progress.read_text(encoding='utf-8')).get('trials',[])),stop_reason='time_limit_best_model',
                                   duration_seconds=result['duration_seconds'],peak_memory_gb=result['peak_memory_gb'])
             run = ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
@@ -731,7 +732,8 @@ class Pipeline:
                             finished(candidate,plan,run,result);pending.remove(entry);continue
                     self.store.put('experiment',experiment_id,run)
                     req=dict(action='train',code_dir=candidate.code_dir,code_hash=candidate.code_hash,context=self.sanitized_context(train_path),
-                        plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent)
+                        plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent,
+                        outer_split_id=split.split_id, outer_train_indices=split.train_indices)
                     req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_gain_threshold','hpo_seconds')})
                     req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
                     initial=next((r for r in results if r['candidate']['candidate_id']==candidate.candidate_id and r['plan']['strategy']=='single'),None)

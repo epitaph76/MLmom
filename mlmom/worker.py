@@ -166,7 +166,7 @@ def train(request, root):
     import optuna
     from .pipeline_contracts import TaskContext,HypothesisPlan,TrialResult
     from .inputs import read_table,features,targets
-    from .splitting import split_indices,group_keys
+    from .splitting import inner_protocol,group_keys
     from .sdk import load_module
     from .evaluation import score_predictions,prediction_kind,better
     from .persistence import atomic_json,tree_hash,file_hash
@@ -187,8 +187,15 @@ def train(request, root):
     best_model = None
     search_result = {}
     config = plan.model_dump(mode='json')
-    fit_budget = request['worker_seconds']*.85
+    window_path = root/'training-window.json'
+    if not window_path.exists():
+        atomic_json(window_path, dict(deadline=time.time()+request['worker_seconds']*.85))
+    deadline = min(json.loads(window_path.read_text(encoding='utf-8'))['deadline'],
+                   time.time()+request['worker_seconds']*.85)
+    fit_budget = max(0., deadline-time.time())
     control_action = None
+    protocol_ref = None
+    best_details = {}
 
     def control(stage, details=None, error=None):
         nonlocal control_action
@@ -219,67 +226,100 @@ def train(request, root):
             atomic_json(Path(history_ref),history)
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
             best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
-            study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[])))
+            study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[]),
+            full_refit=True,validation_protocol_ref=protocol_ref,**best_details))
 
     if request.get('fixed'):
+        if fit_budget <= .2: raise TimeoutError('Original training deadline reached before fixed refit')
         model = module.create_candidate(config)
         c = fit_context(context,request,work_dir=root/'fixed',groups=groups,weights=weights,seconds=fit_budget)
         model.fit(X,None if unsupervised else y,c)
+        if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')
         save_progress(model,best_params,None,'fixed_configuration')
     else:
-        a,b,_ = split_indices(frame,context,request.get('inner_fraction',.2),request.get('seed',42)+1)
-        xa,xb = X.iloc[a],X.iloc[b]
-        ya = y.iloc[a] if y is not None else None
-        yb = y.iloc[b] if y is not None else None
-        stale = 0
-        checkpoint=root/'progress.json'
-        if plan.strategy=='optuna' and checkpoint.exists():
-            saved=json.loads(checkpoint.read_text(encoding='utf-8'))
-            best_score=saved.get('internal_score');best_params=saved['best_params']
-            best_model=module.load_candidate(saved['model_artifact'])
-            trials=[TrialResult.model_validate(t) for t in saved.get('trials',[])]
+        protocol = inner_protocol(frame,context,fraction=request.get('inner_fraction',.2),
+            seed=request.get('seed',42)+1,outer_split_id=request.get('outer_split_id'),
+            source_indices=request.get('outer_train_indices'))
+        protocol_ref = str(root/'validation-protocol.json')
+        protocol_path = Path(protocol_ref)
+        if protocol_path.exists() and json.loads(protocol_path.read_text(encoding='utf-8')) != protocol:
+            raise ValueError('Saved validation protocol differs from this request')
+        atomic_json(protocol_path,protocol)
+        selection_path=root/'selection.json'
+        if selection_path.exists():
+            saved=json.loads(selection_path.read_text(encoding='utf-8'))
+            if saved['protocol'] != protocol: raise ValueError('Incompatible trial selection protocol')
+            best_score=saved['score'];best_params=saved['params'];best_details=saved['details']
+        if (root/'trials.json').exists():
+            trials=[TrialResult.model_validate(t) for t in json.loads((root/'trials.json').read_text(encoding='utf-8'))]
+        # Reserve the existing worker window for a full-train refit. Checkpoints,
+        # all folds and interrupted attempts consume the same original deadline.
+        search_deadline=min(deadline-fit_budget*.3,time.time()+request.get('hpo_seconds',600))
         def objective(sampled=None, number=None, seconds=None):
-            nonlocal best_score,best_params,best_model,stale
+            nonlocal best_score,best_params,best_details
             params = dict(plan.model_params)
             params.update(sampled or {})
             t0 = time.monotonic()
+            trial_number=number if number is not None else len(trials)
+            trial=TrialResult(number=trial_number,params=params,status='running',duration_seconds=0,
+                kind='native_run' if plan.strategy=='native' else plan.strategy,validation_protocol_ref=protocol_ref)
+            trials.append(trial)
+            trial_root=root/f'trial-{trial_number}'
+            trial_root.mkdir(exist_ok=True)
+            until=min(search_deadline,time.time()+seconds) if seconds is not None else search_deadline
+            predictions=[];positions=[]
+            selected_params=params
             try:
-                model = module.create_candidate(dict(config,model_params=params))
-                remaining = max(.1,fit_budget-(time.monotonic()-started))
-                if seconds is not None: remaining=min(remaining,seconds)
-                c = fit_context(context,request,work_dir=root/f'trial-{len(trials)}',X_valid=xb,
-                    y_valid=None if unsupervised else yb,groups=groups[a] if groups is not None else None,
-                    validation_groups=groups[b] if groups is not None else None,
-                    validation_weight=weights[b] if weights is not None else None,
-                    weights=weights[a] if weights is not None else None,seconds=remaining*.6 if plan.strategy!='native' else remaining)
-                model.fit(xa,None if unsupervised else ya,c)
-                prediction = model.predict(xb,{'kind':kind})
-                score = score_predictions(yb,prediction,context,X=xb,groups=groups[b] if groups is not None else None,
-                    weights=weights[b] if weights is not None else None)
-                trials.append(TrialResult(number=number if number is not None else len(trials),params=params,status='completed',score=score,
-                    duration_seconds=time.monotonic()-t0,kind='native_run' if plan.strategy=='native' else plan.strategy))
+                for fold in protocol['folds']:
+                    a,b=np.asarray(fold['train_indices']),np.asarray(fold['validation_indices'])
+                    remaining=until-time.time()
+                    if remaining <= .2: raise TimeoutError('Internal validation deadline reached')
+                    model = module.create_candidate(dict(config,model_params=params))
+                    holdout=protocol['strategy']=='holdout'
+                    c=fit_context(context,request,work_dir=trial_root/f"fold-{fold['number']}",
+                        X_valid=X.iloc[b] if holdout else None,
+                        y_valid=y.iloc[b] if holdout and not unsupervised else None,
+                        groups=groups[a] if groups is not None else None,
+                        validation_groups=groups[b] if holdout and groups is not None else None,
+                        validation_weight=weights[b] if holdout and weights is not None else None,
+                        weights=weights[a] if weights is not None else None,
+                        seconds=remaining/(protocol['n_splits']-fold['number']))
+                    fold_started=time.monotonic()
+                    model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
+                    prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
+                    score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
+                        groups=groups[b] if groups is not None else None,weights=weights[b] if weights is not None else None)
+                    if time.time() >= until: raise TimeoutError('Internal fold exceeded validation deadline')
+                    trial.fold_results.append(dict(number=fold['number'],score=score,status='completed',
+                        duration_seconds=time.monotonic()-fold_started))
+                    trial.duration_seconds=time.monotonic()-t0
+                    atomic_json(root/'trials.json',trials)
+                    predictions.append(prediction);positions.extend(b.tolist())
+                    if holdout and hasattr(model,'export_model_params'):selected_params=model.export_model_params()
+                order=np.argsort(positions);indices=np.asarray(positions)[order]
+                combined=np.concatenate(predictions,axis=0)[order]
+                trial.oof_score=score_predictions(y.iloc[indices] if y is not None else None,combined,context,X=X.iloc[indices],
+                    groups=groups[indices] if groups is not None else None,weights=weights[indices] if weights is not None else None)
+                trial.oof_ref=str(trial_root/'oof.json')
+                atomic_json(Path(trial.oof_ref),dict(indices=indices.tolist(),
+                    source_indices=np.asarray(request.get('outer_train_indices',list(range(len(frame)))))[indices].tolist(),
+                    prediction_kind=kind,predictions=combined.tolist()))
+                scores=[f['score'] for f in trial.fold_results]
+                score=float(np.mean(scores));trial.score=score
+                trial.score_std=float(np.std(scores)) if len(scores)>1 else None
+                trial.status='completed';trial.duration_seconds=time.monotonic()-t0
                 if best_score is None or better(score,best_score,context.task.metric_direction):
-                    selected_params=model.export_model_params() if hasattr(model,'export_model_params') else params
-                    best_score,best_params,best_model,stale = score,selected_params,model,0
-                    save_progress(model,selected_params,score,'best_trial_checkpoint')
-                else: stale += 1
+                    best_score,best_params=score,selected_params
+                    best_details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
+                    atomic_json(selection_path,dict(protocol=protocol,score=best_score,params=best_params,details=best_details))
                 atomic_json(root/'trials.json',trials)
-                if (root/'progress.json').exists():
-                    progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
-                    progress['trials']=[t.model_dump(mode='json') for t in trials]
-                    atomic_json(root/'progress.json',progress)
                 if len(trials)==1 and plan.strategy!='optuna':
                     control('initial_fit')
                 return score
             except optuna.TrialPruned: raise
             except Exception as error:
-                stale += 1
-                trials.append(TrialResult(number=number if number is not None else len(trials),params=params,status='failed',error=str(error)[:2000],duration_seconds=time.monotonic()-t0))
+                trial.status='failed';trial.score=None;trial.error=str(error)[:2000];trial.duration_seconds=time.monotonic()-t0
                 atomic_json(root/'trials.json',trials)
-                if (root/'progress.json').exists():
-                    progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
-                    progress['trials']=[t.model_dump(mode='json') for t in trials]
-                    atomic_json(root/'progress.json',progress)
                 if plan.strategy!='optuna':control('failure',error=str(error)[:2000])
                 raise
 
@@ -290,28 +330,27 @@ def train(request, root):
             search_result=run_search(objective,directory=root/'hpo',identity=dict(code=request['code_hash'],
                 train_hash=file_hash(Path(request['train_path'])),seed=request.get('seed',42),inner_fraction=request.get('inner_fraction',.2),
                 task=context.task.model_dump(mode='json'),metric_options=context.metric_options,
-                base_params=plan.model_params,tool_id=plan.tool_id,preprocessing=plan.preprocessing),
+                base_params=plan.model_params,tool_id=plan.tool_id,preprocessing=plan.preprocessing,validation_protocol=protocol),
                 space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
                 max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
-                gain_threshold=request.get('hpo_gain_threshold',.005),seconds=min(request.get('hpo_seconds',600),fit_budget*.7),
+                gain_threshold=request.get('hpo_gain_threshold',.005),seconds=max(0,search_deadline-time.time()),
                 baseline_score=request.get('baseline_score'),checkpoint=search_checkpoint if request.get('training_control') else None,
                 trial_checkpoint=(lambda details:control(details['stage'],details,error=details.get('error'))) if request.get('training_control') else None)
             control_action=search_result.get('control_action',control_action)
-            trials=[TrialResult(number=t['number'],params=dict(plan.model_params,**t['params']),
+            metadata={t.number:t.model_dump() for t in trials}
+            trials=[TrialResult(**dict(metadata.get(t['number'],{}),number=t['number'],params=dict(plan.model_params,**t['params']),
                 status='completed' if t['status']=='complete' else 'failed',score=t['score'],
-                duration_seconds=t['duration_seconds'],error=t.get('error')) for t in search_result['trials']]
+                duration_seconds=t['duration_seconds'],error=t.get('error'))) for t in search_result['trials']]
             atomic_json(root/'trials.json',trials)
         else: objective()
-        if best_model is None: raise ValueError('No successful internal trial')
-        if plan.strategy!='native' and control_action!='stop' and fit_budget-(time.monotonic()-started) > .2:
-            # Refit selected parameters on all rows allowed by this outer split.
-            model = module.create_candidate(dict(config,model_params=best_params))
-            model.fit(X,None if unsupervised else y,fit_context(context,request,work_dir=root/'refit-round',
-                groups=groups,weights=weights,seconds=max(.1,fit_budget-(time.monotonic()-started))))
-            save_progress(model,best_params,best_score,search_result.get('stop_reason') or 'completed')
-        else:
-            save_progress(best_model,best_params,best_score,search_result.get('stop_reason') or
-                          ('native_completed' if plan.strategy=='native' else 'budget_best_trial'))
+        if best_score is None: raise ValueError('No successful internal trial')
+        if deadline-time.time() <= .2: raise TimeoutError('No time for mandatory full-train refit')
+        model = module.create_candidate(dict(config,model_params=best_params))
+        model.fit(X,None if unsupervised else y,fit_context(context,request,work_dir=root/'refit-round',
+            groups=groups,weights=weights,seconds=deadline-time.time()))
+        if time.time() >= deadline: raise TimeoutError('Full-train refit exceeded original deadline')
+        save_progress(model,best_params,best_score,search_result.get('stop_reason') or
+                      ('training_agent_stop' if control_action=='stop' else 'completed'))
     return json.loads((root/'progress.json').read_text(encoding='utf-8'))
 
 

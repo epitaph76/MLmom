@@ -62,7 +62,8 @@ def decide(client, checkpoint, skills, *, seconds=30):
             answer = client.generate('training_agent',
                 'Control an existing training run at this checkpoint only. Do not write code or change the model, '
                 'metric, splits, base parameters or search distributions. Inspect internal scores, failures, trial '
-                'parameters and time. Choose continue, stop (keep current best) or refit (stop search and refit best). '
+                'parameters and time. Choose continue, stop (end search) or refit (end search). Both stop and '
+                'refit require a fresh fit of the selected configuration on all allowed training rows before evaluation. '
                 'Optional next_params are queued suggestions within the approved search space, never a new space. '
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
                 dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills), TrainingDecision, None)

@@ -35,7 +35,7 @@ def execution_case(root, kind, tool='sklearn'):
     outputs=names or ['cluster']
     task=TaskDefinition(objective='Synthetic integration',task_type=kind,target_columns=names,id_columns=['id'],
         group_columns=groups,excluded_feature_columns=['id']+names,primary_metric=metric,metric_direction=direction,
-        validation_strategy='group_kfold' if groups else 'stratified_kfold' if 'classification' in kind else 'kfold',
+        validation_strategy='group_kfold' if groups else 'holdout' if kind=='multilabel_classification' else 'stratified_kfold' if 'classification' in kind else 'kfold',
         result_format=ResultFormat(file_name='submission.csv',columns=['id']+outputs,id_columns=['id'],prediction_columns=outputs))
     files=InputFiles(task=str(root/'task.md'),root=str(root),train=str(data),test=str(data),dictionaries=[])
     context=TaskContext(task_id='test',task=task,files=files,profile_ref='',feature_columns=X.columns.tolist(),
