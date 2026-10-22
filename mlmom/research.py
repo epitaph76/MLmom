@@ -114,9 +114,9 @@ class ReconnaissanceSession:
         return dict(text=text[offset:offset+chars], offset=offset, total_chars=len(text),
                     truncated=offset+chars<len(text))
 
-    def confirm_task(self, task: TaskDefinition) -> dict:
+    def confirm_task(self, task: TaskDefinition | str) -> dict:
         self._check_time()
-        task = TaskDefinition.model_validate(task)
+        task = TaskDefinition.model_validate_json(task) if isinstance(task, str) else TaskDefinition.model_validate(task)
         task = task.model_copy(update={'excluded_feature_columns':list(dict.fromkeys(
             task.excluded_feature_columns+task.target_columns+task.id_columns+task.group_columns+
             ([task.weight_column] if task.weight_column else [])))})

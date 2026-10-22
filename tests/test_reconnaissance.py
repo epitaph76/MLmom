@@ -146,6 +146,22 @@ class ScoutingTests(unittest.TestCase):
         self.assertTrue(any(item.get('data',{}).get('valid') is False for item in feedback))
         self.assertEqual(client.max_steps,2)
 
+    def test_confirmation_accepts_json_string_with_unchanged_validation_and_deadline(self):
+        session=self.session();deadline=session.deadline
+        task=json.loads(OfflineLLM().complete([{'content':json.dumps({'dataset_inspection':{'task':self.profile.task.model_dump(mode='json')}})}]))
+        for invalid in ['{',json.dumps(task|dict(unexpected_field=True))]:
+            self.assertEqual(session.tools.invoke('confirm_task',{'task':invalid}).status,'error')
+            self.assertIsNone(self.store.get('confirmed_task','task'))
+        invalid=json.dumps(task|dict(target_columns=['invented']))
+        self.assertFalse(session.tools.invoke('confirm_task',{'task':invalid}).data['valid'])
+        self.assertIsNone(self.store.get('confirmed_task','task'))
+        result=session.tools.invoke('confirm_task',{'task':json.dumps(task)})
+        self.assertEqual(result.status,'ok',result)
+        self.assertTrue(result.data['valid'])
+        self.assertEqual(result.data,session.tools.invoke('confirm_task',{'task':task}).data)
+        self.assertEqual(session.tools.invoke('confirm_task',{'task':json.dumps(task|dict(primary_metric='mae'))}).status,'error')
+        self.assertEqual(session.deadline,deadline)
+
     def test_timeout_after_confirmation_keeps_findings_and_query_cache(self):
         parent=self
         class Client(OfflineLLM):
