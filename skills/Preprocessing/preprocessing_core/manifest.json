@@ -1,0 +1,9 @@
+{
+  "skill_id": "preprocessing_core",
+  "version": "1.0.0",
+  "title": "Leakage-safe preprocessing contract",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

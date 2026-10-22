@@ -1,0 +1,13 @@
+{
+  "skill_id": "imbalance",
+  "version": "2.0.0",
+  "title": "Imbalanced classification",
+  "status": "ready",
+  "task_types": [
+    "binary_classification",
+    "multiclass_classification",
+    "multilabel_classification"
+  ],
+  "ml_tools": [],
+  "dependencies": []
+}

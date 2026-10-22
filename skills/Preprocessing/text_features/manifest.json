@@ -1,0 +1,9 @@
+{
+  "skill_id": "text_features",
+  "version": "1.0.0",
+  "title": "Classical text features",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}
