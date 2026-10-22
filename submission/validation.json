@@ -144,13 +144,13 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\real-regression\\regression\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-qwen-restart-20261022152031\\real-regression\\regression\\attempt-1\\task\\run",
             "status": "failed",
             "model": "qwen/qwen3.8-27b",
             "exit_code": 2,
             "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 114.53200000000015,
-            "pipeline_stop_reason": "research_deadline",
+            "duration_seconds": 897.6099999999997,
+            "pipeline_stop_reason": "planning_attempts_exhausted",
             "process_acceptance": {
               "target_completed_rounds": 3,
               "completed_rounds": 0,
@@ -172,13 +172,13 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\real-multiclass\\multiclass\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-qwen-restart-20261022152031\\real-multiclass\\multiclass\\attempt-1\\task\\run",
             "status": "failed",
             "model": "qwen/qwen3.8-27b",
             "exit_code": 2,
             "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 332.82800000000043,
-            "pipeline_stop_reason": "insufficient_experiment_budget",
+            "duration_seconds": 982.875,
+            "pipeline_stop_reason": "planning_attempts_exhausted",
             "process_acceptance": {
               "target_completed_rounds": 3,
               "completed_rounds": 0,
@@ -433,8 +433,8 @@
     }
   },
   "supplemental_tests": [],
-  "created_utc": "2026-10-22T15:00:08.712633+00:00",
-  "base_commit": "793a68e5def04630b5b757265ce7895da0152c36",
+  "created_utc": "2026-10-22T15:39:20.895984+00:00",
+  "base_commit": "03d22dd5c0a966e339aa376b270e6b0e4aea4c0e",
   "package": {
     "path": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-solution.zip",
     "sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
@@ -453,5 +453,73 @@
     "Docker image approximates provided dependencies; organizer infrastructure is not verified.",
     "Offline LLM is an external test fixture; production runtime has no offline fallback.",
     "Real API allowance is at most 1800 seconds per task, including all attempts and verification."
-  ]
+  ],
+  "planner_input_audit": {
+    "status": "issues_found",
+    "report": "artifacts/release-abc-qwen-restart-20261022152031/audit/AUDIT.md",
+    "findings": [
+      "Incorrect DNS conditional percentage propagated to hypothesis and plan",
+      "Regression histogram boundary mislabeled as q75",
+      "Duplicate grouping requested in prose but absent from confirmed group columns",
+      "B2 gap: active ready-adapter suggestion remains in planner payload",
+      "Categorical cross-tab observations cite profile instead of exact SQL result"
+    ],
+    "fixed": false
+  },
+  "real_api_run_summary": {
+    "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+    "model": "qwen/qwen3.8-27b",
+    "base_url": "https://changellenge.up.railway.app/v1",
+    "allowance_per_task_seconds": 1800,
+    "allowance_total_seconds": 3600,
+    "completed_cases": [
+      {
+        "case": "regression",
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+        "deadline": 1792684232.1629536,
+        "duration_seconds": 897.6099999999997,
+        "scout_status": "partial",
+        "observations": 7,
+        "proposals": 0,
+        "validator_timeouts": [
+          {
+            "elapsed_seconds": 874.344409501,
+            "error_type": "APITimeoutError"
+          }
+        ],
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 0,
+          "completed_optuna_trials": 0,
+          "passed": false
+        }
+      },
+      {
+        "case": "multiclass",
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+        "deadline": 1792684232.1629536,
+        "duration_seconds": 982.875,
+        "scout_status": "completed",
+        "observations": 4,
+        "proposals": 4,
+        "validator_timeouts": [
+          {
+            "elapsed_seconds": 750.518169714,
+            "error_type": "APITimeoutError"
+          },
+          {
+            "elapsed_seconds": 961.238622477,
+            "error_type": "APITimeoutError"
+          }
+        ],
+        "process_acceptance": {
+          "target_completed_rounds": 3,
+          "completed_rounds": 0,
+          "completed_optuna_trials": 0,
+          "passed": false
+        }
+      }
+    ],
+    "actual_total_run_seconds": 1880.4849999999997
+  }
 }
