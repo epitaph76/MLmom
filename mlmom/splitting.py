@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.model_selection import train_test_split, GroupShuffleSplit, KFold, StratifiedKFold, GroupKFold
 from .pipeline_contracts import SplitSpec, TaskContext
 from .inputs import targets
 
@@ -76,3 +76,57 @@ def make_split(frame: pd.DataFrame, context: TaskContext, round_id: str, fractio
     digest = hashlib.sha256(a.tobytes()+b.tobytes()+context.dataset_hash.encode()).hexdigest()[:16]
     return SplitSpec(split_id=f'{round_id}-{digest}', round_id=round_id, dataset_hash=context.dataset_hash,
                      seed=seed, strategy=strategy, train_indices=a.tolist(), holdout_indices=b.tolist())
+
+
+def inner_protocol(frame, context, *, fraction=.2, seed=43, outer_split_id=None, source_indices=None):
+    """Indices are positional, independent of pandas labels and user ID columns."""
+    strategy = context.task.validation_strategy.value
+    count = context.task.validation_folds
+    index = np.arange(len(frame))
+    source = np.asarray(source_indices if source_indices is not None else index, dtype=int)
+    if len(source) != len(frame) or len(np.unique(source)) != len(source):
+        raise ValueError('Invalid outer training index mapping')
+    groups = group_keys(frame, context.task.group_columns)
+    y = targets(frame, context)
+    classification = context.task.task_type in {'binary_classification', 'multiclass_classification'}
+    if groups is not None and strategy not in {'holdout', 'group_kfold'}:
+        raise ValueError('Grouped data requires group_kfold or a group-aware holdout')
+    if strategy == 'holdout':
+        a, b, implementation = split_indices(frame, context, fraction, seed)
+        pairs = [(a, b)]
+    else:
+        if len(frame) < count:
+            raise ValueError('Insufficient rows for validation_folds')
+        if strategy == 'group_kfold':
+            if groups is None or len(np.unique(groups)) < count:
+                raise ValueError('Insufficient groups for validation_folds')
+            pairs = GroupKFold(n_splits=count).split(index, y, groups)
+        elif strategy == 'stratified_kfold':
+            if not classification:
+                raise ValueError('StratifiedKFold requires a single classification target')
+            if pd.Series(np.asarray(y)).value_counts().min() < count:
+                raise ValueError('Insufficient examples of a rare class for validation_folds')
+            pairs = StratifiedKFold(n_splits=count, shuffle=True, random_state=seed).split(index, y)
+        elif strategy == 'kfold':
+            if classification:
+                raise ValueError('Classification requires stratified_kfold or holdout')
+            pairs = KFold(n_splits=count, shuffle=True, random_state=seed).split(index)
+        else:
+            raise ValueError(f'Unsupported internal validation strategy: {strategy}')
+        pairs = list(pairs)
+        implementation = strategy
+    folds = []
+    all_classes = set(np.asarray(y)) if classification else None
+    for number, (a, b) in enumerate(pairs):
+        if not len(a) or not len(b) or np.intersect1d(a, b).size:
+            raise ValueError('Invalid internal fold')
+        if groups is not None and set(groups[a]) & set(groups[b]):
+            raise ValueError('Group leakage in internal fold')
+        if classification and (set(np.asarray(y)[a]) != all_classes or set(np.asarray(y)[b]) != all_classes):
+            raise ValueError(f'Each classification fold must contain every class (fold {number})')
+        folds.append(dict(number=number, train_indices=a.tolist(), validation_indices=b.tolist(),
+                          source_train_indices=source[a].tolist(), source_validation_indices=source[b].tolist()))
+    return dict(version=1, strategy=strategy, implementation=implementation, seed=seed,
+                n_splits=len(folds), validation_folds=count if strategy != 'holdout' else None,
+                fraction=fraction if strategy == 'holdout' else None, aggregation='mean_fold_score',
+                std_ddof=0, dataset_hash=context.dataset_hash, outer_split_id=outer_split_id, folds=folds)
