@@ -1,7 +1,8 @@
 """Bounded exact-entrypoint acceptance against one immutable flat ZIP.
 
 Offline runs inject an external test client, never a production fallback. Real
-runs use the configured Qwen provider without injection. Neither edits the ZIP.
+acceptance uses Qwen; explicitly selected diagnostic API runs are marked and
+excluded from release acceptance. Neither edits the ZIP or .env.
 """
 from __future__ import annotations
 import argparse
@@ -88,13 +89,26 @@ def verify_run(run_dir, expected_rows, expected_metric):
     return report
 
 
+def select_real_settings(settings, model=None, *, diagnostic_api=False):
+    from dataclasses import replace
+    from mlmom.llm_client import PLATFORM_MODEL
+    if diagnostic_api and not model:
+        raise ValueError('Diagnostic API runs require an explicitly selected model')
+    if model:
+        settings=replace(settings,model=model)
+    if settings.model!=PLATFORM_MODEL and not diagnostic_api:
+        raise ValueError('Configured model differs from organizer Qwen; no substitution allowed')
+    return settings
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--archive',type=Path)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--mode',choices=['offline','real'],default='offline')
     parser.add_argument('--image',help='Docker image with the provided Python 3.12 dependencies')
-    parser.add_argument('--model',choices=['qwen/qwen3.8-27b'],help='Explicit per-run model selection; never edits .env')
+    parser.add_argument('--model',help='Explicit per-run model selection; non-Qwen requires --diagnostic-api; never edits .env')
+    parser.add_argument('--diagnostic-api',action='store_true',help='Explicit diagnostic provider/model run, excluded from release acceptance')
     parser.add_argument('--seconds',type=float,default=1800)
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--regression-task',type=Path,default=ROOT.parent/'data/Регрессия/task.md')
@@ -109,6 +123,7 @@ def main():
         report=verify_run(args.verify_run,args.expected_rows,args.expected_metric)
         write(out/'verification.json',report);print(json.dumps(report));return 0
     if not args.archive:parser.error('--archive is required')
+    if args.diagnostic_api and args.mode!='real':parser.error('--diagnostic-api requires --mode real')
     if args.seconds<=60 or (args.mode=='real' and args.seconds>1800):parser.error('Budget must exceed 60 seconds and real cases may use at most 1800 seconds each')
     sha=digest(args.archive)
     frozen_archive=out/'runtime-solution.zip'
@@ -117,12 +132,8 @@ def main():
     else:shutil.copyfile(args.archive,frozen_archive)
     secrets={}
     if args.mode=='real':
-        from mlmom.llm_client import LLMSettings,PLATFORM_MODEL
-        settings=LLMSettings.from_env(str(ROOT/'.env'))
-        if args.model:
-            from dataclasses import replace
-            settings=replace(settings,model=args.model)
-        if settings.model!=PLATFORM_MODEL:raise ValueError('Configured model differs from organizer Qwen; no substitution allowed')
+        from mlmom.llm_client import LLMSettings
+        settings=select_real_settings(LLMSettings.from_env(str(ROOT/'.env')),args.model,diagnostic_api=args.diagnostic_api)
         secrets=dict(OPENAI_API_KEY=settings.api_key,OPENAI_BASE_URL=settings.base_url,OPENAI_MODEL=settings.model)
     specs=[('regression',args.regression_task,22449,'rmse'),('multiclass',args.multiclass_task,41166,'f1_macro')]
     reports_path=out/'reports.json'
@@ -179,7 +190,7 @@ def main():
         report=dict(case=name,attempt=ledger['attempts'],archive_sha256=sha,mode=args.mode,
             environment='linux/docker' if args.image else sys.platform,command=['python3' if args.image else sys.executable,'solution.py','task.md'],
             run_dir=str(platform_dir/'run'),status='failed')
-        if args.mode=='real':report['model']=settings.model
+        if args.mode=='real':report.update(model=settings.model,diagnostic_api=args.diagnostic_api)
         started=time.monotonic()
         try:
             with (attempt/'run.log').open('w',encoding='utf-8') as log:

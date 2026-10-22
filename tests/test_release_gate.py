@@ -38,5 +38,21 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertEqual(pipeline.call_args.args[1].total_seconds,1800)
                 self.assertEqual(pipeline.call_args.kwargs['run_dir'],Path(tmp)/'run')
 
+    def test_other_provider_requires_explicit_diagnostic_selection_and_cannot_pass_release(self):
+        from mlmom.llm_client import LLMSettings
+        from scripts.release_cases import select_real_settings
+        settings=LLMSettings(api_key='offline-test',model='deepseek/deepseek-v4.1-flash-1017')
+        with self.assertRaisesRegex(ValueError,'no substitution'):
+            select_real_settings(settings)
+        with self.assertRaisesRegex(ValueError,'explicitly selected'):
+            select_real_settings(settings,diagnostic_api=True)
+        selected=select_real_settings(settings,settings.model,diagnostic_api=True)
+        self.assertEqual(selected.model,settings.model)
+        for model in [selected.model,'qwen/qwen3.8-27b']:
+            reports=[dict(case=name,status='passed',archive_sha256='zip',mode='real',environment='linux/docker',
+                model=model,diagnostic_api=True,verification=dict(status='passed',completed_cycles=3,
+                generated_path=True,relocated_model_equal=True)) for name in ['regression','multiclass']]
+            self.assertEqual(gate('zip',real=reports)['checks']['real_api']['status'],'failed')
+
 
 if __name__=='__main__':unittest.main()
