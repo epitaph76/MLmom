@@ -101,10 +101,10 @@ def select_real_settings(settings, model=None, *, diagnostic_api=False):
     return settings
 
 
-def case_config(remaining, mode, fit_time_multiplier=1):
+def case_config(remaining, mode, fit_time_multiplier=1, *, timeouts_enabled=True):
     if not 0 < fit_time_multiplier <= 3:
         raise ValueError('Fit time multiplier must be positive and at most 3')
-    return dict(profile='platform',total_seconds=max(1,remaining-50),final_reserve_seconds=120 if mode=='offline' else 300,
+    return dict(profile='platform',timeouts_enabled=timeouts_enabled,total_seconds=max(1,remaining-50),final_reserve_seconds=120 if mode=='offline' else 300,
         max_workers=1,max_rounds=6,target_completed_rounds=3,reserve_cpus=0,reserve_memory_gb=0,
         experiment_seconds=(120 if mode=='offline' else 420)*fit_time_multiplier,
         initial_experiment_seconds=120*fit_time_multiplier,
@@ -122,6 +122,7 @@ def main():
     parser.add_argument('--diagnostic-api',action='store_true',help='Explicit diagnostic provider/model run, excluded from release acceptance')
     parser.add_argument('--seconds',type=float,default=1800)
     parser.add_argument('--fit-time-multiplier',type=float,default=1,help='Explicitly scale experiment and search windows up to 3x; total deadline is separate')
+    parser.add_argument('--enable-timeouts',action='store_true',help='Opt in to stage and wall-clock deadlines for diagnostic runs')
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--regression-task',type=Path,default=ROOT.parent/'data/Регрессия/task.md')
     parser.add_argument('--multiclass-task',type=Path,default=ROOT.parent/'data/Многоклассовая классификация/task.md')
@@ -139,6 +140,7 @@ def main():
     if args.seconds<=60 or (args.mode=='real' and not args.diagnostic_api and args.seconds>1800):parser.error('Budget must exceed 60 seconds and Qwen acceptance may use at most 1800 seconds each')
     if args.diagnostic_api and args.seconds>10800:parser.error('Diagnostic API budget may use at most 10800 seconds per task')
     if not 0 < args.fit_time_multiplier <= 3:parser.error('Fit time multiplier must be positive and at most 3')
+    timed=args.enable_timeouts
     sha=digest(args.archive)
     frozen_archive=out/'runtime-solution.zip'
     if frozen_archive.exists():
@@ -156,9 +158,10 @@ def main():
         if args.case not in {'all',name}:continue
         case=out/name;case.mkdir(exist_ok=True)
         ledger_path=case/'budget.json'
-        ledger=json.loads(ledger_path.read_text()) if ledger_path.exists() else dict(archive_sha256=sha,deadline=time.time()+args.seconds,attempts=0)
+        ledger=json.loads(ledger_path.read_text()) if ledger_path.exists() else dict(archive_sha256=sha,deadline=time.time()+args.seconds if timed else None,attempts=0,timeouts_enabled=timed)
         if ledger['archive_sha256']!=sha:raise ValueError('Use a new output directory for a different ZIP')
-        remaining=min(args.seconds,ledger['deadline']-time.time())
+        if (ledger['deadline'] is not None)!=timed:raise ValueError('Resume requires the same timeout policy')
+        remaining=min(args.seconds,ledger['deadline']-time.time()) if timed else args.seconds
         if remaining<=60:
             reports.append(dict(case=name,status='not_verified',reason='Original case budget exhausted',archive_sha256=sha));write(reports_path,reports);continue
         ledger['attempts']+=1;write(ledger_path,ledger)
@@ -175,7 +178,7 @@ def main():
             package.extractall(platform_dir)
         control=attempt/'control';control.mkdir()
         if args.mode=='offline':shutil.copyfile(ROOT/'tests/fixtures/release_sitecustomize.py',control/'sitecustomize.py')
-        config=case_config(remaining,args.mode,args.fit_time_multiplier)
+        config=case_config(remaining,args.mode,args.fit_time_multiplier,timeouts_enabled=timed)
         write(control/'config.json',config)
         name_tag='mlmom-release-'+uuid.uuid4().hex[:10]
         if args.image:
@@ -202,17 +205,18 @@ def main():
             run_dir=str(platform_dir/'run'),status='failed')
         if args.mode=='real':report.update(model=settings.model,diagnostic_api=args.diagnostic_api)
         report['fit_time_multiplier']=args.fit_time_multiplier
+        report['timeouts_enabled']=timed
         started=time.monotonic()
         try:
             with (attempt/'run.log').open('w',encoding='utf-8') as log:
                 process=subprocess.Popen(command,cwd=platform_dir,env=env,stdout=log,stderr=subprocess.STDOUT)
-                try:report['exit_code']=process.wait(timeout=max(1,ledger['deadline']-time.time()-45))
+                try:report['exit_code']=process.wait(timeout=max(1,ledger['deadline']-time.time()-45) if timed else None)
                 except subprocess.TimeoutExpired:
                     if args.image:subprocess.run(['docker','rm','-f',name_tag],capture_output=True,timeout=20)
                     from mlmom.resources import terminate_tree
                     terminate_tree(process.pid);process.wait();report['reason']='Original case deadline reached'
-                available=ledger['deadline']-time.time()
-                if available>1:
+                available=ledger['deadline']-time.time() if timed else None
+                if available is None or available>1:
                     checked=subprocess.run(verify,cwd=platform_dir,env={k:v for k,v in env.items() if k not in {'MLMOM_RELEASE_OFFLINE','PYTHONPATH'}},
                         stdout=log,stderr=subprocess.STDOUT,timeout=available)
                     if checked.returncode==0 and report.get('exit_code')==0:

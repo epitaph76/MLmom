@@ -12,26 +12,25 @@ from tests.fakes import MODEL_CODE
 
 
 class PolicyConsistencyTests(unittest.TestCase):
-    def test_ensemble_plan_is_rejected_even_after_initial_cycle(self):
+    def test_ensemble_plan_is_allowed_with_valid_components(self):
         context,tools,budget,plan=case()
         plan.skill_ids.append('ensembles')
-        plan.ensemble_components=[dict(tool_id='sklearn')]
-        self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,lightweight=False).valid)
-        with tempfile.TemporaryDirectory() as tmp:
-            _,context,plan,_=execution_case(Path(tmp),'regression')
-            plan.ensemble_components=[dict(tool_id='sklearn')]
-            with self.assertRaisesRegex(ValueError,'disabled'):
-                train(dict(context=context.model_dump(mode='json'),plan=plan.model_dump(mode='json')),Path(tmp))
+        plan.ensemble_components=[dict(tool_id='sklearn'),dict(tool_id='sklearn',model_params={'estimator':'ridge'})]
+        self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,lightweight=False).valid)
+        self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,lightweight=True).valid)
+        plan.ensemble_components[1]['tool_id']='missing'
+        self.assertFalse(validate_plan(plan,context,tools,Skills(),budget).valid)
 
-    def test_generated_stacking_and_native_blending_rejected_but_extratrees_allowed(self):
+    def test_generated_stacking_and_native_blending_allowed_in_candidate_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'candidate.py'
             for extra in ['from sklearn.ensemble import StackingRegressor as Hidden',
-                          'from mlmom.ensemble import EnsembleCandidate',
                           'def fit_native(a): a.fit(ensemble=True)',
                           'def fit_native(a): a.fit(num_stack_levels=1)']:
                 path.write_text(MODEL_CODE+'\n'+extra,encoding='utf-8')
-                self.assertFalse(verify_source(Path(tmp)).valid)
+                self.assertTrue(verify_source(Path(tmp)).valid)
+            path.write_text(MODEL_CODE+'\nfrom mlmom.ensemble import EnsembleCandidate',encoding='utf-8')
+            self.assertFalse(verify_source(Path(tmp)).valid)
             path.write_text(MODEL_CODE,encoding='utf-8')
             self.assertTrue(verify_source(Path(tmp)).valid)
 
@@ -40,9 +39,8 @@ class PolicyConsistencyTests(unittest.TestCase):
         check()
         from mlmom.registry import SkillRegistry
         registry=SkillRegistry(Path(__file__).resolve().parents[1]/'skills')
-        self.assertNotIn('ensembles',{s['skill_id'] for s in registry.list(role='coding_agent')})
-        with self.assertRaisesRegex(ValueError,'not available'):
-            registry.load(['ensembles'],'regression',role='coding_agent')
+        self.assertIn('ensembles',{s['skill_id'] for s in registry.list(role='coding_agent')})
+        self.assertIn('ensembles',{s['skill_id'] for s in registry.load(['ensembles'],'regression',role='coding_agent')})
 
 
 if __name__=='__main__':unittest.main()

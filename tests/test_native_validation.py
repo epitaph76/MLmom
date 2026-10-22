@@ -40,7 +40,7 @@ class NativeValidationTests(unittest.TestCase):
             with self.subTest(kind=kind):self.check_generated_holdout(kind)
 
     def check_generated_holdout(self,kind):
-        with tempfile.TemporaryDirectory() as tmp, SandboxManager() as manager:
+        with tempfile.TemporaryDirectory() as tmp, SandboxManager(timeouts_enabled=True) as manager:
             root=Path(tmp)
             frame,context,plan,code=execution_case(root,kind)
             if 'classification' in kind:

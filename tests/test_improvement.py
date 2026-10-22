@@ -111,7 +111,7 @@ class DataPathTests(unittest.TestCase):
         from mlmom.persistence import ExperimentStore
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'inputs')
-            config=RunConfig(total_seconds=600,final_reserve_seconds=60,max_rounds=4,target_completed_rounds=3,fixed_outer_split=True,
+            config=RunConfig(timeouts_enabled=True,total_seconds=600,final_reserve_seconds=60,max_rounds=4,target_completed_rounds=3,fixed_outer_split=True,
                 hpo_max_trials=5,hpo_seconds=45,experiment_seconds=60,initial_experiment_seconds=45,
                 diagnostic_seconds=5,smoke_seconds=20,prediction_seconds=20,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
             class OneBrokenReview(OfflineLLM):

@@ -68,10 +68,11 @@ class PlanningLimitTests(unittest.TestCase):
         self.assertNotIn('hypothesis_id',current_context())
 
     def test_batch_limit_and_config_limits(self):
-        self.assertEqual(RunConfig().max_candidates,2)
-        self.assertEqual(RunConfig(initial_experiment_seconds=360).initial_experiment_seconds,360)
-        for params in ({'max_candidates':3},{'coding_seconds':301},{'initial_experiment_seconds':901}):
-            with self.assertRaises(ValidationError): RunConfig(**params)
+        self.assertEqual(RunConfig(timeouts_enabled=True).max_candidates,2)
+        self.assertEqual(RunConfig(timeouts_enabled=True,initial_experiment_seconds=360).initial_experiment_seconds,360)
+        self.assertEqual(RunConfig(coding_seconds=900).coding_seconds,900)
+        for params in ({'max_candidates':3},):
+            with self.assertRaises(ValidationError): RunConfig(timeouts_enabled=True,**params)
         h=case()[3].hypothesis
         with self.assertRaises(ValidationError): HypothesisBatch(hypotheses=[h,h,h])
         with self.assertRaises(ValidationError): PlanBatch(plans=[case()[3]]*3)
@@ -106,7 +107,7 @@ class PlanningLimitTests(unittest.TestCase):
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=20).valid)
         self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=21).valid)
 
-    def test_forbidden_ensembles_do_not_trigger_lazy_backend_probes(self):
+    def test_ensemble_plan_probes_only_selected_backends(self):
         class SelectedPlanner(Planner):
             def generate(self,role,instruction,payload,schema,tools=None):
                 result=super().generate(role,instruction,payload,schema,tools)
@@ -121,7 +122,7 @@ class PlanningLimitTests(unittest.TestCase):
             called.append(key);tools[key].available=True;tools[key].reason=None
         output=build_planning_graph(SelectedPlanner(),context,tools,Skills(),budget,lightweight=False,
             planning_mode='baseline',probe_tool=probe).invoke({'payload':{'round_number':2}})
-        self.assertFalse(output['valid']);self.assertEqual(called,[])
+        self.assertFalse(output['valid']);self.assertEqual(called,['torch','catboost'])
         self.assertFalse(tools['autogluon'].available)
 
     def test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends(self):
@@ -212,7 +213,7 @@ class CodingBudgetTests(unittest.TestCase):
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
             context,tools,_,plan=case();client=Coder(budget,250);original=client.deadline
             kwargs=dict(workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',skill_data=[],
-                        tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(),round_id='r1')
+                        tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1')
             first=build_coding_graph(client,**kwargs).invoke({'payload':{}})
             self.assertTrue(first['valid']);self.assertEqual(budget.elapsed,280)
             deadline=store.get('coding_budget','r1-base')['deadline']
@@ -231,7 +232,7 @@ class CodingBudgetTests(unittest.TestCase):
             sandbox=Sandbox(budget);context,tools,_,plan=case();plan.time_limit_seconds=5;client=Coder(budget,5)
             result=build_coding_graph(client,workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',
                 skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
-                config=RunConfig(prediction_seconds=5),round_id='r1').invoke({'payload':{}})
+                config=RunConfig(timeouts_enabled=True,prediction_seconds=5),round_id='r1').invoke({'payload':{}})
             self.assertTrue(result['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],5)
             self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1885)
 
@@ -240,7 +241,7 @@ class CodingBudgetTests(unittest.TestCase):
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
             context,tools,_,plan=case();client=Coder(budget,250)
             kwargs=dict(workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',skill_data=[],
-                        tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(),round_id='r1')
+                        tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1')
             first=build_coding_graph(client,**kwargs).invoke({'payload':{}})
             self.assertTrue(first['valid']);budget.extra_reserve=400
             second=build_coding_graph(client,**kwargs,runtime_feedback='Repair').invoke({'payload':{}})

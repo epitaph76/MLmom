@@ -154,7 +154,7 @@ class RealFailureRegressions(unittest.TestCase):
             client=TimedOut();started=time.time()
             output=build_coding_graph(client,workspace=root/'work',store=store,plan=plan,plan_ref=root/'plan.json',
                 skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
-                config=RunConfig(),round_id='r1').invoke({'payload':{}})
+                config=RunConfig(timeouts_enabled=True),round_id='r1').invoke({'payload':{}})
             self.assertFalse(output['valid']);self.assertEqual(sandbox.calls,[])
             self.assertIn('Missing candidate.py',output['errors']);self.assertIn('APITimeoutError',output['errors'])
             self.assertLessEqual(client.received_deadline-started,241)

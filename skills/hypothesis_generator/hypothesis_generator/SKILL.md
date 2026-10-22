@@ -1,31 +1,52 @@
 ---
 name: hypothesis-generator
-description: Form one evidence-backed, falsifiable model improvement from reconnaissance and experiment history.
+description: Turn measured findings and experiment history into one-change, falsifiable ML hypotheses.
 ---
-# Hypothesis generation
+# Hypothesis generator
 
-Use measured findings, task meaning and current-cycle diagnostics to choose one
-change whose effect can be checked against a reference on the same outer split.
-Describe the observation, its evidence IDs, proposed mechanism and expected metric
-effect in the existing description/rationale fields. Distinguish a measured fact
-from a suspected explanation; do not invent effect sizes or causal evidence.
+Select an observation that can change a modeling decision. Prefer confirmed task
+requirements, critical findings, measured reconnaissance observations, comparable
+experiment results and diagnosed failures. Use only supplied observation, evaluation,
+candidate and experiment references. A proposal, correlation or plausible mechanism is
+not a measured benefit. Empty history is normal before the first fit; in that case create
+the required cheap baseline rather than inventing evidence.
 
-Prefer findings with sufficient support and a plausible effect on the primary
-metric. Describe computational cost, failure risk and the comparison that would
-reject the idea. A tail-error claim needs a supported tail slice, not just total RMSE.
+Propose one falsifiable intervention per hypothesis. One intervention may be a model
+family, representation, feature transformation, loss/weighting policy, sampling policy
+or decision rule. Keep supporting operations only when they are necessary to execute
+that intervention. A new parameter value, wider range, longer search or another Optuna
+trial is not a new hypothesis: parameter search belongs inside the existing hypothesis.
+If two independent changes are desirable, choose the higher-value one now and leave the
+other for a later ablation.
 
-Read previous hypotheses, implementations and failures before proposing a change.
-Do not repeat a tested idea under another name or call another hyperparameter set
-a new hypothesis: parameter search belongs inside the existing implementation.
-A repeat is justified only by changed data/evidence, a repaired implementation or
-an explicitly different test; state that reason and use existing lineage IDs.
+For later rounds, connect the intervention to numeric findings or a previous experiment.
+Use `based_on` only for a supplied verified candidate ID and
+`based_on_hypothesis_id` only for lineage. Do not compare scores from different outer
+splits as if they were paired. Reject a repeated idea when the same mechanism and
+intervention were already tested, rejected, or failed for the same unresolved reason.
+Revisit it only when new evidence changes the mechanism, the intervention is materially
+different, or a named fix removes the previous blocker.
 
-Keep a necessary baseline simple within the established first-cycle policy.
-Later hypotheses should change one principal behavior, such as category handling
-or target transformation, so that the result can inform the next experiment.
-Do not combine unrelated transforms to claim evidence for each of them.
+Estimate value against the requested metric direction and the affected population.
+State a qualitative effect unless supplied evidence supports a numeric estimate. Balance
+that value against runtime/memory cost, implementation complexity, leakage or instability
+risk, and the remaining experiment budget. Prefer the cheapest experiment that can
+falsify the claim.
 
-Respect the confirmed internal validation strategy and allow time for every fold
-and a full-train refit. The outer holdout rotates; historical scores are context,
-never a directly comparable reference. Candidate ensembles, blending and stacking
-are disabled. Return only the existing HypothesisBatch schema.
+Return at most the requested number of hypotheses. Preserve the required baseline flag.
+`description` names the single intervention. Write `rationale` compactly in this order:
+`Evidence: ...; Mechanism: ...; Expected effect: ...; Cost: ...; Risk: ...; Verify: ...`.
+Verification must name the comparable reference, metric and acceptance/rejection signal.
+
+Decision examples:
+
+- Good: a saved rare-class observation motivates class weights, tested against the same
+  candidate and split with macro-F1 and per-class recall.
+- Reject: "try depth 8 instead of 6" is another parameter trial, not a new hypothesis.
+- Reject: repeat target encoding after it already failed from leakage unless the new idea
+  names and tests the fold-local correction.
+
+Blending and OOF stacking are allowed hypotheses when diverse errors justify
+them; account for every component and preprocessing cost. The runner owns
+validation_strategy, all internal folds and fresh full-train refit. Timeouts are
+opt-in; do not invent a hard deadline when timeouts_enabled=false.

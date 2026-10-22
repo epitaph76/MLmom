@@ -14,8 +14,6 @@ from .tracing import bind, emit
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
                   *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
-    if plan.ensemble_components or 'ensembles' in plan.skill_ids:
-        errors.append('Candidate ensembles and AutoML blending/stacking are disabled')
     tool = tools.get(plan.tool_id)
     if not tool or not tool.available: errors.append(f'Tool unavailable: {plan.tool_id}')
     else:
@@ -34,14 +32,13 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     if lightweight:
         if plan.strategy != 'single' or plan.max_trials != 1:
             errors.append('Lightweight plans require strategy=single and max_trials=1; search_space is reserved for later HPO')
-        if plan.ensemble_components: errors.append('Lightweight plans cannot contain ensembles')
         if tool and (tool.native_hpo or tool.cost_tag == 'slow'):
             errors.append('Lightweight plans cannot use native AutoML or slow backends')
-        if plan.time_limit_seconds > initial_experiment_seconds:
+        if getattr(budget,'timeouts_enabled',True) and plan.time_limit_seconds > initial_experiment_seconds:
             errors.append('Lightweight experiment exceeds the initial experiment limit')
     if plan.cpus > budget.available_cpus or plan.memory_gb > budget.available_memory_gb:
         errors.append('Requested resources exceed worker capacity')
-    if plan.time_limit_seconds + max(0,evaluation_reserve_seconds) > budget.research_seconds:
+    if getattr(budget,'timeouts_enabled',True) and plan.time_limit_seconds + max(0,evaluation_reserve_seconds) > budget.research_seconds:
         errors.append('Experiment exceeds research deadline including evaluation reserve')
     if plan.prediction_kind != prediction_kind(context.task.primary_metric, context.task.task_type):
         errors.append('prediction_kind does not match the primary metric')
@@ -63,8 +60,8 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     reserved={'n_jobs','num_threads','thread_count','num_cpus','num_gpus','device','device_type','task_type',
               'pretrained','presets','hyperparameters','general_params','reader_params','estimator_list',
               'time_budget','time_limit','timeout','gpu_ids','starting_points','__native_frozen','__ensemble_frozen',
-              'log_file_name','log_type','max_iter'}
-    reserved |= {'ensemble','fit_weighted_ensemble','num_bag_folds','num_stack_levels','auto_stack'}
+              'log_file_name','log_type'}
+    if tool and tool.native_hpo:reserved.add('max_iter')
     if reserved & (set(plan.model_params)|set(plan.search_space)):
         errors.append('Model/search parameters attempt to override infrastructure or pretrained policy')
     if plan.tool_id=='statsmodels' and context.task.task_type!='regression':
@@ -77,6 +74,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         if plan.tool_id=='lightautoml' and metric_name(context.task.primary_metric)!=LIGHTAUTOML_OBJECTIVES.get(context.task.task_type):
             errors.append('LightAutoML native objective must match its task: regression=rmse, binary=roc_auc, multiclass=log_loss')
     if plan.ensemble_components:
+        if len(plan.ensemble_components)<2:errors.append('At least two ensemble components are required')
         if context.task.task_type not in {'regression','multioutput_regression','binary_classification','multiclass_classification','multilabel_classification'}:
             errors.append('Ensemble SDK supports supervised regression/classification')
         if 'ensembles' not in plan.skill_ids: errors.append('Ensembles require the ensembles skill')
@@ -84,6 +82,9 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             entry = tools.get(component.get('tool_id'))
             if not entry or not entry.available or context.task.task_type not in entry.task_types:
                 errors.append('Unavailable/incompatible ensemble component')
+            if entry and not set(entry.skill_ids)<=set(plan.skill_ids):errors.append('Required ensemble component skills are missing')
+            if entry and context.task.validation_strategy not in entry.validation_strategies:
+                errors.append('Ensemble component has no verified support for the internal validation strategy')
             if entry and context.task.weight_column and not entry.supports_weights:errors.append('Ensemble component cannot honor sample weights')
             if reserved & set(component.get('model_params',{})):errors.append('Ensemble component overrides infrastructure policy')
     return ValidationReport(valid=not errors, errors=errors)
@@ -126,6 +127,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             return function(*args, **kwargs)
 
     def generate(role, instruction, payload, schema, role_tools=None):
+        instruction += (' Hard timeouts apply only when budget.timeouts_enabled=true. Otherwise time fields '
+            'are estimates, not cutoffs; CPU, memory and trial-count limits still apply. ')
         instruction += (' Read planning_brief for task purpose, quoted domain details and prioritized dataset evidence. '
             'Canonical task and planning_brief.requirements are authoritative; never replace them with narrative '
             'assumptions. Account for mandatory_findings even when not selected in ranked_findings. '
@@ -169,9 +172,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     batch = generate('hypothesis_generator',
                         f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 or first_candidate_required=true requires a fast baseline. '
                         'When lightweight=true, propose simple fixed-configuration fits only: no HPO, AutoML, neural '
-                        'networks or ensembles. The coder implements a cheap baseline directly using the selected library '
+                        'networks. Prefer a cheap single-model baseline; ensembles are permitted when justified. The coder implements the baseline directly using the selected library '
                         'and simple fold-local preprocessing; reference skills provide implementation examples. '
-                        'No internal cross-validation. '
+                        'The runner performs the confirmed internal validation; candidate.fit must not repeat it. '
                         'Use supplied history; empty history is normal before the first fit. '
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
@@ -214,9 +217,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'available shared contracts only. Backend implementation references belong to the coders. '
                         'Use supplied context to return final JSON first; '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
-                        'imbalance for weighting/thresholds. Candidate ensembles and AutoML blending/stacking are disabled. '
+                        'imbalance for weighting/thresholds. Ensembles are allowed; include the ensembles and component skills. '
                         'When lightweight=true require strategy=single, max_trials=1, no '
-                        'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
+                        'native AutoML or slow backend, and an optional time_limit_seconds of '
                         f'{initial_experiment_seconds}. Never override orchestration resources; '
                         'exclude targets, IDs and evaluation data from features. Always use execution_mode=custom: '
                         'the preprocessing agent implements transforms; the model coder implements the estimator. In lightweight mode '
@@ -227,7 +230,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'budget all folds plus a mandatory full-train refit. Do not implement CV in candidate.fit. '
                         'Native AutoML requires a verified validation_strategies entry matching the confirmed task. '
                         'After baseline use strategy=optuna with a small compatible search_space for ordinary estimators; '
-                        'never implement HPO in candidate.fit. Respect improvement_policy and do not use ensembles. '
+                        'never implement HPO in candidate.fit. Respect improvement_policy; stacking meta learners require OOF base predictions. '
                         'Backend skills are references, not hidden runtime adapters. The code must consume every '
                         'declared model/search parameter. For text specify a sparse linear estimator with C for '
                         'classification or alpha for regression. '
@@ -259,9 +262,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         # registry. Forbidden initial plans must not trigger
                         # expensive capability checks before rejection.
                         tool=tools.get(item.tool_id)
-                        forbidden_initial=is_light(state) and (item.ensemble_components or
+                        forbidden_initial=is_light(state) and (
                             (tool and (tool.native_hpo or tool.cost_tag=='slow')))
-                        if not forbidden_initial and not item.ensemble_components and 'ensembles' not in item.skill_ids:
+                        if not forbidden_initial:
                             selected=[item.tool_id,*[c.get('tool_id') for c in item.ensemble_components]]
                             for key in dict.fromkeys(selected):
                                 selected_tool=tools.get(key)

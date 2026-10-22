@@ -32,6 +32,7 @@ numbers from the tool/profile. Never invent measurements or claim causality from
 correlation. Put assumptions in prose, and cite saved observation IDs in proposals.
 Specify expected effects and verification on comparable splits. Include unfinished_checks.
 
-Initial budget is 300 seconds; follow-ups 120, including tools and retries. Each SQL
-worker has up to 30 seconds. Confirm requirements early and save findings frequently:
+Hard timeouts are disabled by default. Only when timeouts_enabled=true, initial
+reconnaissance uses initial_reconnaissance_seconds and follow-ups use
+reconnaissance_seconds; SQL workers use reconnaissance_query_seconds. Confirm requirements early and save findings frequently:
 a timeout preserves the confirmed task, observations and completed calculations.

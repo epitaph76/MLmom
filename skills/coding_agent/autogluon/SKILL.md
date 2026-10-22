@@ -8,7 +8,7 @@ The generated path is not admitted yet: validation_strategies is empty until
 non-ensemble holdout search, frozen full refit and relocation are verified.
 The API notes below are compatibility references, not planner permission.
 
-Only regression/binary/multiclass; strategy='native', patience_trials=null. Mapped metrics: rmse, mae, f1_macro, accuracy, roc_auc, log_loss. Prefer direct boosting on short budgets. Allowed model families: GBM/CAT/XGB/RF/XT; weighted ensemble is disabled.
+Only regression/binary/multiclass; strategy='native', patience_trials=null. Mapped metrics: rmse, mae, f1_macro, accuracy, roc_auc, log_loss. Prefer direct boosting on short budgets. Allowed model families: GBM/CAT/XGB/RF/XT; native weighted ensembles require a proven frozen ensemble export/refit; the current reference fits individual families.
 
 The generated candidate implements hyperparameters, time_limit, num_cpus, num_gpus=0, label/path and internal tuning_data. Do not duplicate reserved settings in model_params. Verified fit_strategy='sequential' and memory_limit below worker allocation may be fit options; memory_limit is soft. Avoid bagging/stacking under tight limits, parallel Ray, quality presets and pretrained/foundation families.
 

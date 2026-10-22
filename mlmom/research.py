@@ -67,6 +67,9 @@ class ReconnaissanceSession:
         self.budget, self.store, self.config, self.key = budget, store, config, key
         self.context, self.history, self.skills = context, history, skills
         seconds = config.initial_reconnaissance_seconds if key == 'initial' else config.reconnaissance_seconds
+        if not getattr(config,'timeouts_enabled',True):
+            from .time_policy import UNBOUNDED_SECONDS
+            seconds=UNBOUNDED_SECONDS-budget.now()
         window = store.get('reconnaissance_budget', key)
         if window is None:
             window = dict(deadline=budget.now()+min(seconds, budget.snapshot().research_seconds))

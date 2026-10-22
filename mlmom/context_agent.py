@@ -92,6 +92,9 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
     atomic_json(directory/'input.json',inputs)
     allowance=min(config.context_seconds, budget.snapshot().research_seconds,
                   config.context_seconds if seconds is None else max(0,seconds))
+    if not getattr(config,'timeouts_enabled',True):
+        from .time_policy import UNBOUNDED_SECONDS
+        allowance=UNBOUNDED_SECONDS-budget.now()
     window=store.get('context_budget',key)
     if window is None:
         window=dict(deadline=budget.now()+max(0,allowance))

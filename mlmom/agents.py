@@ -46,8 +46,9 @@ def role_window(client, role, key, seconds):
 
 class RoleClient:
     def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None, request_callback=None, trace=None, budget_store=None,
-                 planning_direct_first=True,planning_context_reads=2):
+                 planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True):
         self.settings = settings
+        self.timeouts_enabled = timeouts_enabled
         self.model = settings.model
         self.deadline = deadline
         self.max_steps = max_steps
@@ -64,6 +65,9 @@ class RoleClient:
 
     @contextmanager
     def budget_scope(self, role, key, seconds):
+        if not self.timeouts_enabled:
+            yield
+            return
         identity = f'{role}:{key}'
         saved = self.budget_store.get('role_budget', identity) if self.budget_store else self.role_windows.get(identity)
         if saved is None:
@@ -97,7 +101,7 @@ class RoleClient:
             return self._request_impl(messages, tools=tools, role=role)
 
     def _request_impl(self, messages, *, tools=None, role='reconnaissance_agent'):
-        if time.time() >= self.deadline:
+        if self.timeouts_enabled and time.time() >= self.deadline:
             raise LLMUnavailable('LLM deadline reached')
         params = dict(model=self.model, messages=request_messages(messages), temperature=0)
         if tools:
@@ -107,16 +111,17 @@ class RoleClient:
             params['response_format'] = {'type':'json_object'}
         last = None
         for attempt in range(3):
-            remaining = self.deadline-time.time()
+            remaining = self.deadline-time.time() if self.timeouts_enabled else 1e12
             if remaining <= 0: break
             started=time.monotonic()
             if self.request_callback:
                 self.request_callback(dict(role=role,attempt=attempt+1,status='started'))
             try:
-                with span('llm.attempt', dict(params, timeout_seconds=min(remaining,self.settings.timeout_seconds)),
+                timeout=min(remaining,self.settings.timeout_seconds) if self.timeouts_enabled and self.settings.timeout_seconds is not None else None
+                with span('llm.attempt', dict(params, timeout_seconds=timeout),
                           attempt=attempt+1):
                     try:
-                        response = self.client.with_options(timeout=min(remaining,self.settings.timeout_seconds)).chat.completions.create(**params)
+                        response = self.client.with_options(timeout=timeout).chat.completions.create(**params)
                     except Exception as error:
                         emit('llm.provider_error', {'error_type':type(error).__name__, 'error':str(error),
                             'status_code':getattr(error,'status_code',None), 'body':getattr(error,'body',None),
@@ -152,15 +157,16 @@ class RoleClient:
                 if self.request_callback:
                     self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last,
                                                request_seconds=time.monotonic()-started))
-                emit('llm.retry_scheduled', {'reason':last,'delay_seconds':min(2**attempt,max(0,self.deadline-time.time()))})
-                time.sleep(min(2**attempt, max(0,self.deadline-time.time())))
+                delay=min(2**attempt,max(0,self.deadline-time.time())) if self.timeouts_enabled else 2**attempt
+                emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
+                time.sleep(delay)
             except APIStatusError as error:
                 if 'budget has been exceeded' in str(getattr(error,'body','')).lower():
                     raise LLMUnavailable('Organizer daily API budget exceeded; resets at 03:00 MSK') from None
                 if error.status_code in {500,502,503,504}:
                     last = f'HTTP {error.status_code}'
                     if attempt < 2:
-                        delay = min(2**attempt, max(0,self.deadline-time.time()))
+                        delay = min(2**attempt, max(0,self.deadline-time.time())) if self.timeouts_enabled else 2**attempt
                         emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
                         if self.request_callback:
                             self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last))

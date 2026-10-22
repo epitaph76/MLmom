@@ -63,7 +63,7 @@ class PipelineIntegrationTests(unittest.TestCase):
         for kind in ['regression','multiclass_classification']:
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp); task=dataset(root/'input',kind)
-                config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
+                config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
                     prediction_seconds=10,experiment_seconds=20,reserve_cpus=0,reserve_memory_gb=0)
                 client=TechniqueClient()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
@@ -127,7 +127,7 @@ class PipelineIntegrationTests(unittest.TestCase):
     def test_failure_without_llm_does_not_create_fallback_submission(self):
         with tempfile.TemporaryDirectory() as temp:
             task=dataset(Path(temp)/'input')
-            result=Pipeline(task,RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=Path(temp)/'run',client=OfflineLLM(fail=True)).run()
+            result=Pipeline(task,RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=60,final_reserve_seconds=10),run_dir=Path(temp)/'run',client=OfflineLLM(fail=True)).run()
             self.assertEqual(result['status'],'failed')
             self.assertFalse((task.parent/'submission.csv').exists())
 

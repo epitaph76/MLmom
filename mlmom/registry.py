@@ -90,8 +90,6 @@ class SkillRegistry:
             self.owners[manifest.skill_id] = path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts)>2 else 'shared'
 
     def allowed(self, key, role):
-        if key == 'ensembles' and role is not None:
-            return False  # Retained for compatibility/admin inspection only.
         return role is None or self.owners[key] in {'shared', role}
 
     def list(self, *, role=None):
@@ -104,7 +102,7 @@ class SkillRegistry:
         return [dict(skill_id=s.skill_id, title=s.title, owner=self.owners[s.skill_id],
                      task_types=list(s.task_types))
                 for s in self.manifests.values()
-                if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id == 'imbalance')
+                if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id in {'imbalance','ensembles'})
                 and s.status == 'ready' and (not s.task_types or task_type in s.task_types)]
 
     def load(self, ids: list[str], task_type: str, *, role=None, max_chars=24000,include_references=False):

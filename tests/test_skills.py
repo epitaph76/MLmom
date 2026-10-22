@@ -94,7 +94,7 @@ class SkillTests(unittest.TestCase):
         regression = {s['skill_id']: s for s in registry.technique_catalog('regression')}
         classification = {s['skill_id']: s for s in registry.technique_catalog('multiclass_classification')}
         self.assertEqual(set(regression), {key for key, owner in registry.owners.items()
-                                          if owner == 'preprocessing_agent'})
+                        if owner == 'preprocessing_agent'} | {'ensembles'})
         self.assertEqual(set(classification), set(regression) | {'imbalance'})
         self.assertEqual(classification['imbalance']['owner'], 'coding_agent')
         for card in classification.values():

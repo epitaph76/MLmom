@@ -94,7 +94,7 @@ class SeparatePreprocessingTests(unittest.TestCase):
             context,tools,_,plan=case()
             result=build_coding_graph(client,workspace=root/'work',store=Store(root),plan=plan,
                 plan_ref=root/'plan.json',skill_data=[],tools=tools,context=context,sandbox=sandbox,
-                budget=budget,config=RunConfig(),round_id='r1').invoke({'payload':{}})
+                budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1').invoke({'payload':{}})
             self.assertTrue(result['valid'],result)
             self.assertEqual(client.pre_calls,2)
             self.assertEqual(client.calls,1)

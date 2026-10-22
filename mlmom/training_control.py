@@ -58,7 +58,7 @@ def fallback(checkpoint, reason):
 
 def decide(client, checkpoint, skills, *, seconds=30):
     try:
-        with role_window(client, 'training_agent', checkpoint.checkpoint_id, min(30, seconds, checkpoint.remaining_seconds)):
+        with role_window(client, 'training_agent', checkpoint.checkpoint_id, min(seconds, checkpoint.remaining_seconds)):
             answer = client.generate('training_agent',
                 'Control an existing training run at this checkpoint only. Do not write code or change the model, '
                 'metric, splits, base parameters or search distributions. Inspect internal scores, failures, trial '
@@ -79,7 +79,7 @@ def worker_checkpoint(root, checkpoint, *, seconds=30):
     request = folder/(checkpoint.checkpoint_id+'.request.json')
     response = folder/(checkpoint.checkpoint_id+'.decision.json')
     commit_mailbox(request, checkpoint)
-    until = time.monotonic()+min(seconds, max(0., checkpoint.remaining_seconds))
+    until = time.monotonic()+min(seconds, max(0., checkpoint.remaining_seconds)) if seconds is not None else float('inf')
     while True:
         if response.exists():
             try:

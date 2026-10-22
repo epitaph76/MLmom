@@ -20,7 +20,7 @@ def watchdog(request):
             parent = psutil.Process(request['parent_pid'])
             alive = parent.create_time() == request['parent_created']
         except psutil.Error: alive = False
-        reason = 'parent_exit' if not alive else 'time_limit' if time.monotonic()>until else None
+        reason = 'parent_exit' if not alive else 'time_limit' if request.get('timeouts_enabled',True) and time.monotonic()>until else None
         try:
             processes=[psutil.Process()]+psutil.Process().children(recursive=True)
             memory=sum(p.memory_info().rss for p in processes)/1024**3
@@ -178,8 +178,6 @@ def train(request, root):
     from .persistence import atomic_json,tree_hash,file_hash
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
-    if plan.ensemble_components or 'ensembles' in plan.skill_ids:
-        raise ValueError('Candidate ensembles and AutoML blending/stacking are disabled')
     from .registry import NATIVE_VALIDATION
     if not request.get('fixed') and plan.tool_id in NATIVE_VALIDATION:
         if (plan.strategy != 'native' or context.task.validation_strategy not in NATIVE_VALIDATION[plan.tool_id]
@@ -201,10 +199,13 @@ def train(request, root):
     search_result = {}
     config = plan.model_dump(mode='json')
     window_path = root/'training-window.json'
+    timed=request.get('timeouts_enabled',True)
     if not window_path.exists():
-        atomic_json(window_path, dict(deadline=time.time()+request['worker_seconds']*.85))
-    deadline = min(json.loads(window_path.read_text(encoding='utf-8'))['deadline'],
-                   time.time()+request['worker_seconds']*.85)
+        atomic_json(window_path, dict(deadline=time.time()+request['worker_seconds']*.85 if timed else None,timeouts_enabled=timed))
+    saved_window=json.loads(window_path.read_text(encoding='utf-8'))
+    if saved_window.get('timeouts_enabled',True)!=timed:raise ValueError('Resume requires the same timeout policy')
+    from .time_policy import UNBOUNDED_SECONDS
+    deadline = min(saved_window['deadline'],time.time()+request['worker_seconds']*.85) if timed else UNBOUNDED_SECONDS
     fit_budget = max(0., deadline-time.time())
     control_action = None
     protocol_ref = None
@@ -223,7 +224,7 @@ def train(request, root):
             default_action=details.get('default_action','continue' if plan.strategy=='optuna' else 'refit'),error=error)
         if not request.get('training_control'):
             return fallback(checkpoint,'Programmatic policy')
-        decision=worker_checkpoint(root,checkpoint,seconds=request.get('training_control_seconds',30))
+        decision=worker_checkpoint(root,checkpoint,seconds=request.get('training_control_seconds',30) if request.get('timeouts_enabled',True) else None)
         control_action=decision.action
         return decision
 
@@ -268,6 +269,7 @@ def train(request, root):
         # Reserve the existing worker window for a full-train refit. Checkpoints,
         # all folds and interrupted attempts consume the same original deadline.
         search_deadline=min(deadline-fit_budget*.3,time.time()+request.get('hpo_seconds',600))
+        if not request.get('timeouts_enabled',True):search_deadline=deadline
         def objective(sampled=None, number=None, seconds=None):
             nonlocal best_score,best_params,best_details
             params = dict(plan.model_params)
@@ -352,6 +354,7 @@ def train(request, root):
                 space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
                 max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
                 gain_threshold=request.get('hpo_gain_threshold',.005),seconds=max(0,search_deadline-time.time()),
+                timeouts_enabled=request.get('timeouts_enabled',True),
                 baseline_score=request.get('baseline_score'),checkpoint=search_checkpoint if request.get('training_control') else None,
                 trial_checkpoint=(lambda details:control(details['stage'],details,error=details.get('error'))) if request.get('training_control') else None)
             control_action=search_result.get('control_action',control_action)
@@ -406,7 +409,8 @@ def main():
     atomic_json(runtime_path, runtime)
     import faulthandler
     faulthandler.enable()
-    faulthandler.dump_traceback_later(max(.1,request['worker_seconds']*.95))
+    if request.get('timeouts_enabled',True):
+        faulthandler.dump_traceback_later(max(.1,request['worker_seconds']*.95))
     threading.Thread(target=watchdog,args=(request,),daemon=True).start()
     try:
         action = request['action']
