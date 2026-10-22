@@ -1,0 +1,9 @@
+{
+  "skill_id": "planner",
+  "version": "1.0.0",
+  "title": "Planner",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

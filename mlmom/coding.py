@@ -3,43 +3,54 @@ from __future__ import annotations
 
 import shutil
 import time
+import ast
 from pathlib import Path
 from typing import TypedDict
 from pydantic import Field
 from langgraph.graph import StateGraph, START, END
 from .contracts import StrictModel
-from .pipeline_contracts import CandidateVersion,ValidationReport
+from .pipeline_contracts import CandidateVersion,ValidationReport,PreprocessingBundle
 from .tools import Workspace,verify_source
 from .persistence import atomic_json,tree_hash
 from .contracts import DatasetProfile
 from .agents import LLMUnavailable
 
 
-SDK_PROMPT = '''Implement candidate.py with create_candidate(config) and load_candidate(artifact_dir).
-The returned object implements fit(X, y, context), predict(X, prediction_spec), save(artifact_dir).
-fit returns self. predict returns a numpy-like array in input row order, never a file.
-context contains task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds,
-remaining_seconds, classes, groups, sample_weight, validation_X, validation_y, work_dir.
-context is a mlmom.sdk.FitContext dataclass: read attributes, not dictionary keys.
-The infrastructure creates artifact_dir before save. Return complete files JSON immediately; the runtime will run AST/smoke checks.
-The SDK is installed, not present in the workspace. Do not search for its source files or inspect unrelated libraries.
-Use the documented fit/predict/save contract and the selected backend only. Once checks pass, return promptly.
-All preprocessing must be fitted within fit. No training happens at import time.
-Do not implement another HPO loop in fit: the shared runner supplies each trial's parameters.
-Prediction kinds: value, label, probability (columns in context.classes order), cluster,
-ranking_score, anomaly_score (larger means more anomalous).
-Use CPU only, no external data, pretrained models, pip, network, shell or credentials.
-No read access to input directories: use X/y/context only. Save to artifact_dir only.
-Use mlmom.sdk and installed libraries directly. Do not import mlmom.adapters or delegate
-training to LibraryCandidate. Implement the selected estimator and preprocessing in your source.
-Selected skills include reference code for guidance, not a runtime implementation or a fixed template.
-Adapt it to every stated hypothesis: explicit category columns, missing handling, target transforms,
-prediction clipping and engineered features must be implemented, not merely described.
-Use config['model_params'] for every declared search parameter. When baseline strategy=single,
-search_space declares parameters for later Optuna; do not run search inside fit.
-Persist custom feature engineering with the model. Report unsupported operations instead of
-silently substituting different preprocessing.
-Return {"files":{"candidate.py":"...", ...}}. Files must contain the final complete source.
+SDK_PROMPT = MODEL_PROMPT = """Implement estimator-only candidate.py for the planner assignment.
+Export create_candidate(config) and load_candidate(artifact_dir). The returned object implements
+fit(X,y,context), predict(X,prediction_spec) and save(artifact_dir). fit returns self; predict returns
+an array in input row order. FitContext is a dataclass; use attributes, never dictionary access.
+context has task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds, remaining_seconds,
+classes, groups, sample_weight, validation_X/y, validation_groups/weight, work_dir.
+preprocessing.py is read-only and owned by a separate role. The SDK supplies already transformed X
+and context.validation_X in preprocessing_spec's declared dataframe/dense/sparse representation.
+Do not import preprocessing or fit feature cleaning/encoding/imputation again. Backend reference
+excerpts must be adapted to this separation. Implement the selected model directly, target/output
+transforms and constraints, prediction/class ordering and portable estimator persistence.
+Consume all config['model_params'], including declared search parameters. No Optuna loop inside fit:
+the runner supplies each trial. Reuse validation only for stopping/selection, never ordinary fitting.
+export_model_params() should freeze selected tree counts/epochs/thresholds for validation-free refit.
+Prediction kinds: value, label, probability in context.classes order, cluster, ranking_score,
+anomaly_score (larger is more anomalous). SDK separately fits and persists preprocessing per fit.
+Use mlmom.sdk and installed selected libraries directly; no LibraryCandidate or hidden adapters.
+CPU only; respect context resources and time. No network, pip, pretrained models, environment,
+shell, credentials or input-directory reads. Use X/y/context; save estimator files to artifact_dir.
+No training during import/load/predict. The SDK is installed; do not search for its source.
+Return complete {"files":{"candidate.py":"...", ...}} immediately for AST/smoke verification.
+Do not return preprocessing.py. Fix reported errors promptly using only the selected API.
+"""
+
+PREPROCESSING_PROMPT = '''Implement only preprocessing.py for the supplied planner assignment.
+Return source and spec. Export create_preprocessor(config), returning a fresh object with
+fit_transform(X, y, context) and transform(X). context is FitContext with training groups/weights,
+never validation data. Fit all vocabularies, imputers, feature statistics on X only. For target
+encoding produce group-safe OOF training encodings; transform uses train-fitted inference maps.
+Preserve rows and order. Implement planned categories, missingness, text and feature operations.
+The spec declares dataframe, dense or sparse output, feature semantics and backend constraints.
+Use only installed allowed libraries and X/y/context; no files, network, environment or model training.
+State must be cloudpickle serializable. No import-time training. Support unseen categories,
+missing values, empty text, and stable feature order. The SDK owns fitting and persistence.
+During repair retain previous_spec unless the output interface must change.
 '''
 
 
@@ -54,11 +65,19 @@ class CodingState(TypedDict, total=False):
     valid: bool
     candidate: dict | None
     warnings: list[str]
+    preprocessing_spec: dict
+    preprocessing_attempts: int
+    preprocessing_valid: bool
+    preprocessing_hash: str
+    reuse_model: bool
 
 
 def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, tools, context,
-                       sandbox, budget, config, round_id, previous=None, runtime_feedback=None):
-    workspace = Workspace(workspace,revision_dir=store.root/'source_revisions'/round_id/plan.hypothesis.hypothesis_id)
+                       sandbox, budget, config, round_id, previous=None, runtime_feedback=None, preprocessing_skills=None):
+    workspace = Workspace(workspace,revision_dir=store.root/'source_revisions'/round_id/plan.hypothesis.hypothesis_id,
+                          writable=lambda name:name != 'preprocessing.py')
+    pre_workspace = Workspace(workspace.root,revision_dir=workspace.revision_dir,
+                              writable=lambda name:name == 'preprocessing.py')
     budget_key=f'{round_id}-{plan.hypothesis.hypothesis_id}'
     def coding_capacity():
         # Preserve a complete selected fit and prediction window, including
@@ -78,6 +97,44 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
 
     def generation_remaining():
         return max(0.,remaining()-verification_reserve)
+
+    def preprocessing(state):
+        attempts=state.get('preprocessing_attempts',0)+1
+        original=getattr(client,'deadline',None)
+        original_steps=getattr(client,'max_steps',None)
+        if original_steps is not None:client.max_steps=min(original_steps,config.coding_tool_steps)
+        try:
+            saved=store.get('preprocessing',budget_key)
+            from .persistence import file_hash
+            path=workspace.root/'preprocessing.py'
+            repair=bool(runtime_feedback and 'preprocessing.py' in str(runtime_feedback)) or any('preprocessing.py' in e for e in state.get('errors',[]))
+            if saved and path.is_file() and file_hash(path)==saved['sha256'] and not repair:
+                return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'])
+            if generation_remaining()<.5:raise LLMUnavailable('No preprocessing generation time remains')
+            if original is not None:client.deadline=min(original,time.time()+generation_remaining())
+            bundle=client.generate('preprocessing_agent',PREPROCESSING_PROMPT,
+                dict(plan=plan.model_dump(mode='json'),task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else vars(context.task),
+                     feature_schema=schema,skills=preprocessing_skills or [],feedback=state.get('errors',[]),
+                     runtime_feedback=runtime_feedback,previous_spec=saved['spec'] if saved else None,
+                     previous=previous),PreprocessingBundle,None)
+            tree=ast.parse(bundle.source)
+            if 'create_preprocessor' not in {n.name for n in tree.body if isinstance(n,ast.FunctionDef)}:
+                raise ValueError('preprocessing.py must define create_preprocessor')
+            if bundle.spec.module!='preprocessing.py' or bundle.spec.factory!='create_preprocessor':
+                raise ValueError('Unsupported preprocessing factory')
+            pre_workspace.write_file('preprocessing.py',bundle.source+'\nMLMOM_PREPROCESSOR_V1 = True\n')
+            errors=[e for e in verify_source(workspace.root).errors if e.startswith('preprocessing.py:')]
+            if errors:raise ValueError('; '.join(errors))
+            reuse=bool(repair and saved and saved['spec']==bundle.spec.model_dump(mode='json') and verify_source(workspace.root).valid)
+            saved=dict(spec=bundle.spec.model_dump(mode='json'),sha256=file_hash(path))
+            store.put('preprocessing',budget_key,saved)
+            return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'],
+                        preprocessing_attempts=attempts,errors=[],reuse_model=reuse,attempts=state.get('attempts',0))
+        except (ValueError,SyntaxError,LLMUnavailable) as error:
+            return dict(preprocessing_valid=False,preprocessing_attempts=attempts,errors=[str(error)])
+        finally:
+            if original is not None:client.deadline=original
+            if original_steps is not None:client.max_steps=original_steps
 
     def source_report(root):
         return verify_source(root)
@@ -129,14 +186,18 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 # All API steps and their retries share the same persisted
                 # deadline as source repairs and smoke/inspection workers.
                 client.deadline=min(original_deadline,time.time()+generation_remaining())
-            bundle = client.generate('coding_agent',SDK_PROMPT,
+            bundle = client.generate('coding_agent',MODEL_PROMPT,
                 dict(state['payload'],feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
+                     preprocessing_spec=state['preprocessing_spec'],
                      current_files={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py')}),
                 CodeBundle,None if config.coding_direct_first and attempts==1 else role_tools)
             if sum(map(len,bundle.files.values())) > 200000: raise ValueError('Generated source exceeds workspace budget')
             for name,content in bundle.files.items():
                 if not name.endswith('.py'): raise ValueError('Final bundle must contain Python source only')
                 workspace.write_file(name,content)
+            from .persistence import file_hash
+            if file_hash(workspace.root/'preprocessing.py')!=state['preprocessing_hash']:
+                raise ValueError('Locked transform source was modified')
             return {'attempts':attempts,'errors':[],'warnings':[]}
         except (ValueError,LLMUnavailable) as error:
             # Tool calls may have already written a complete candidate before
@@ -178,16 +239,27 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         report.valid = not report.errors
         candidate = CandidateVersion(candidate_id=f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
             hypothesis_id=plan.hypothesis.hypothesis_id,version=version,code_dir=str(snapshot),code_hash=digest,
-            plan_ref=str(plan_ref),skill_versions={s['skill_id']:{'version':s['version'],'sha256':s['sha256'],'status':s['status']} for s in skill_data},
+            plan_ref=str(plan_ref),skill_versions={s['skill_id']:{'version':s['version'],'sha256':s['sha256'],'status':s['status']} for s in [*skill_data,*(preprocessing_skills or [])]},
             dependencies={k:v.version for k,v in tools.items() if v.available and v.version},based_on=plan.hypothesis.based_on,
-            verification=report)
+            verification=report,preprocessing_hash=state.get('preprocessing_hash'))
         store.put('candidate',candidate.candidate_id,candidate,immutable=True)
         atomic_json(snapshot/'metadata.json',candidate)
         return {'candidate':candidate.model_dump(mode='json'),'valid':report.valid,'errors':report.errors}
 
     graph = StateGraph(CodingState)
+    def preprocessing_failed(state):
+        return verify(dict(state,attempts=config.max_attempts))
+    graph.add_node('preprocessing_failed',preprocessing_failed)
+    graph.add_node('preprocessing',preprocessing)
     graph.add_node('generate',generate); graph.add_node('verify',verify)
-    graph.add_edge(START,'generate'); graph.add_edge('generate','verify')
-    graph.add_conditional_edges('verify',lambda s:'finish' if s['valid'] or s['attempts']>=config.max_attempts or generation_remaining()<.5 else 'generate',
-                                {'finish':END,'generate':'generate'})
+    graph.add_edge(START,'preprocessing')
+    graph.add_conditional_edges('preprocessing',lambda s:('verify' if s.get('reuse_model') else 'generate') if s['preprocessing_valid'] else
+        'finish' if s.get('preprocessing_attempts',0)>=config.max_attempts or generation_remaining()<.5 else 'preprocessing',
+        {'finish':'preprocessing_failed','generate':'generate','preprocessing':'preprocessing','verify':'verify'})
+    graph.add_edge('preprocessing_failed',END)
+    graph.add_edge('generate','verify')
+    graph.add_conditional_edges('verify',lambda s:'finish' if s['valid'] or s['attempts']>=config.max_attempts or generation_remaining()<.5 or
+        (s.get('preprocessing_attempts',0)>=config.max_attempts and any('preprocessing.py' in e for e in s['errors'])) else
+        'preprocessing' if any('preprocessing.py' in e for e in s['errors']) else 'generate',
+        {'finish':END,'generate':'generate','preprocessing':'preprocessing'})
     return graph.compile()

@@ -14,12 +14,13 @@ python -m mlmom.data_inspector /path/to/dataset --output artifacts/profile.json 
 python -m mlmom.data_inspector /path/to/dataset --manifest dataset_manifest.json --output artifacts/profile.json --llm-output artifacts/context.json
 ```
 
-## LLM-постановка
-`mlmom.task_graph` преобразует профиль в `TaskDefinition` и проверяет его детерминированным валидатором, при ошибке возвращая feedback в LLM. Подключение читается из окружения или локального `.env`, количество попыток ограничено.
-
-```bash
-python -m mlmom.task_graph --profile artifacts/profile.json --output artifacts/task.json --max-attempts 3
-```
+## Разведчик и подтверждение требований
+Отдельный агент постановки удалён. После Data Inspector разведчик читает условие и профиль,
+вызывает confirm_task с TaskDefinition и исправляет ошибки Python TaskValidator.
+Контракт сохраняется до исследования данных. Затем доступны выборки CSV, SQL Polars и корреляции.
+Начальная разведка ограничена 300 секундами, последующие — 120; при таймауте используются
+сохранённые требования и находки. Без корректных требований обучение не начинается.
+Запуск полного процесса: `python solution.py path/to/task.md`.
 
 ## Артефакты
 `profile.json` содержит таблицы, колонки, распределения, роли и риски; `context.json` и `report.md` ограничены размером и предназначены для LLM. `task.json` хранит тип задачи, метрику, служебные колонки, выходной контракт и результат проверки.

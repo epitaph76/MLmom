@@ -125,7 +125,7 @@ class TaskSpec(StrictModel):
 
 
 class TaskDefinition(StrictModel):
-    """Canonical task description proposed by the primary LLM node."""
+    """Canonical requirements confirmed by reconnaissance and the Python validator."""
 
     schema_version: str = "1.0.0"
     objective: str

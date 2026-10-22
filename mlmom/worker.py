@@ -188,6 +188,24 @@ def train(request, root):
     search_result = {}
     config = plan.model_dump(mode='json')
     fit_budget = request['worker_seconds']*.85
+    control_action = None
+
+    def control(stage, details=None, error=None):
+        nonlocal control_action
+        from .pipeline_contracts import TrainingCheckpoint
+        from .training_control import worker_checkpoint, fallback
+        details=details or {}
+        checkpoint=TrainingCheckpoint(checkpoint_id=f'{stage}-{len(trials)}',stage=stage,
+            plan=plan.model_dump(mode='json'),trials=[t.model_dump(mode='json') for t in trials],
+            best_params=details.get('best_params',best_params),best_score=details.get('best_score',best_score),
+            remaining_seconds=max(0.,min(details.get('remaining_seconds',fit_budget),fit_budget-(time.monotonic()-started))),
+            remaining_trials=details.get('remaining_trials',max(0,min(plan.max_trials,request.get('hpo_max_trials',15))-len(trials))) if plan.strategy=='optuna' else 0,
+            default_action=details.get('default_action','continue' if plan.strategy=='optuna' else 'refit'),error=error)
+        if not request.get('training_control'):
+            return fallback(checkpoint,'Programmatic policy')
+        decision=worker_checkpoint(root,checkpoint,seconds=request.get('training_control_seconds',30))
+        control_action=decision.action
+        return decision
 
     def save_progress(model, params, score, reason):
         params=model.export_model_params() if hasattr(model,'export_model_params') else params
@@ -250,6 +268,8 @@ def train(request, root):
                     progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
                     progress['trials']=[t.model_dump(mode='json') for t in trials]
                     atomic_json(root/'progress.json',progress)
+                if len(trials)==1 and plan.strategy!='optuna':
+                    control('initial_fit')
                 return score
             except optuna.TrialPruned: raise
             except Exception as error:
@@ -260,10 +280,13 @@ def train(request, root):
                     progress=json.loads((root/'progress.json').read_text(encoding='utf-8'))
                     progress['trials']=[t.model_dump(mode='json') for t in trials]
                     atomic_json(root/'progress.json',progress)
+                if plan.strategy!='optuna':control('failure',error=str(error)[:2000])
                 raise
 
         if plan.strategy=='optuna':
             from .hpo import run_search
+            def search_checkpoint(details):
+                return control('batch',details)
             search_result=run_search(objective,directory=root/'hpo',identity=dict(code=request['code_hash'],
                 train_hash=file_hash(Path(request['train_path'])),seed=request.get('seed',42),inner_fraction=request.get('inner_fraction',.2),
                 task=context.task.model_dump(mode='json'),metric_options=context.metric_options,
@@ -271,21 +294,24 @@ def train(request, root):
                 space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
                 max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
                 gain_threshold=request.get('hpo_gain_threshold',.005),seconds=min(request.get('hpo_seconds',600),fit_budget*.7),
-                baseline_score=request.get('baseline_score'))
+                baseline_score=request.get('baseline_score'),checkpoint=search_checkpoint if request.get('training_control') else None,
+                trial_checkpoint=(lambda details:control(details['stage'],details,error=details.get('error'))) if request.get('training_control') else None)
+            control_action=search_result.get('control_action',control_action)
             trials=[TrialResult(number=t['number'],params=dict(plan.model_params,**t['params']),
                 status='completed' if t['status']=='complete' else 'failed',score=t['score'],
                 duration_seconds=t['duration_seconds'],error=t.get('error')) for t in search_result['trials']]
             atomic_json(root/'trials.json',trials)
         else: objective()
         if best_model is None: raise ValueError('No successful internal trial')
-        if plan.strategy!='native' and fit_budget-(time.monotonic()-started) > .2:
+        if plan.strategy!='native' and control_action!='stop' and fit_budget-(time.monotonic()-started) > .2:
             # Refit selected parameters on all rows allowed by this outer split.
             model = module.create_candidate(dict(config,model_params=best_params))
             model.fit(X,None if unsupervised else y,fit_context(context,request,work_dir=root/'refit-round',
                 groups=groups,weights=weights,seconds=max(.1,fit_budget-(time.monotonic()-started))))
             save_progress(model,best_params,best_score,search_result.get('stop_reason') or 'completed')
         else:
-            save_progress(best_model,best_params,best_score,'native_completed' if plan.strategy=='native' else 'budget_best_trial')
+            save_progress(best_model,best_params,best_score,search_result.get('stop_reason') or
+                          ('native_completed' if plan.strategy=='native' else 'budget_best_trial'))
     return json.loads((root/'progress.json').read_text(encoding='utf-8'))
 
 
@@ -314,6 +340,9 @@ def main():
         if action in {'smoke','probe'}: result = smoke(request,root)
         elif action=='train': result = train(request,root)
         elif action=='predict': result = predict(request,root)
+        elif action=='csv':
+            from .csv_tools import csv_worker
+            result = csv_worker(request,root)
         elif action=='diagnose':
             from .sdk import load_module
             from .inputs import read_table,features,targets

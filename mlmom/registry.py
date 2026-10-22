@@ -12,6 +12,14 @@ from .tracing import span, emit
 SUPERVISED = ['regression','binary_classification','multiclass_classification']
 MULTI = SUPERVISED + ['multioutput_regression','multilabel_classification']
 CORE_SKILLS = ('candidate_sdk', 'validation', 'metrics', 'preprocessing')
+ROLE_DEFAULTS = {
+    'preprocessing_agent': ('candidate_sdk', 'preprocessing'),
+    'coding_agent': ('candidate_sdk', 'metrics'),
+    'training_agent': ('metrics', 'hpo'),
+    'plan_validator': ('validation', 'metrics'),
+    **{role: (role,) for role in ('reconnaissance_agent', 'result_validator',
+                                  'context_agent', 'hypothesis_generator', 'planner')},
+}
 LIGHTAUTOML_OBJECTIVES = {'regression':'rmse','binary_classification':'roc_auc','multiclass_classification':'log_loss'}
 DEFINITIONS = [
     ('sklearn','scikit-learn','sklearn','1.5.2',MULTI+['clustering','anomaly_detection'],'fast',False,True,False),
@@ -65,39 +73,53 @@ class SkillRegistry:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.manifests = {}
-        for path in sorted(self.root.glob('*/manifest.json')):
+        self.paths = {}
+        self.owners = {}
+        for path in sorted(self.root.rglob('manifest.json')):
             manifest = SkillManifest.model_validate_json(path.read_text(encoding='utf-8'))
             if manifest.skill_id != path.parent.name or manifest.skill_id in self.manifests:
                 raise ValueError(f'Invalid/duplicate skill ID: {path}')
             if not (path.parent/'SKILL.md').is_file():
                 raise ValueError(f'Missing SKILL.md: {path.parent.name}')
             self.manifests[manifest.skill_id] = manifest
+            self.paths[manifest.skill_id] = path.parent
+            self.owners[manifest.skill_id] = path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts)>2 else 'shared'
 
-    def list(self):
-        return [s.model_dump(mode='json') for s in self.manifests.values()]
+    def allowed(self, key, role):
+        return role is None or self.owners[key] in {'shared', role}
 
-    def load(self, ids: list[str], task_type: str, *, max_chars=24000,include_references=False):
-        with span('skills', {'requested_ids':ids,'automatic_ids':CORE_SKILLS,'task_type':task_type}):
-            loaded = self._load(ids,task_type,max_chars=max_chars,include_references=include_references)
+    def list(self, *, role=None):
+        if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')
+        return [dict(s.model_dump(mode='json'), owner=self.owners[s.skill_id])
+                for s in self.manifests.values() if self.allowed(s.skill_id, role)]
+
+    def load(self, ids: list[str], task_type: str, *, role=None, max_chars=24000,include_references=False):
+        if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')
+        automatic = ROLE_DEFAULTS.get(role, ()) if role else CORE_SKILLS
+        with span('skills', {'requested_ids':ids,'automatic_ids':automatic,'task_type':task_type,'role':role}):
+            loaded = self._load(ids,task_type,role=role,automatic=automatic,max_chars=max_chars,include_references=include_references)
             emit('skills.loaded', loaded, skill_ids=[item['skill_id'] for item in loaded])
             return loaded
 
-    def _load(self, ids: list[str], task_type: str, *, max_chars=24000,include_references=False):
+    def _load(self, ids: list[str], task_type: str, *, role=None,automatic=CORE_SKILLS,max_chars=24000,include_references=False):
         loaded = []
         used = 0
         # Every candidate receives the same contract, even when a planner only
         # selects a backend. Shared text is counted and versioned exactly once.
-        for key in dict.fromkeys([*CORE_SKILLS, *ids]):
+        for key in dict.fromkeys([*automatic, *ids]):
             if key not in self.manifests: raise ValueError(f'Unknown skill: {key}')
+            if not self.allowed(key,role): raise ValueError(f'Skill {key} is not available to {role}')
             manifest = self.manifests[key]
             if manifest.task_types and task_type not in manifest.task_types:
                 raise ValueError(f'Skill {key} is incompatible with {task_type}')
             for distribution in manifest.dependencies:
                 importlib.metadata.version(distribution)
-            root = self.root/key
+            root = self.paths[key]
             text = (root/'SKILL.md').read_text(encoding='utf-8')
             if key == 'candidate_sdk':
-                text = (self.root/'COMMON.md').read_text(encoding='utf-8') + '\n' + text
+                common=self.root/'shared'/'COMMON.md'
+                if not common.exists():common=self.root/'COMMON.md'
+                text = common.read_text(encoding='utf-8') + '\n' + text
             reference=root/'REFERENCE.md'
             if include_references and reference.is_file():
                 text+='\n\n'+reference.read_text(encoding='utf-8')

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,22 +14,7 @@ from mlmom.contracts import (
     ValidationStrategy,
 )
 from mlmom.data_inspector import DataInspector
-from mlmom.task_graph import analyze_task
 from mlmom.task_validator import TaskValidator
-
-
-class FakeChatClient:
-    model = "fake/test-model"
-
-    def __init__(self, responses: list[str]) -> None:
-        self.responses = list(responses)
-        self.messages: list[list[dict[str, str]]] = []
-
-    def complete(self, messages: list[dict[str, str]]) -> str:
-        self.messages.append(messages)
-        if not self.responses:
-            raise AssertionError("FakeChatClient has no response left")
-        return self.responses.pop(0)
 
 
 class TaskAnalysisTests(unittest.TestCase):
@@ -81,14 +65,6 @@ class TaskAnalysisTests(unittest.TestCase):
         self.assertTrue(report.valid)
         self.assertEqual(report.findings, [])
 
-    def test_missing_mandatory_exclusions_are_added_without_llm_repair(self):
-        task=self.valid_task().model_copy(update={'excluded_feature_columns':['feature']})
-        client=FakeChatClient([task.model_dump_json()])
-        result=analyze_task(self.profile,client)
-        self.assertEqual(result.status,'validated')
-        self.assertEqual(len(client.messages),1)
-        self.assertEqual(result.task.excluded_feature_columns,['feature','price','id'])
-
     def test_validator_rejects_hallucinated_columns_metric_and_output(self) -> None:
         task = self.valid_task().model_copy(update={
             "target_columns": ["invented_target"],
@@ -113,35 +89,6 @@ class TaskAnalysisTests(unittest.TestCase):
         self.assertIn("metric_not_applicable", codes)
         self.assertIn("result_format_mismatch", codes)
 
-    def test_graph_repairs_invalid_first_answer(self) -> None:
-        invalid = self.valid_task().model_copy(update={
-            "primary_metric": "accuracy",
-            "metric_direction": MetricDirection.MAXIMIZE,
-        })
-        client = FakeChatClient([
-            json.dumps(invalid.model_dump(mode="json")),
-            "```json\n" + json.dumps(self.valid_task().model_dump(mode="json")) + "\n```",
-        ])
-
-        result = analyze_task(self.profile, client, max_attempts=3)
-
-        self.assertEqual(result.status, "validated")
-        self.assertEqual(result.attempts, 2)
-        self.assertEqual(result.task.primary_metric, "rmse")  # type: ignore[union-attr]
-        self.assertEqual(len(client.messages), 2)
-        repair_payload = json.loads(client.messages[1][1]["content"])
-        self.assertIn("validation_feedback", repair_payload)
-        self.assertIn("previous_task", repair_payload)
-
-    def test_graph_stops_after_invalid_json_limit(self) -> None:
-        client = FakeChatClient(["not json", "still not json"])
-
-        result = analyze_task(self.profile, client, max_attempts=2)
-
-        self.assertEqual(result.status, "failed")
-        self.assertEqual(result.attempts, 2)
-        self.assertIsNone(result.task)
-        self.assertEqual(result.validation.findings[0].code, "invalid_llm_output")
 
 
 if __name__ == "__main__":

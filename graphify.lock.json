@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/Graphify-Labs/graphify",
+  "commit": "847a93f3cab5e2c82ea9170014b21cd2c52a4417",
+  "distribution": "graphifyy",
+  "version": "0.9.93",
+  "mode": "code-only",
+  "source_directory": ".tools/graphify-src",
+  "environment_directory": ".tools/graphify-env"
+}

@@ -61,18 +61,20 @@ class PipelineIntegrationTests(unittest.TestCase):
                     pipeline=Pipeline(task,config,run_dir=root/'run',client=client)
                     result=pipeline.run()
                 self.assertEqual(result['status'],'completed',result)
-                core={'candidate_sdk','validation','metrics','preprocessing'}
+                expected={
+                    'hypothesis_generator':{'hypothesis_generator'}, 'planner':{'planner'},
+                    'plan_validator':{'validation','metrics'},
+                    'preprocessing_agent':{'candidate_sdk','preprocessing'},
+                    'coding_agent':{'candidate_sdk','metrics','sklearn'},
+                    'training_agent':{'metrics','hpo'},
+                    'reconnaissance_agent':{'reconnaissance_agent'},'result_validator':{'result_validator'},
+                    'context_agent':{'context_agent'},
+                }
                 for role,payload in client.calls:
-                    if role in {'hypothesis_generator','planner','plan_validator'}:
-                        required=core-{'candidate_sdk'} if role=='plan_validator' else core
-                        self.assertLessEqual(required,{s['skill_id'] for s in payload['skill_instructions']})
-                        if role=='plan_validator':self.assertIn('sklearn',{s['skill_id'] for s in payload['skill_instructions']})
-                    if role=='coding_agent':
-                        self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in payload['skills']})
-                        self.assertIn('class Candidate:',next(s['content'] for s in payload['skills'] if s['skill_id']=='sklearn'))
+                    cards=payload.get('skill_instructions',payload.get('skills',[]))
+                    if role in expected:self.assertEqual({s['skill_id'] for s in cards},expected[role])
                 read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
-                self.assertEqual(read.status,'ok')
-                self.assertLessEqual(core|{'sklearn'},{s['skill_id'] for s in read.data})
+                self.assertEqual(read.status,'error')
                 self.assertEqual(result['submission']['model_role'],'submission_refit',result)
                 output=pd.read_csv(root/'input'/'submission.csv')
                 test=pd.read_csv(root/'input'/'test.csv')
@@ -97,7 +99,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 self.assertTrue(all(d['reference_score']==reference for d in store.get('analysis','r2')['decisions']))
                 self.assertTrue(all(r['split_id']!='all-train' for r in evaluations))
                 self.assertTrue(all(s['status']=='ready' for c in store.list('candidate') for s in c['skill_versions'].values()))
-                self.assertTrue(all({'candidate_sdk','validation','metrics','preprocessing','sklearn'} <= set(c['skill_versions'])
+                self.assertTrue(all({'candidate_sdk','metrics','preprocessing','sklearn'} <= set(c['skill_versions'])
                                     for c in store.list('candidate')))
                 count=len(runs);store.close()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):

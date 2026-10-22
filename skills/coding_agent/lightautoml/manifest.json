@@ -1,0 +1,17 @@
+{
+  "skill_id": "lightautoml",
+  "version": "1.2.0",
+  "title": "lightautoml",
+  "status": "ready",
+  "task_types": [
+    "regression",
+    "binary_classification",
+    "multiclass_classification"
+  ],
+  "ml_tools": [
+    "lightautoml"
+  ],
+  "dependencies": [
+    "lightautoml"
+  ]
+}

@@ -1,32 +1,27 @@
-# Runtime skills
+# Runtime skills по агентам
 
-The project has 17 English decision cards, version 1.0.0. Existing snake_case registry IDs remain stable; YAML display names use hyphens where needed.
+Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. Всего 19 готовых пакетов и три заглушки. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
 
-SkillRegistry.load automatically adds candidate_sdk, validation, metrics and preprocessing, then deduplicates requested IDs. COMMON.md is prepended to candidate_sdk exactly once. The shared contract is included in its SHA256 and the 24,000-character limit. Candidate metadata records every loaded skill, including automatic ones. Manifests declare backend task compatibility and dependencies, independently of runtime availability probes.
+| Папка | Скилы |
+|---|---|
+| preprocessing_agent | preprocessing, feature_engineering |
+| coding_agent | sklearn, catboost, lightgbm, xgboost, statsmodels, torch, flaml, autogluon, lightautoml, imbalance, ensembles |
+| context_agent | context_agent: смысл задачи и ранжирование для Planner |
+| reconnaissance_agent | reconnaissance_agent: требования и исследование CSV |
+| training_agent | hpo: контроль обучения на checkpoint |
+| plan_validator | validation |
+| shared | COMMON.md, candidate_sdk, metrics |
 
-Choose one backend for a hypothesis; add feature_engineering, imbalance, hpo or ensembles when needed. Include component library skills for ensembles. Prefer a cheap baseline, then LightGBM/CatBoost/XGBoost as appropriate. Sparse linear models need a custom sklearn candidate. Native AutoML is an alternative to shared Optuna, with patience_trials=null. A plan's preprocessing list is descriptive: generated code must implement new transformations.
+Автоматические наборы: preprocessing_agent — candidate_sdk и preprocessing; coding_agent — candidate_sdk и metrics; training_agent — metrics и hpo; plan_validator — validation и metrics. Разведчик получает готовые инструкции подтверждения требований и CSV-исследования; агент контекста — инструкции подготовки briefing; остальные роли — свою заглушку. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Общие пакеты доступны ролям, но не загружаются всем автоматически.
 
-The stock adapters are deliberately narrower than their libraries: sklearn selects fixed estimators; LightGBM/XGBoost use dense OHE; most boosters do not pass eval_set; statsmodels only supports unweighted single-output OLS; Torch accepts four MLP options. Cards distinguish stock behavior from custom candidate implementations. Do not copy research examples as if every parameter were an allowed model_params key.
+SkillRegistry.load(..., role=...) и list(role=...) применяются на LLM-границах. Внутренняя проверка совместимости и старые интеграции могут использовать административную загрузку без роли; общий каталог в LLM не передаётся. Лимит основных инструкций — 24 000 символов на роль, с примерами для кодирования — 48 000. COMMON включается в candidate_sdk и SHA256 один раз. Версии и хеши сохраняются в кандидатах.
 
-LightAutoML's default objectives match regression/RMSE, binary/ROC-AUC and multiclass/log-loss. Both the plan validator and adapter enforce these exact pairs before training. Temporal tasks remain deferred; instructions do not add new adapter capabilities.
+## Где нет специализированных скилов
 
-The planning roles receive the core instruction content automatically, and read_skills exposes selected backend/technique instructions with the same compatibility and context checks. The semantic validator receives all selected instructions before approving a plan; the coder receives the corresponding versioned package contents.
+Файлы со status=placeholder: агенты работают по runtime-инструкциям и схемам, дополнительных предметных инструкций пока нет.
 
-## Maintenance
+- skills/result_validator/result_validator/SKILL.md
+- skills/hypothesis_generator/hypothesis_generator/SKILL.md
+- skills/planner/planner/SKILL.md
 
-Run tests/test_skills.py and tests/test_packaging.py for manifest/frontmatter validation, context limits, provenance, compatibility and flat-ZIP extraction. Rerun pipeline integration when changing automatic loading; the runtime uses Python 3.12, pinned requirements and installed API inspection without fetching documentation.
-
-## Primary API references
-
-These sources support the cards; the project SDK, adapters, planner and evaluator remain authoritative for local behavior.
-
-- sklearn: [API](https://scikit-learn.org/1.5/modules/classes.html)
-- lightgbm: [Callback](https://lightgbm.readthedocs.io/en/v4.6.0/pythonapi/lightgbm.early_stopping.html)
-- catboost: [Fit](https://catboost.ai/en/docs/concepts/python-reference_catboost_fit)
-- xgboost: [Pinned API](https://github.com/dmlc/xgboost/blob/v2.1.4/python-package/xgboost/sklearn.py)
-- statsmodels: [OLS](https://www.statsmodels.org/v0.14.0/generated/statsmodels.regression.linear_model.OLS.html)
-- feature_engineering: [TargetEncoder](https://scikit-learn.org/1.5/modules/generated/sklearn.preprocessing.TargetEncoder.html)
-- flaml: [API](https://microsoft.github.io/FLAML/docs/Use-Cases/Task-Oriented-AutoML/)
-- autogluon: [Fit](https://auto.gluon.ai/1.3.1/api/autogluon.tabular.TabularPredictor.fit.html)
-- lightautoml: [Preset](https://lightautoml.readthedocs.io/en/latest/pages/modules/generated/lightautoml.automl.presets.tabular_presets.TabularAutoML.html)
-- PyTorch: [2.5 documentation](https://pytorch.org/docs/2.5/)
+Проверки: tests/test_skills.py, tests/test_agent_roles.py, tests/test_packaging.py. Упаковщик рекурсивно включает skills. Graphify, его окружение и графы не входят в submission.

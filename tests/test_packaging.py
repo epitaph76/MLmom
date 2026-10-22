@@ -32,11 +32,11 @@ from mlmom.resources import SandboxManager
 runtime=Path(mlmom.__file__).resolve().parent.parent
 assert runtime.parent==Path(sys.argv[1]).resolve()
 registry=SkillRegistry(runtime/'skills')
-assert len(registry.list())==17
+assert len(registry.list())==22
 loaded=registry.load(['sklearn'],'regression')
 assert {s['skill_id'] for s in loaded}=={'candidate_sdk','validation','metrics','preprocessing','sklearn'}
 assert all(s['status']=='ready' for s in loaded)
-assert loaded[0]['content'].startswith((runtime/'skills'/'COMMON.md').read_text(encoding='utf-8'))
+assert loaded[0]['content'].startswith((runtime/'skills'/'shared'/'COMMON.md').read_text(encoding='utf-8'))
 with SandboxManager() as sandbox:
     result=sandbox.run({'action':'probe','config':{'tool_id':'sklearn','model_params':{}},'task_type':'regression'},
         Path(sys.argv[1])/'worker',seconds=30,memory_gb=2,cpus=1)

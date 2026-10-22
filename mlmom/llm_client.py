@@ -21,7 +21,7 @@ DEFAULT_MODEL = PLATFORM_MODEL
 
 
 class ChatClient(Protocol):
-    """Minimal interface consumed by :class:`TaskAnalyzer`."""
+    """Compatibility interface for text completions; pipeline roles use generate."""
 
     model: str
 

@@ -13,7 +13,9 @@ def load_candidate(artifact_dir):
 '''
 
 REFERENCE_ROOT=Path(__file__).resolve().parents[1]/'skills'
-GENERATED_CODE=(REFERENCE_ROOT/'sklearn/REFERENCE.md').read_text(encoding='utf-8').split('```python\n',1)[1].split('```',1)[0]
+GENERATED_CODE=(Path(__file__).parent/'fixtures/legacy_candidate.py').read_text(encoding='utf-8')
+MODEL_CODE=(REFERENCE_ROOT/'coding_agent/sklearn/REFERENCE.md').read_text(encoding='utf-8').split('```python\n',1)[1].split('```',1)[0]
+PREPROCESSING_CODE=(REFERENCE_ROOT/'preprocessing_agent/preprocessing/REFERENCE.md').read_text(encoding='utf-8').split('```python\n',1)[1].split('```',1)[0]+'\nMLMOM_PREPROCESSOR_V1 = True\n'
 
 
 class OfflineLLM:
@@ -46,5 +48,21 @@ class OfflineLLM:
                 time_limit_seconds=self.seconds,cpus=self.cpus,memory_gb=2,max_trials=1,
                 prediction_kind=prediction_kind(payload['task']['primary_metric'],payload['task']['task_type'])) for h in payload['hypotheses']['hypotheses']])
         if role=='plan_validator':return ValidationReport(valid=True)
-        if role=='coding_agent':return CodeBundle(files={'candidate.py':GENERATED_CODE})
+        if role=='preprocessing_agent':
+            return schema(source=PREPROCESSING_CODE,spec=dict(description='Train-only numeric imputation and OHE',output='dense'))
+        if role=='coding_agent':return CodeBundle(files={'candidate.py':MODEL_CODE})
+        if role=='training_agent':return schema(action=payload['checkpoint']['default_action'],reason='Offline programmatic policy')
+        if role=='reconnaissance_agent':
+            if self.fail: raise RuntimeError('API unavailable')
+            if payload.get('initial') and not payload.get('confirmed_task'):
+                task=json.loads(self.complete([{'content':json.dumps(payload)}]))
+                result=tools.invoke('confirm_task',{'task':task})
+                if result.status!='ok' or not result.data['valid']:raise ValueError(str(result))
+            return schema(observations=payload['observations'])
+        if role=='result_validator':return schema(implementation='matches',effect='inconclusive',explanation='No causal evidence')
+        if role=='context_agent':
+            return schema(task_summary=payload['requirements']['task']['objective'],ranked_findings=[
+                dict(finding_id=f['finding_id'],priority=f['priority'],rationale='Relevant dataset evidence',
+                     planner_action='Consider this evidence when selecting preprocessing and model')
+                for f in payload['dataset_facts'][:24]])
         raise AssertionError(role)

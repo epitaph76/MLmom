@@ -15,7 +15,8 @@ from tests.fakes import GENERATED_CODE as ADAPTER_CODE
 
 
 class Skills:
-    def load(self,*args): return []
+    def load(self,*args,**kwargs): return []
+    def list(self,**kwargs): return []
 
 
 def case():
@@ -55,14 +56,14 @@ class PlanningLimitTests(unittest.TestCase):
                     observed.append((role,current_context().get('hypothesis_id')))
                 return super().generate(role,instruction,payload,schema,tools)
         class TracedSkills(Skills):
-            def load(self,*args):
+            def load(self,*args,**kwargs):
                 if args[0]:skill_contexts.append(current_context().get('hypothesis_id'))
-                return super().load(*args)
+                return super().load(*args,**kwargs)
         context,tools,budget,plan=case()
         output=build_planning_graph(TracedPlanner(),context,tools,TracedSkills(),budget).invoke({'payload':{'round_number':1}})
         self.assertTrue(output['valid'])
         self.assertEqual(observed,[('planner','base'),('plan_validator','base'),('planner','alt'),('plan_validator','alt')])
-        self.assertEqual(skill_contexts,['base','base','alt','alt'])
+        self.assertEqual(skill_contexts,['base','alt'])
         self.assertNotIn('hypothesis_id',current_context())
 
     def test_batch_limit_and_config_limits(self):
@@ -193,6 +194,9 @@ class Coder:
     deadline=100000000000
     def __init__(self,budget,seconds): self.budget=budget;self.seconds=seconds;self.calls=0
     def generate(self,*args):
+        if args[0]=='preprocessing_agent':
+            from tests.fakes import PREPROCESSING_CODE
+            return args[3](source=PREPROCESSING_CODE,spec=dict(description='Test transforms',output='dense'))
         self.calls+=1;self.budget.elapsed+=self.seconds
         return CodeBundle(files={'candidate.py':ADAPTER_CODE})
 

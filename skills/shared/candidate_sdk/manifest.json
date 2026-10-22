@@ -1,0 +1,9 @@
+{
+  "skill_id": "candidate_sdk",
+  "version": "1.2.0",
+  "title": "Candidate SDK",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

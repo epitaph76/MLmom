@@ -1,0 +1,9 @@
+{
+  "skill_id": "reconnaissance_agent",
+  "version": "2.0.0",
+  "title": "Reconnaissance Agent",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

@@ -191,6 +191,8 @@ def compact_diagnostics(value):
     if classes:result['worst_classes']=dict(sorted(classes,key=lambda item:item[1].get('f1-score',0))[:5])
     if 'macro avg' in report:result['macro_average']=report['macro avg']
     result['worst_slices']=sorted(value.get('safe_slices',[]),key=lambda row:-row['mean_error'])[:6]
+    slices=value.get('research_slices',[])
+    result['research_slices']=sorted(slices,key=lambda row:-(row.get('mean_error') or 0))[:12]
     inspection=value.get('model_inspection',{})
     for key in ['feature_importance','permutation_importance','contributions']:
         data=inspection.get(key)
@@ -201,8 +203,13 @@ def compact_diagnostics(value):
     return result
 
 
-def evaluate(experiment_id: str, split_id: str, y, prediction, context: TaskContext, *, X=None, groups=None, weights=None, label_prediction=None) -> EvaluationResult:
-    return EvaluationResult(experiment_id=experiment_id, split_id=split_id,
+def evaluate(experiment_id: str, split_id: str, y, prediction, context: TaskContext, *, X=None, groups=None, weights=None, label_prediction=None, reference_X=None, reference_y=None) -> EvaluationResult:
+    result=EvaluationResult(experiment_id=experiment_id, split_id=split_id,
         metric=metric_name(context.task.primary_metric), direction=context.task.metric_direction,
         score=score_predictions(y, prediction, context, X=X, groups=groups,weights=weights),
         diagnostics=diagnostics(y, label_prediction if label_prediction is not None else prediction, context, X=X))
+    from .research import error_slices
+    slices=error_slices(y,label_prediction if label_prediction is not None else prediction,
+        X,reference_X,reference_y,context.task.task_type)
+    if slices:result.diagnostics['research_slices']=slices
+    return result

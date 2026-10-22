@@ -12,7 +12,7 @@ from typing import TypedDict
 import pandas as pd
 from langgraph.graph import StateGraph,START,END
 
-from .agents import RoleClient,LLMUnavailable,role_window
+from .agents import RoleClient,LLMUnavailable
 from .checkpoint import SQLiteCheckpointer
 from .coding import build_coding_graph
 from .contracts import DatasetProfile,TaskDefinition
@@ -25,13 +25,16 @@ from .pipeline_contracts import (RunConfig,TaskContext,HypothesisPlan,CandidateV
     ExperimentRun,EvaluationResult,SelectedPreviousResults,SplitSpec,SubmissionArtifact)
 from .planning import build_planning_graph
 from .planning_context import profile_summary,plan_summary,experiment_summary,evaluation_summary
+from .context_agent import prepare_planner_context
 from .registry import SkillRegistry,installed_tools,capability_matrix
 from .resources import Budget,SandboxManager,terminate_tree
 from .splitting import make_split,group_keys
 from .submission import publish_submission
-from .task_graph import analyze_task
 from .tools import ToolSet
 from .tracing import TraceSink, bind, emit, span
+from .pipeline_contracts import TrainingCheckpoint,TrainingDecision,Observation
+from .training_control import decide,validate_decision,commit_mailbox
+from .research import data_observations,ReconnaissanceSession,review_result
 
 
 class RunState(TypedDict, total=False):
@@ -105,10 +108,16 @@ class Pipeline:
         self.role_tools.register('list_skills',self.skills.list,'List registered instruction packages.')
         self.role_tools.register('read_skills',self.read_skills,'Read compatible skill instructions and hashes, including the automatic core contract.')
         self.role_tools.register('read_history',self.read_history,'Read bounded structured experiment history. No raw rows.')
+        self.role_tools.register('read_task',self.read_task,'Read the complete original task in bounded pages when the briefing needs clarification.')
+
+    def read_task(self, offset: int=0, chars: int=8000) -> dict:
+        if offset<0 or not 1<=chars<=8000:raise ValueError('Use non-negative offset and 1..8000 characters')
+        text=Path(self.files.task).read_text(encoding='utf-8-sig')
+        return dict(text=text[offset:offset+chars],offset=offset,total_chars=len(text),truncated=offset+chars<len(text))
 
     def read_skills(self, skill_ids: list[str]) -> list[dict]:
         if self.context is None:raise ValueError('Skills require a validated task context')
-        return self.skills.load(skill_ids,self.context.task.task_type)
+        return self.skills.load(skill_ids,self.context.task.task_type,role='planner')
 
     def read_missing_planning_skills(self, skill_ids: list[str]) -> list[dict]:
         # Core contracts are already present in the request, once.
@@ -160,18 +169,22 @@ class Pipeline:
         if existing:
             result = dict(context=existing,round_number=1,champion=None,selected={},stale=0,stop_reason=None)
             self.restore(result);return result
-        result = self.sandbox.run(dict(action='inspect',files=self.files.model_dump()),self.run_dir/'inspection',
+        profile_path = self.run_dir/'inspection'/'profile.json'
+        result = dict(status='completed',profile_ref=str(profile_path)) if profile_path.is_file() else self.sandbox.run(
+            dict(action='inspect',files=self.files.model_dump()),self.run_dir/'inspection',
             seconds=max(.1,min(300,self.budget.snapshot().research_seconds)),memory_gb=self.budget.memory_gb,cpus=self.budget.cpus)
         if result['status']!='completed': raise ValueError('Data inspection failed: '+result.get('error','timeout'))
         profile = DatasetProfile.model_validate_json(Path(result['profile_ref']).read_text(encoding='utf-8'))
         atomic_json(self.run_dir/'llm_context.json',build_llm_context(profile))
         from .llm_report import build_llm_markdown
         (self.run_dir/'llm_report.md').write_text(build_llm_markdown(profile),encoding='utf-8')
-        with role_window(self.client,'task_definition','task',self.config.task_definition_seconds):
-            task_result = analyze_task(profile,self.client,max_attempts=self.config.max_attempts)
-        atomic_json(self.run_dir/'task.json',task_result)
-        if task_result.status!='validated': raise ValueError('Task validation failed: '+task_result.validation.model_dump_json())
-        task = task_result.task
+        if not self.store.get('reconnaissance','initial'):
+            ReconnaissanceSession(client=self.client,profile=profile,files=self.files,sandbox=self.sandbox,
+                budget=self.budget,store=self.store,config=self.config,key='initial',history={},
+                skills=self.skills.load([],profile.task.task_type,role='reconnaissance_agent')).run()
+        confirmed = self.store.get('confirmed_task','task')
+        if not confirmed: raise ValueError('Reconnaissance did not confirm a valid task')
+        task = TaskDefinition.model_validate(confirmed)
         if task.time_column or task.task_type=='time_series_forecasting': raise DeferredTask('Time-aware execution is deferred')
         if task.task_type=='unknown': raise ValueError('Unknown task type')
         if task.validation_strategy=='time_series_split': raise DeferredTask('Time-aware execution is deferred')
@@ -219,7 +232,7 @@ class Pipeline:
             ml_tools=[{k:v for k,v in t.model_dump(mode='json').items() if k in
                 {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version'}}
                 for t in self.tools.values()],
-            skills=self.skills.list(),budget=self.budget.snapshot().model_dump(),
+            skills=self.skills.list(role='planner'),budget=self.budget.snapshot().model_dump(),
             previous=dict(round_id=previous.get('round_id'),failures=previous.get('failures',[])[-5:],
                 decisions=[{k:d[k] for k in ('candidate_id','experiment_id','accepted','reason','score','reference_score') if k in d}
                            for d in decisions[-5:] if d.get('experiment_id')!=champion_id]),
@@ -242,6 +255,15 @@ class Pipeline:
         payload['first_candidate_required']=not bool(self.last_submission)
         payload['artifact_refs']=dict(profile=context.profile_ref,history='experiments.sqlite3',
                                      previous_analysis=f"analysis:{previous.get('round_id','none')}")
+        payload['reconnaissance']=self.scout('initial' if state['round_number']==1 else f"r{state['round_number']-1}",previous)
+        reports={'initial':self.store.get('reconnaissance','initial') or payload['reconnaissance']}
+        if state['round_number']>1:reports[f"r{state['round_number']-1}"]=payload['reconnaissance']
+        payload['planning_brief']=prepare_planner_context(client=self.client,context=context,profile=profile,
+            reports=reports,store=self.store,budget=self.budget,config=self.config,round_number=state['round_number'],
+            skills=self.skills.load([],context.task.task_type,role='context_agent'),
+            seconds=max(0,self.budget.snapshot().research_seconds-self.admission_cost()))
+        payload['result_reviews']=self.store.list('result_review',limit=4)
+        payload['training_recommendations']=[d.get('recommendations',[]) for d in self.store.list('training_decision',limit=4)]
         # Never put model artifact paths or the full run archive into a prompt.
         if state.get('champion'):
             champ = Champion.model_validate(state['champion'])
@@ -253,6 +275,64 @@ class Pipeline:
                 code_hash=champ.candidate.code_hash,plan=plan,
                 evaluation=evaluation_summary(champ.evaluation.model_dump()),search=search)
         return payload
+
+    def scout(self,key,history):
+        cached=self.store.get('reconnaissance',key)
+        if cached:return cached
+        # Raw outer-holdout labels never enter a follow-up tool registry.
+        split = self.store.get('split',key)
+        if not split:
+            raise ValueError('Follow-up reconnaissance requires a completed round split')
+        train_path = self.run_dir/'reconnaissance'/key/'train.csv'
+        train_path.parent.mkdir(parents=True,exist_ok=True)
+        training = self.frame.iloc[split['train_indices']]
+        if not train_path.exists(): training.to_csv(train_path,index=False)
+        observations=data_observations(training,self.context,self.context.profile_ref)
+        for item in history.get('decisions',[]):
+            for index,(label,stats) in enumerate(item.get('diagnostics',{}).get('worst_classes',{}).items()):
+                observations.append(Observation(observation_id=f"{item['experiment_id']}-class-{index}",
+                    topic='rare_classes',description=f'Error metrics for class {label}',rows=int(stats.get('support',0)),
+                    numbers={k:float(v) for k,v in stats.items() if type(v) in {int,float}},
+                    source_ref=f"evaluation:{item['experiment_id']}"))
+            for index,row in enumerate(item.get('diagnostics',{}).get('research_slices',[])):
+                numbers={k:float(v) for k,v in row.items() if type(v) in {int,float} and v is not None}
+                observations.append(Observation(observation_id=f"{item['experiment_id']}-slice-{index}",
+                    topic=row['topic'],description=row['slice'],rows=row['rows'],numbers=numbers,
+                    source_ref=f"evaluation:{item['experiment_id']}"))
+        profile=DatasetProfile.model_validate_json(Path(self.context.profile_ref).read_text(encoding='utf-8'))
+        report=ReconnaissanceSession(client=self.client,profile=profile,files=self.files,sandbox=self.sandbox,
+            budget=self.budget,store=self.store,config=self.config,key=key,history=history,context=self.context,
+            train_path=train_path,observations=observations,
+            skills=self.skills.load([],self.context.task.task_type,role='reconnaissance_agent')).run()
+        value=report.model_dump(mode='json')
+        emit('reconnaissance.completed',value)
+        return value
+
+    def training_checkpoints(self,job,run):
+        for path in sorted((job.directory/'control').glob('*.request.json')):
+            checkpoint=TrainingCheckpoint.model_validate_json(path.read_text(encoding='utf-8'))
+            response=path.with_name(path.name.replace('.request.json','.decision.json'))
+            key=f'{run.experiment_id}:{checkpoint.checkpoint_id}'
+            cached=self.store.get('training_decision',key)
+            if response.exists():
+                if not cached:
+                    cached=TrainingDecision.model_validate_json(response.read_text(encoding='utf-8')).model_dump(mode='json')
+                    self.store.put('training_decision',key,cached,immutable=True)
+                continue
+            if cached:
+                commit_mailbox(response,cached);continue
+            # Poll watchdogs before any potentially blocking API request.
+            self.sandbox.reap()
+            remaining=max(0.,min(checkpoint.remaining_seconds,
+                job.seconds-(time.monotonic()-job.started),self.budget.snapshot().research_seconds))
+            live=checkpoint.model_copy(update={'checkpoint_id':key,'remaining_seconds':remaining})
+            seconds=min(self.config.training_control_seconds,remaining) if job.process.poll() is None else 0.
+            decision=decide(self.client,live,self.skills.load([],self.context.task.task_type,role='training_agent'),seconds=seconds) if seconds>.5 else TrainingDecision(action=checkpoint.default_action,reason='No control budget')
+            # A worker timeout may have committed its fallback during the API call.
+            decision=TrainingDecision.model_validate(commit_mailbox(response,decision))
+            self.store.put('training_checkpoint',key,checkpoint,immutable=True)
+            self.store.put('training_decision',key,decision,immutable=True)
+            emit('training.decision',dict(checkpoint=key,decision=decision.model_dump(mode='json')))
 
     def estimate(self,stage,default,cap):
         values=[r['seconds'] for r in self.store.list('cost') if r['stage']==stage][-8:]
@@ -405,11 +485,14 @@ class Pipeline:
                 if isinstance(previous_candidate,CandidateVersion): previous_candidate=previous_candidate.model_dump()
                 source = Path(previous_candidate['code_dir'])
                 previous = {'candidate_id':previous_candidate['candidate_id'],'files':{p.relative_to(source).as_posix():p.read_text(encoding='utf-8') for p in source.rglob('*.py')}}
-        skills = self.skills.load(plan.skill_ids,self.context.task.task_type,include_references=True,max_chars=48000)
+        skills = self.skills.load([k for k in plan.skill_ids if self.skills.allowed(k,'coding_agent')],
+            self.context.task.task_type,role='coding_agent',include_references=True,max_chars=48000)
+        preprocessing_skills=self.skills.load([k for k in plan.skill_ids if self.skills.owners[k]=='preprocessing_agent'],
+            self.context.task.task_type,role='preprocessing_agent',include_references=True,max_chars=48000)
         workspace = self.run_dir/'workspaces'/round_id/plan.hypothesis.hypothesis_id
         graph = build_coding_graph(self.client,workspace=workspace,store=self.store,plan=plan,plan_ref=plan_ref,
             skill_data=skills,tools=self.tools,context=self.context,sandbox=self.sandbox,budget=self.budget,
-            config=self.config,round_id=round_id,previous=previous,runtime_feedback=feedback)
+            config=self.config,round_id=round_id,previous=previous,runtime_feedback=feedback,preprocessing_skills=preprocessing_skills)
         output = graph.invoke({'payload':dict(plan=plan.model_dump(mode='json'),task=self.context.task.model_dump(mode='json'),
             features=self.context.feature_columns,classes=self.context.classes,skills=skills,previous=previous),
             'attempts':0,'errors':[]},{'recursion_limit':100})
@@ -523,7 +606,8 @@ class Pipeline:
                     unbox = lambda a:a[:,0] if a.shape[1]==1 else a
                     evaluation = evaluate(run.experiment_id,split.split_id,targets(holdout,context),unbox(p[metric_kind]),context,
                         X=features(holdout,context),groups=group_keys(holdout,context.task.group_columns),label_prediction=unbox(p[label_kind]),
-                        weights=holdout[context.task.weight_column].to_numpy() if context.task.weight_column else None)
+                        weights=holdout[context.task.weight_column].to_numpy() if context.task.weight_column else None,
+                        reference_X=features(self.frame.iloc[split.train_indices],context),reference_y=targets(self.frame.iloc[split.train_indices],context))
                     if not run.incumbent and self.config.diagnostic_seconds>0:
                         diag_dir=self.run_dir/'diagnostics'/run.experiment_id
                         try:
@@ -616,6 +700,7 @@ class Pipeline:
                     req=dict(action='train',code_dir=candidate.code_dir,code_hash=candidate.code_hash,context=self.sanitized_context(train_path),
                         plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent)
                     req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_gain_threshold','hpo_seconds')})
+                    req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
                     initial=next((r for r in results if r['candidate']['candidate_id']==candidate.candidate_id and r['plan']['strategy']=='single'),None)
                     if initial:req['baseline_score']=initial['run']['internal_score']
                     seconds=min(plan.time_limit_seconds,self.config.experiment_seconds,available)
@@ -630,6 +715,7 @@ class Pipeline:
                     except psutil.Error:pass
                     active.append((entry,job,run));pending.remove(entry)
                 for entry,job,run in list(active):
+                    self.training_checkpoints(job,run)
                     if job.poll() is None: continue
                     candidate,plan,incumbent,repairs=entry
                     result=job.finish(); completed_run=finished(candidate,plan,run,result)
@@ -732,6 +818,11 @@ class Pipeline:
         previous=SelectedPreviousResults(round_id=round_id,selected=selected,failures=failures,
             champion_id=champion_id,decisions=decisions)
         self.store.put('analysis',round_id,previous,immutable=True)
+        try:
+            self.review_results(rows,context)
+            self.scout(round_id,previous.model_dump(mode='json'))
+        except Exception as error:
+            self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         complete=bool(state.get('incumbent_succeeded',True) and
                       [r for r in rows if not r['run']['incumbent'] and r['evaluation']['diagnostics']])
         self.store.put('cycle',round_id,dict(round_id=round_id,completed=complete,
@@ -748,6 +839,29 @@ class Pipeline:
         if self.config.target_completed_rounds and completed>=self.config.target_completed_rounds:stop='target_completed_rounds'
         if self.budget.snapshot().research_seconds<1:stop='research_deadline'
         return {'selected':previous.model_dump(mode='json'),'stale':stale,'stop_reason':stop,'round_number':state['round_number']+1}
+
+    def review_results(self,rows,context):
+        for row in rows:
+            if row['run']['incumbent']:continue
+            key=row['run']['experiment_id']
+            if self.store.get('result_review',key):continue
+            seconds=min(self.config.result_validation_seconds,self.budget.snapshot().research_seconds)
+            if seconds<.5:continue
+            code_root=Path(row['candidate']['code_dir'])
+            sources={p.relative_to(code_root).as_posix():p.read_text(encoding='utf-8') for p in code_root.rglob('*.py')}
+            reference=next((r['evaluation'] for r in rows if r['run']['incumbent']),None)
+            if reference is None:
+                reference=next((r['evaluation'] for r in rows if r['run']['experiment_id']!=key and
+                    r['plan']['hypothesis']['baseline'] and r['plan']['strategy']=='single' and
+                    r['evaluation']['split_id']==row['evaluation']['split_id']),None)
+            review=review_result(self.client,dict(hypothesis=row['plan']['hypothesis'],plan=row['plan'],
+                source=sources,code_hash=row['candidate']['code_hash'],parameters=row['run']['best_params'],
+                evaluation=row['evaluation'],comparable_reference=reference,
+                evidence_refs=[f'evaluation:{key}',f'candidate:{row["candidate"]["candidate_id"]}']),
+                self.skills.load([],context.task.task_type,role='result_validator'),key,seconds)
+            self.store.put('result_review',key,review,immutable=True)
+            atomic_json(self.run_dir/'reviews'/f'{key}.json',review)
+            emit('result.reviewed',dict(experiment_id=key,report=review.model_dump(mode='json')))
 
     def finalize(self,state):
         self.restore(state)

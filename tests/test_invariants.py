@@ -14,7 +14,7 @@ from mlmom.planning import validate_plan
 from mlmom.registry import SkillRegistry,installed_tools
 from mlmom.resources import SandboxManager
 from mlmom.submission import publish_submission
-from tests.fakes import OfflineLLM,GENERATED_CODE as ADAPTER_CODE
+from tests.fakes import OfflineLLM,MODEL_CODE as ADAPTER_CODE
 from tests.test_pipeline import dataset,only_sklearn
 from tests.test_execution import execution_case
 
@@ -23,8 +23,8 @@ ROOT=Path(mlmom.__file__).resolve().parent.parent
 
 
 def broken_code(threshold):
-    return ADAPTER_CODE.replace('        self.columns = X.columns.tolist()',
-        f'        if len(X)>{threshold}:raise ValueError("intentional real-data fit failure")\n        self.columns = X.columns.tolist()')
+    return ADAPTER_CODE.replace('        self.kind = context.task_type',
+        f'        if len(X)>{threshold}:raise ValueError("intentional real-data fit failure")\n        self.kind = context.task_type')
 
 
 

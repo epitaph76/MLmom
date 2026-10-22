@@ -50,10 +50,11 @@ class ToolSet:
 
 
 class Workspace:
-    def __init__(self, root: Path, *, revision_dir: Path | None = None):
+    def __init__(self, root: Path, *, revision_dir: Path | None = None, writable=None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.revision_dir = revision_dir
+        self.writable = writable
 
     def path(self, path: str):
         p = inside(self.root, path)
@@ -73,6 +74,8 @@ class Workspace:
     def write_file(self, path: str, content: str) -> str:
         if len(content) > 64000: raise ValueError('File exceeds write limit')
         p = self.path(path)
+        if self.writable is not None and not self.writable(p.relative_to(self.root).as_posix()):
+            raise ValueError('This file belongs to another coding role')
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding='utf-8')
         if self.revision_dir is not None:

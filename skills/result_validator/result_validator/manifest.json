@@ -1,0 +1,9 @@
+{
+  "skill_id": "result_validator",
+  "version": "1.0.0",
+  "title": "Result Validator",
+  "status": "placeholder",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

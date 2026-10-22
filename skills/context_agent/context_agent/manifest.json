@@ -1,0 +1,9 @@
+{
+  "skill_id": "context_agent",
+  "version": "1.0.0",
+  "title": "Task and dataset context for planning",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

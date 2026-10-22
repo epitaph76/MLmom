@@ -22,7 +22,7 @@ def profile_summary(profile):
                                         for b in col.train.distribution[:20]])
                  for name in profile.task.target_columns for col in profile.columns if col.name==name},
         issues=[dict(code=i.code,severity=i.severity,columns=i.columns[:8],message=i.message[:240])
-                for i in profile.issues[:12]],
+                for i in sorted(profile.issues,key=lambda item:{'error':0,'warning':1,'info':2}[item.severity])[:12]],
         hints=profile.preprocessing_hints[:8])
 
 

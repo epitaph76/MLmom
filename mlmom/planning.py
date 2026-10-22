@@ -105,7 +105,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
     """
     if not 1 <= max_candidates <= 2: raise ValueError('max_candidates must be between 1 and 2')
     if planning_mode not in {'all', 'baseline', 'alternatives'}: raise ValueError('Unknown planning mode')
-    core_instructions=skills.load([],context.task.task_type)
     progress=dict(saved_progress or {})
     progress.setdefault('proposed',{})
     progress.setdefault('accepted',{})
@@ -120,6 +119,23 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             return function(*args, **kwargs)
 
     def generate(role, instruction, payload, schema, role_tools=None):
+        instruction += (' Read planning_brief for task purpose, quoted domain details and prioritized dataset evidence. '
+            'Canonical task and planning_brief.requirements are authoritative; never replace them with narrative '
+            'assumptions. Account for mandatory_findings even when not selected in ranked_findings. '
+            'Proposed experiments are not measured benefits. ')
+        if role_tools is not None:
+            instruction += 'Use read_task if a task nuance needs clarification. '
+        payload=dict(payload,skills=skills.list(role=role),
+                     skill_instructions=skills.load([],context.task.task_type,role=role))
+        if role_tools is not None:
+            from .tools import ToolSet
+            scoped=ToolSet()
+            scoped.tools=dict(role_tools.tools)
+            scoped.register('list_skills',lambda:skills.list(role=role),'List this role instruction packages.')
+            def read_skills(skill_ids: list[str]) -> list[dict]:
+                return skills.load(skill_ids,context.task.task_type,role=role)
+            scoped.register('read_skills',read_skills,'Read instructions available to this role only.')
+            role_tools=scoped
         key = str(payload.get('round_number',1))
         key += f":p{payload.get('planning_attempt',0)}"
         if role != 'hypothesis_generator':
@@ -146,8 +162,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
                         'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage.',
-                        dict(state['payload'],lightweight=is_light(state),feedback=errors,
-                             skill_instructions=core_instructions), HypothesisBatch, role_tools)
+                        dict(state['payload'],lightweight=is_light(state),feedback=errors), HypothesisBatch, role_tools)
                 if len(batch.hypotheses)>max_candidates: raise ValueError('Too many hypotheses for this round')
                 ids=[h.hypothesis_id for h in batch.hypotheses]
                 if len(ids)!=len(set(ids)): raise ValueError('Duplicate hypothesis ID')
@@ -181,16 +196,16 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'meaning and baseline flag. Use available tools and skills, or an installed backend whose '
                         'reason is exactly "adapter probe required": selected backends will be probed before '
                         'validation. Never select missing libraries or version mismatches. Native AutoML requires '
-                        'strategy=native and patience_trials=null. Core candidate_sdk, validation, metrics and '
-                        'preprocessing instructions load automatically. Use the supplied context to return final JSON first; '
-                        'request backend/technique instructions only if a specific essential contract is missing. '
+                        'strategy=native and patience_trials=null. Your role receives its own instructions and may read '
+                        'available shared contracts only. Backend implementation references belong to the coders. '
+                        'Use supplied context to return final JSON first; '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
                         'imbalance for weighting/thresholds, and ensembles plus component skills for ensembles. '
                         'When lightweight=true require strategy=single, max_trials=1, no '
                         'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
                         f'{min(300,initial_experiment_seconds)}. Never override orchestration resources; '
                         'exclude targets, IDs and evaluation data from features. Always use execution_mode=custom: '
-                        'the coder implements the estimator and all preprocessing directly. In lightweight mode '
+                        'the preprocessing agent implements transforms; the model coder implements the estimator. In lightweight mode '
                         'keep preprocessing cheap and parameters fixed for the initial fit. Declare a small compatible '
                         'search_space even for a single baseline: it is used only after the first CSV is saved. '
                         'Describe required transforms in preprocessing, including column names and prediction '
@@ -203,7 +218,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'based_on must be one of known_candidates; hypothesis lineage uses based_on_hypothesis_id.',
                         dict(state['payload'],lightweight=is_light(state),
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
-                             feedback=feedback,skill_instructions=core_instructions), PlanBatch, role_tools)
+                             feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
                     normalized=[]
@@ -245,18 +260,19 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         accepted.append(item.model_dump(mode='json'))
                         emit('planning.validation_reused',{'hypothesis_id':hypothesis.hypothesis_id})
                         break
-                    instructions=for_hypothesis(hypothesis,skills.load,item.skill_ids,context.task.task_type)
+                    instructions=for_hypothesis(hypothesis,skills.load,[],context.task.task_type,role='plan_validator')
                     validating=True
                     report=for_hypothesis(hypothesis,generate,'plan_validator',
                         'min_delta is a legacy absolute comparison field, NOT the batched HPO continuation threshold. '
                         'min_delta=0 is correct: the runner separately enforces hpo_gain_threshold=0.005 and keeps tiny gains. '
                         'Review feasibility, leakage and methodological validity against the supplied skill '
                         'instructions. Return a concise validation JSON; never rewrite plans. '
-                        'The coder generates the complete candidate. Check that preprocessing and parameters can '
+                        'Separate preprocessing and model coders implement the candidate. Check that transforms and parameters can '
                         'implement every claim, with no implicit adapter behavior. The runner owns splits and HPO. '
                         'Require explicit operations and columns for changes such as treating numeric years as '
                         'categories. Single baseline search_space is for later HPO.',
                         dict(round_number=state['payload'].get('round_number',1),
+                             planning_brief=state['payload'].get('planning_brief'),
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
                              task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else
                                   dict(task_type=context.task.task_type,primary_metric=context.task.primary_metric),

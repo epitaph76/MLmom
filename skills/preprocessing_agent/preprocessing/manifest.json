@@ -1,0 +1,9 @@
+{
+  "skill_id": "preprocessing",
+  "version": "1.2.0",
+  "title": "Tabular preprocessing",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

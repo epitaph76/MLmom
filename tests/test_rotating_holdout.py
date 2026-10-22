@@ -15,6 +15,8 @@ class RotatingHoldoutTests(unittest.TestCase):
             pipeline=object.__new__(Pipeline)
             pipeline.config=RunConfig(max_rounds=6,target_completed_rounds=3)
             pipeline.store=ExperimentStore(Path(tmp))
+            pipeline.review_results=lambda *args:None
+            pipeline.scout=lambda *args:None
             pipeline.restore=lambda state:SimpleNamespace(task=SimpleNamespace(metric_direction='minimize'))
             pipeline.budget=SimpleNamespace(snapshot=lambda:SimpleNamespace(research_seconds=100))
             state=dict(round_number=2,incumbent_succeeded=False,stale=0,
