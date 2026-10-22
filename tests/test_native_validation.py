@@ -1,5 +1,7 @@
 """Native CV is never inferred from an installed AutoML library."""
 import json
+import numpy as np
+import pandas as pd
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,9 +36,17 @@ class NativeValidationTests(unittest.TestCase):
     def test_generated_flaml_holdout_freezes_refits_and_relocates(self):
         if installed_tools()['flaml'].version is None:
             self.skipTest('FLAML not installed; this environment does not verify native execution')
+        for kind in ['regression','binary_classification','multiclass_classification']:
+            with self.subTest(kind=kind):self.check_generated_holdout(kind)
+
+    def check_generated_holdout(self,kind):
         with tempfile.TemporaryDirectory() as tmp, SandboxManager() as manager:
             root=Path(tmp)
-            _,context,plan,code=execution_case(root,'regression')
+            frame,context,plan,code=execution_case(root,kind)
+            if 'classification' in kind:
+                mapping={0:'Alpha',1:'Beta',2:'Gamma'}
+                frame['t0']=frame['t0'].map(mapping);frame.to_csv(root/'train.csv',index=False)
+                context.classes=list(reversed(sorted(frame['t0'].unique())))
             context.task=type(context.task).model_validate(dict(context.task.model_dump(),validation_strategy='holdout'))
             plan.tool_id='flaml';plan.skill_ids=['flaml'];plan.strategy='native';plan.patience_trials=None
             plan.model_params={};plan.max_trials=2
@@ -54,7 +64,17 @@ class NativeValidationTests(unittest.TestCase):
             moved=root/'moved';Path(result['model_artifact']).rename(moved)
             from mlmom.sdk import load_module
             restored=load_module(code).load_candidate(moved)
-            self.assertEqual(len(restored.predict(__import__('pandas').read_csv(root/'train.csv')[context.feature_columns],{'kind':'value'})),60)
+            X=pd.read_csv(root/'train.csv')[context.feature_columns]
+            prediction=restored.predict(X,{'kind':plan.prediction_kind})
+            self.assertEqual(len(prediction),60)
+            if 'classification' in kind:
+                self.assertTrue(set(prediction)<=set(context.classes))
+                probability=restored.predict(X,{'kind':'probability'})
+                self.assertEqual(probability.shape,(60,len(context.classes)))
+                np.testing.assert_allclose(probability.sum(axis=1),1)
+                sorted_probability=np.sort(probability,axis=1)
+                unique=(sorted_probability[:,-1]-sorted_probability[:,-2])>1e-10
+                np.testing.assert_array_equal(np.asarray(context.classes)[probability[unique].argmax(axis=1)],np.asarray(prediction)[unique])
 
 
 if __name__=='__main__':unittest.main()
