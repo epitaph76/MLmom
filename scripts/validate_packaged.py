@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -16,12 +17,13 @@ def main():
     args=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
+    tested_sha256=hashlib.sha256(args.archive.read_bytes()).hexdigest()
     platform=output/'platform';platform.mkdir(exist_ok=True)
     with zipfile.ZipFile(args.archive) as archive:
         if set(archive.namelist())!={'solution.py','requirements.txt','mlmom_bundle.py'}:
             raise ValueError('Unexpected archive members')
         archive.extractall(platform)
-    code='''import json,sys,time,unittest
+    code='''import json,sys,time,unittest,platform
 from pathlib import Path
 platform,repository,report=map(Path,sys.argv[1:])
 sys.path.insert(0,str(platform))
@@ -35,14 +37,21 @@ started=time.monotonic()
 result=unittest.TextTestRunner(verbosity=2).run(suite)
 report.write_text(json.dumps(dict(status='passed' if result.wasSuccessful() else 'failed',
     count=result.testsRun,failures=len(result.failures),errors=len(result.errors),
-    skipped=len(result.skipped),duration_seconds=time.monotonic()-started,runtime=str(runtime)),indent=2),encoding='utf-8')
+    skipped=len(result.skipped),duration_seconds=time.monotonic()-started,runtime=str(runtime),
+    python=platform.python_version(),os=platform.system(),source='extracted ZIP'),indent=2),encoding='utf-8')
 raise SystemExit(0 if result.wasSuccessful() else 1)
 '''
     with (output/'tests.log').open('w',encoding='utf-8') as log:
         completed=subprocess.run([sys.executable,'-I','-c',code,str(platform),str(root),str(output/'tests.json')],
             cwd=output,stdout=log,stderr=subprocess.STDOUT,text=True)
-    if (output/'tests.json').exists():print((output/'tests.json').read_text(encoding='utf-8'))
-    return completed.returncode
+    if (output/'tests.json').exists():
+        report=json.loads((output/'tests.json').read_text(encoding='utf-8'))
+        report['archive_sha256']=tested_sha256
+        if tested_sha256!=hashlib.sha256(args.archive.read_bytes()).hexdigest():
+            report.update(status='failed',reason='ZIP changed while tests were running')
+        (output/'tests.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        print(json.dumps(report))
+    return completed.returncode if completed.returncode else (0 if report['status']=='passed' else 1)
 
 
 if __name__=='__main__':raise SystemExit(main())
