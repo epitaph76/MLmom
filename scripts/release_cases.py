@@ -111,6 +111,10 @@ def main():
     if not args.archive:parser.error('--archive is required')
     if args.seconds<=60 or (args.mode=='real' and args.seconds>1800):parser.error('Budget must exceed 60 seconds and real cases may use at most 1800 seconds each')
     sha=digest(args.archive)
+    frozen_archive=out/'runtime-solution.zip'
+    if frozen_archive.exists():
+        if digest(frozen_archive)!=sha:raise ValueError('Output directory belongs to a different ZIP')
+    else:shutil.copyfile(args.archive,frozen_archive)
     secrets={}
     if args.mode=='real':
         from mlmom.llm_client import LLMSettings,PLATFORM_MODEL
@@ -141,7 +145,7 @@ def main():
             if not source:continue
             source=Path(source);target=platform_dir/source.relative_to(files.root)
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
-        with zipfile.ZipFile(args.archive) as package:
+        with zipfile.ZipFile(frozen_archive) as package:
             if set(package.namelist())!={'solution.py','requirements.txt','mlmom_bundle.py'}:raise ValueError('Unexpected ZIP members')
             package.extractall(platform_dir)
         control=attempt/'control';control.mkdir()
