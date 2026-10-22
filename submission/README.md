@@ -1,7 +1,7 @@
 # Выпуск A → B → C — 22.10.2026
 
 Текущая сборка: [mlmom-solution.zip](mlmom-solution.zip), SHA256
-`5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92`.
+`d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936`.
 Её актуальный статус находится в [validation.json](validation.json) и
 [отчёте приёмки](../VALIDATION.md). Архивы с другими именами и сведения ниже
 относятся к предыдущим сборкам.

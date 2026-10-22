@@ -5,48 +5,48 @@
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 179,
+        "count": 180,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 380.311037981,
+        "duration_seconds": 416.738974481,
         "python": "3.12.15",
         "os": "Linux",
         "source": "checkout",
         "runtime": "/repo",
-        "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92"
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
       }
     },
     "packaged_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 179,
+        "count": 180,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 410.16775878399994,
-        "runtime": "/repo/artifacts/release-abc-v5/final-packaged/platform/.mlmom-runtime-5976d73a5be1ede3",
+        "duration_seconds": 517.0547721759999,
+        "runtime": "/repo/artifacts/release-abc-v6/packaged/platform/.mlmom-runtime-7ce9abbe0c337d44",
         "python": "3.12.15",
         "os": "Linux",
         "source": "extracted ZIP",
-        "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92"
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
       }
     },
     "linux_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 179,
+        "count": 180,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 410.16775878399994,
-        "runtime": "/repo/artifacts/release-abc-v5/final-packaged/platform/.mlmom-runtime-5976d73a5be1ede3",
+        "duration_seconds": 517.0547721759999,
+        "runtime": "/repo/artifacts/release-abc-v6/packaged/platform/.mlmom-runtime-7ce9abbe0c337d44",
         "python": "3.12.15",
         "os": "Linux",
         "source": "extracted ZIP",
-        "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92"
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
       }
     },
     "offline": {
@@ -57,7 +57,7 @@
           "report": {
             "case": "regression",
             "attempt": 1,
-            "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92",
+            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -65,7 +65,7 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v5\\offline\\regression\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\offline\\regression\\attempt-1\\task\\run",
             "status": "passed",
             "exit_code": 0,
             "verification": {
@@ -77,14 +77,14 @@
               "incumbent_rechecks": 2,
               "generated_path": true,
               "relocated_model_equal": true,
-              "submission_sha256": "bd7450f1d886ec12e0a5ac22743a4661f00970ece02bcd14406910d0c311afbb"
+              "submission_sha256": "207bf182fd470102b1329b1968ba3f46ae5846e37b365ab519f965c1f44361c8"
             },
-            "duration_seconds": 485.7660000000001,
+            "duration_seconds": 449.2970000000005,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
               "completed_rounds": 3,
-              "completed_optuna_trials": 8,
+              "completed_optuna_trials": 11,
               "passed": true
             }
           }
@@ -94,7 +94,7 @@
           "report": {
             "case": "multiclass",
             "attempt": 1,
-            "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92",
+            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -102,7 +102,7 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v5\\offline\\multiclass\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\offline\\multiclass\\attempt-1\\task\\run",
             "status": "passed",
             "exit_code": 0,
             "verification": {
@@ -116,7 +116,7 @@
               "relocated_model_equal": true,
               "submission_sha256": "b8d6d74f5575c02a06615d0ba066a9d10084cca9f8f6e41cda397a83f07fb639"
             },
-            "duration_seconds": 226.13999999999987,
+            "duration_seconds": 200.96900000000005,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
@@ -136,7 +136,7 @@
           "report": {
             "case": "regression",
             "attempt": 1,
-            "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92",
+            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
             "mode": "real",
             "environment": "linux/docker",
             "command": [
@@ -144,14 +144,19 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v5\\real\\regression\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\real-regression\\regression\\attempt-1\\task\\run",
             "status": "failed",
             "model": "qwen/qwen3.8-27b",
             "exit_code": 2,
             "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 314.01600000000053,
-            "pipeline_stop_reason": "error",
-            "process_acceptance": null
+            "duration_seconds": 114.53200000000015,
+            "pipeline_stop_reason": "research_deadline",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 0,
+              "completed_optuna_trials": 0,
+              "passed": false
+            }
           }
         },
         "multiclass": {
@@ -159,7 +164,7 @@
           "report": {
             "case": "multiclass",
             "attempt": 1,
-            "archive_sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92",
+            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
             "mode": "real",
             "environment": "linux/docker",
             "command": [
@@ -167,14 +172,19 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v5\\real\\multiclass\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\real-multiclass\\multiclass\\attempt-1\\task\\run",
             "status": "failed",
             "model": "qwen/qwen3.8-27b",
             "exit_code": 2,
             "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 313.78099999999995,
-            "pipeline_stop_reason": "error",
-            "process_acceptance": null
+            "duration_seconds": 332.82800000000043,
+            "pipeline_stop_reason": "insufficient_experiment_budget",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 0,
+              "completed_optuna_trials": 0,
+              "passed": false
+            }
           }
         }
       }
@@ -380,23 +390,61 @@
         "limitations": [
           "CPU-only Torch may carry +cpu; Python patch release may differ from organizer.",
           "Matching dependencies does not establish organizer-platform equivalence."
-        ]
+        ],
+        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+        "docker": {
+          "ServerVersion": "29.7.2",
+          "OperatingSystem": "Docker Desktop",
+          "OSType": "linux",
+          "NCPU": 12,
+          "MemTotal": 8175370240,
+          "Driver": "overlayfs"
+        },
+        "image": {
+          "Id": "sha256:5fd881afe667ea808755c6c40356d685072c0ef39903aaaf81fe15b01c0acc7f",
+          "RepoTags": [
+            "mlmom-ml:test"
+          ],
+          "Created": "2026-10-20T17:29:33.976758135Z",
+          "Architecture": "amd64",
+          "Os": "linux"
+        },
+        "execution_limits": {
+          "source_tests": {
+            "cpus": 4,
+            "cpuset": "8-11",
+            "memory": "8g"
+          },
+          "packaged_tests": {
+            "cpus": 4,
+            "cpuset": "0-3",
+            "memory": "8g"
+          },
+          "release_cases": {
+            "cpus": 4,
+            "memory": "6g"
+          },
+          "relocated_inference": {
+            "cpus": 2,
+            "memory": "4g"
+          }
+        }
       }
     }
   },
   "supplemental_tests": [],
-  "created_utc": "2026-10-22T14:32:45.068030+00:00",
-  "base_commit": "49419bf4669efb5450b2ff014b3c2c4597bc47f4",
+  "created_utc": "2026-10-22T15:00:08.712633+00:00",
+  "base_commit": "793a68e5def04630b5b757265ce7895da0152c36",
   "package": {
     "path": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-solution.zip",
-    "sha256": "5107152f414ae5dc5934bdfdcd627aeebea1f9aa6a35dc8c94b7125ecb784c92",
-    "bytes": 149251,
+    "sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+    "bytes": 149273,
     "root_files": [
       "mlmom_bundle.py",
       "requirements.txt",
       "solution.py"
     ],
-    "source_bundle_digest": "5976d73a5be1ede339418e58d62e10e519ebbfa10bfc096e76a46ea610366891",
+    "source_bundle_digest": "7ce9abbe0c337d44ee2b49c43cc344e4bf4b6514f4eff0dc6762f7ee0d6f756c",
     "bundled_source_matches_checkout": true,
     "secret_scan": "passed",
     "requirements_sha256": "9173b0388532fbd2a709e4f4b3029e3b9ccab685fce43a85261ffa1ba95efbe6"
