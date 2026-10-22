@@ -14,6 +14,8 @@ from .tracing import bind, emit
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
                   *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
+    if plan.ensemble_components or 'ensembles' in plan.skill_ids:
+        errors.append('Candidate ensembles and AutoML blending/stacking are disabled')
     tool = tools.get(plan.tool_id)
     if not tool or not tool.available: errors.append(f'Tool unavailable: {plan.tool_id}')
     else:
@@ -62,6 +64,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
               'pretrained','presets','hyperparameters','general_params','reader_params','estimator_list',
               'time_budget','time_limit','timeout','gpu_ids','starting_points','__native_frozen','__ensemble_frozen',
               'log_file_name','log_type','max_iter'}
+    reserved |= {'ensemble','fit_weighted_ensemble','num_bag_folds','num_stack_levels','auto_stack'}
     if reserved & (set(plan.model_params)|set(plan.search_space)):
         errors.append('Model/search parameters attempt to override infrastructure or pretrained policy')
     if plan.tool_id=='statsmodels' and context.task.task_type!='regression':
@@ -258,7 +261,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         tool=tools.get(item.tool_id)
                         forbidden_initial=is_light(state) and (item.ensemble_components or
                             (tool and (tool.native_hpo or tool.cost_tag=='slow')))
-                        if not forbidden_initial:
+                        if not forbidden_initial and not item.ensemble_components and 'ensembles' not in item.skill_ids:
                             selected=[item.tool_id,*[c.get('tool_id') for c in item.ensemble_components]]
                             for key in dict.fromkeys(selected):
                                 selected_tool=tools.get(key)

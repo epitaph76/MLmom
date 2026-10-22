@@ -141,8 +141,19 @@ def verify_source(root: Path) -> ValidationReport:
                 base = name.split('.')[0]
                 if base in FORBIDDEN or (base and base not in ALLOWED and base not in local):
                     errors.append(f'{path.name}: unsupported import {name}')
-                if base == 'mlmom' and name not in {'mlmom.sdk','mlmom.ensemble'}:
+                if base == 'mlmom' and name != 'mlmom.sdk':
                     errors.append(f'{path.name}: infrastructure import is forbidden: {name}')
+            banned_estimators={'VotingClassifier','VotingRegressor','StackingClassifier','StackingRegressor',
+                               'EnsembleCandidate','load_ensemble'}
+            if isinstance(node,(ast.Name,ast.Attribute)) and (getattr(node,'id',None) or getattr(node,'attr',None)) in banned_estimators:
+                errors.append(f'{path.name}: candidate ensembles are disabled')
+            if isinstance(node,ast.ImportFrom) and any(item.name in banned_estimators for item in node.names):
+                errors.append(f'{path.name}: candidate ensembles are disabled')
+            if isinstance(node,ast.Call):
+                for keyword in node.keywords:
+                    if keyword.arg in {'ensemble','fit_weighted_ensemble','auto_stack','num_bag_folds','num_stack_levels'}:
+                        if not isinstance(keyword.value,ast.Constant) or keyword.value.value not in (False,0,None):
+                            errors.append(f'{path.name}: native blending/stacking is disabled')
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval','exec','compile','__import__'}:
                 errors.append(f'{path.name}: dynamic execution is forbidden')
             if isinstance(node,ast.Attribute) and node.attr in {'environ','getenv','system','popen','from_pretrained','load_state_dict_from_url','hub'}:

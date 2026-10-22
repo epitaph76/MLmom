@@ -33,6 +33,8 @@ export_model_params() should freeze selected tree counts/epochs/thresholds for v
 Prediction kinds: value, label, probability in context.classes order, cluster, ranking_score,
 anomaly_score (larger is more anomalous). SDK separately fits and persists preprocessing per fit.
 Use mlmom.sdk and installed selected libraries directly; no LibraryCandidate or hidden adapters.
+Candidate ensembles and AutoML blending/stacking are disabled. ExtraTrees and other single
+estimators remain allowed. In CV, validation_X is absent: fit fixed parameters without early stopping.
 CPU only; respect context resources and time. No network, pip, pretrained models, environment,
 shell, credentials or input-directory reads. Use X/y/context; save estimator files to artifact_dir.
 No training during import/load/predict. The SDK is installed; do not search for its source.

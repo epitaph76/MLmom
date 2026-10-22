@@ -90,6 +90,8 @@ class SkillRegistry:
             self.owners[manifest.skill_id] = path.relative_to(self.root).parts[0] if len(path.relative_to(self.root).parts)>2 else 'shared'
 
     def allowed(self, key, role):
+        if key == 'ensembles' and role is not None:
+            return False  # Retained for compatibility/admin inspection only.
         return role is None or self.owners[key] in {'shared', role}
 
     def list(self, *, role=None):

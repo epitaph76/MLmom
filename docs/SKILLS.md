@@ -1,28 +1,31 @@
 # Runtime skills по агентам
 
-Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. Всего 27 готовых пакетов и три заглушки. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
+Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
 
-| Папка | Скилы |
-|---|---|
-| preprocessing_agent | preprocessing, preprocessing_core, feature_engineering, categorical_encoding, missing_values, numeric_transforms, feature_selection, schema_quality, temporal_group_structure, text_features |
-| coding_agent | sklearn, catboost, lightgbm, xgboost, statsmodels, torch, flaml, autogluon, lightautoml, imbalance, ensembles |
-| context_agent | context_agent: смысл задачи и ранжирование для Planner |
-| reconnaissance_agent | reconnaissance_agent: требования и исследование CSV |
-| training_agent | hpo: контроль обучения на checkpoint |
-| plan_validator | validation |
-| shared | COMMON.md, candidate_sdk, metrics |
+<!-- skill-registry:start -->
+Всего карточек: 30; ready: 30; placeholder: 0.
 
-Автоматические наборы: preprocessing_agent — candidate_sdk, preprocessing и preprocessing_core; coding_agent — candidate_sdk и metrics; training_agent — metrics и hpo; plan_validator — validation и metrics. Разведчик получает готовые инструкции подтверждения требований и CSV-исследования; агент контекста — инструкции подготовки briefing; остальные роли — свою заглушку. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Общие пакеты доступны ролям, но не загружаются всем автоматически.
+| Владелец | Карточки | Автоматический набор |
+|---|---|---|
+| coding_agent | autogluon, catboost, ensembles, flaml, imbalance, lightautoml, lightgbm, sklearn, statsmodels, torch, xgboost | candidate_sdk, metrics |
+| context_agent | context_agent | context_agent |
+| hypothesis_generator | hypothesis_generator | hypothesis_generator |
+| plan_validator | validation | validation, metrics |
+| planner | planner | planner |
+| preprocessing_agent | categorical_encoding, feature_engineering, feature_selection, missing_values, numeric_transforms, preprocessing, preprocessing_core, schema_quality, temporal_group_structure, text_features | candidate_sdk, preprocessing, preprocessing_core |
+| reconnaissance_agent | reconnaissance_agent | reconnaissance_agent |
+| result_validator | result_validator | result_validator |
+| shared | candidate_sdk, metrics | - |
+| training_agent | hpo | metrics, hpo |
+<!-- skill-registry:end -->
+
+COMMON.md входит в candidate_sdk. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Общие пакеты доступны ролям, но не загружаются всем автоматически. Карточка ensembles сохранена для совместимости: новые планы и исполнение запрещают объединение кандидатов и AutoML blending/stacking.
 
 SkillRegistry.load(..., role=...) и list(role=...) применяются на LLM-границах. Внутренняя проверка совместимости и старые интеграции могут использовать административную загрузку без роли; общий каталог в LLM не передаётся. Лимит основных инструкций — 24 000 символов на роль, с примерами для кодирования — 48 000. COMMON включается в candidate_sdk и SHA256 один раз. Версии и хеши сохраняются в кандидатах.
 
-## Где нет специализированных скилов
+## Проверка реестра
 
-Файлы со status=placeholder: агенты работают по runtime-инструкциям и схемам, дополнительных предметных инструкций пока нет.
-
-- skills/result_validator/result_validator/SKILL.md
-- skills/hypothesis_generator/hypothesis_generator/SKILL.md
-- skills/planner/planner/SKILL.md
+`python scripts/check_skill_docs.py` проверяет количество, статусы, владельцев и автоматические наборы. `--write` обновляет генерируемую таблицу. Генератор гипотез, планер и валидатор результата получают специализированные карточки через существующие автоматические наборы.
 
 Проверки: tests/test_skills.py, tests/test_agent_roles.py, tests/test_packaging.py. Упаковщик рекурсивно включает skills. Graphify, его окружение и графы не входят в submission.
 

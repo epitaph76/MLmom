@@ -102,7 +102,7 @@ class PlanningLimitTests(unittest.TestCase):
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=20).valid)
         self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=21).valid)
 
-    def test_lazy_probe_only_selected_backend_and_ensemble_components(self):
+    def test_forbidden_ensembles_do_not_trigger_lazy_backend_probes(self):
         class SelectedPlanner(Planner):
             def generate(self,role,instruction,payload,schema,tools=None):
                 result=super().generate(role,instruction,payload,schema,tools)
@@ -117,7 +117,7 @@ class PlanningLimitTests(unittest.TestCase):
             called.append(key);tools[key].available=True;tools[key].reason=None
         output=build_planning_graph(SelectedPlanner(),context,tools,Skills(),budget,lightweight=False,
             planning_mode='baseline',probe_tool=probe).invoke({'payload':{'round_number':2}})
-        self.assertTrue(output['valid']);self.assertEqual(called,['torch','catboost'])
+        self.assertFalse(output['valid']);self.assertEqual(called,[])
         self.assertFalse(tools['autogluon'].available)
 
     def test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends(self):

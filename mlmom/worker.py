@@ -178,6 +178,8 @@ def train(request, root):
     from .persistence import atomic_json,tree_hash,file_hash
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
+    if plan.ensemble_components or 'ensembles' in plan.skill_ids:
+        raise ValueError('Candidate ensembles and AutoML blending/stacking are disabled')
     from .registry import NATIVE_VALIDATION
     if not request.get('fixed') and plan.tool_id in NATIVE_VALIDATION:
         if (plan.strategy != 'native' or context.task.validation_strategy not in NATIVE_VALIDATION[plan.tool_id]
@@ -438,7 +440,7 @@ def main():
             module=request['module'];symbol=request['symbol']
             pattern=r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*'
             if not re.fullmatch(pattern,module) or not re.fullmatch(pattern,symbol):raise ValueError('Invalid API identifier')
-            if module.split('.')[0] not in allowed and module not in {'mlmom.sdk','mlmom.ensemble'}:
+            if module.split('.')[0] not in allowed and module != 'mlmom.sdk':
                 raise ValueError('API module is not exposed')
             value=importlib.import_module(module)
             for part in symbol.split('.'):value=getattr(value,part)
