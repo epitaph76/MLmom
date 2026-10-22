@@ -64,7 +64,7 @@ class SkillTests(unittest.TestCase):
                 self.assertEqual(manifest.ml_tools, [tool])
         for key, manifest in registry.manifests.items():
             with self.subTest(skill=key):
-                self.assertEqual(manifest.status, 'placeholder' if key in {'result_validator','hypothesis_generator','planner'} else 'ready')
+                self.assertEqual(manifest.status, 'ready')
                 self.assertRegex(manifest.version, r'^\d+\.\d+\.\d+$')
                 text = (registry.paths[key] / 'SKILL.md').read_text(encoding='utf-8')
                 self.assertTrue(text.isascii(), 'Runtime instructions must remain compact English text')
@@ -72,6 +72,15 @@ class SkillTests(unittest.TestCase):
                 metadata = yaml.safe_load(text.split('---\n', 2)[1])
                 self.assertEqual(metadata['name'], key.replace('_', '-'))
                 self.assertTrue(metadata['description'])
+
+    def test_decision_cards_are_ready_role_scoped_and_compact(self):
+        registry = SkillRegistry(ROOT)
+        for role in ('hypothesis_generator', 'planner', 'result_validator'):
+            with self.subTest(role=role):
+                loaded = registry.load([], 'regression', role=role)
+                self.assertEqual([card['skill_id'] for card in loaded], [role])
+                self.assertEqual(loaded[0]['status'], 'ready')
+                self.assertLess(len(loaded[0]['content']), 8000)
 
     def test_incompatible_unknown_and_missing_dependency_rejected(self):
         registry = SkillRegistry(ROOT)

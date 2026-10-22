@@ -41,8 +41,7 @@ class RoleSkillTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'not available'):
                         registry.load([key],'regression',role=role)
         placeholders=[s for s in registry.list() if s['status']=='placeholder']
-        self.assertEqual({s['owner'] for s in placeholders},
-            {'planner','hypothesis_generator','result_validator'})
+        self.assertEqual(placeholders,[])
 
     def test_writes_are_checked_after_path_normalization(self):
         with tempfile.TemporaryDirectory() as tmp:

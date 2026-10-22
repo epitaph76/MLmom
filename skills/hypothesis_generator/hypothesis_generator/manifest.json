@@ -1,8 +1,8 @@
 {
   "skill_id": "hypothesis_generator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "Hypothesis Generator",
-  "status": "placeholder",
+  "status": "ready",
   "task_types": [],
   "ml_tools": [],
   "dependencies": []
