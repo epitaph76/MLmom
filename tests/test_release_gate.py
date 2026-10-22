@@ -54,5 +54,17 @@ class ReleaseGateTests(unittest.TestCase):
                 generated_path=True,relocated_model_equal=True)) for name in ['regression','multiclass']]
             self.assertEqual(gate('zip',real=reports)['checks']['real_api']['status'],'failed')
 
+    def test_tripled_fit_windows_preserve_total_deadline_and_trial_limits(self):
+        from scripts.release_cases import case_config
+        from mlmom.pipeline_contracts import RunConfig
+        base=RunConfig.model_validate(case_config(1800,'real'))
+        tripled=RunConfig.model_validate(case_config(1800,'real',3))
+        for field in ['initial_experiment_seconds','experiment_seconds','hpo_seconds']:
+            self.assertEqual(getattr(tripled,field),3*getattr(base,field))
+        for field in ['total_seconds','final_reserve_seconds','hpo_max_trials','hpo_batch_size','max_rounds','target_completed_rounds']:
+            self.assertEqual(getattr(tripled,field),getattr(base,field))
+        for bad in [0,-1,3.1]:
+            with self.assertRaises(ValueError):case_config(1800,'real',bad)
+
 
 if __name__=='__main__':unittest.main()

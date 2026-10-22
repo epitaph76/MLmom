@@ -101,6 +101,17 @@ def select_real_settings(settings, model=None, *, diagnostic_api=False):
     return settings
 
 
+def case_config(remaining, mode, fit_time_multiplier=1):
+    if not 0 < fit_time_multiplier <= 3:
+        raise ValueError('Fit time multiplier must be positive and at most 3')
+    return dict(profile='platform',total_seconds=max(1,remaining-50),final_reserve_seconds=120 if mode=='offline' else 300,
+        max_workers=1,max_rounds=6,target_completed_rounds=3,reserve_cpus=0,reserve_memory_gb=0,
+        experiment_seconds=(120 if mode=='offline' else 420)*fit_time_multiplier,
+        initial_experiment_seconds=120*fit_time_multiplier,
+        prediction_seconds=30,smoke_seconds=30,diagnostic_seconds=0,hpo_batch_size=2,hpo_max_trials=4,
+        hpo_seconds=120*fit_time_multiplier,fixed_outer_split=False)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--archive',type=Path)
@@ -110,6 +121,7 @@ def main():
     parser.add_argument('--model',help='Explicit per-run model selection; non-Qwen requires --diagnostic-api; never edits .env')
     parser.add_argument('--diagnostic-api',action='store_true',help='Explicit diagnostic provider/model run, excluded from release acceptance')
     parser.add_argument('--seconds',type=float,default=1800)
+    parser.add_argument('--fit-time-multiplier',type=float,default=1,help='Explicitly scale experiment and search windows up to 3x; total deadline is separate')
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--regression-task',type=Path,default=ROOT.parent/'data/Регрессия/task.md')
     parser.add_argument('--multiclass-task',type=Path,default=ROOT.parent/'data/Многоклассовая классификация/task.md')
@@ -124,7 +136,9 @@ def main():
         write(out/'verification.json',report);print(json.dumps(report));return 0
     if not args.archive:parser.error('--archive is required')
     if args.diagnostic_api and args.mode!='real':parser.error('--diagnostic-api requires --mode real')
-    if args.seconds<=60 or (args.mode=='real' and args.seconds>1800):parser.error('Budget must exceed 60 seconds and real cases may use at most 1800 seconds each')
+    if args.seconds<=60 or (args.mode=='real' and not args.diagnostic_api and args.seconds>1800):parser.error('Budget must exceed 60 seconds and Qwen acceptance may use at most 1800 seconds each')
+    if args.diagnostic_api and args.seconds>10800:parser.error('Diagnostic API budget may use at most 10800 seconds per task')
+    if not 0 < args.fit_time_multiplier <= 3:parser.error('Fit time multiplier must be positive and at most 3')
     sha=digest(args.archive)
     frozen_archive=out/'runtime-solution.zip'
     if frozen_archive.exists():
@@ -161,11 +175,7 @@ def main():
             package.extractall(platform_dir)
         control=attempt/'control';control.mkdir()
         if args.mode=='offline':shutil.copyfile(ROOT/'tests/fixtures/release_sitecustomize.py',control/'sitecustomize.py')
-        config=dict(profile='platform',total_seconds=max(1,remaining-50),final_reserve_seconds=120 if args.mode=='offline' else 300,
-            max_workers=1,max_rounds=6,target_completed_rounds=3,reserve_cpus=0,reserve_memory_gb=0,
-            experiment_seconds=120 if args.mode=='offline' else 420,initial_experiment_seconds=120,
-            prediction_seconds=30,smoke_seconds=30,diagnostic_seconds=0,hpo_batch_size=2,hpo_max_trials=4,hpo_seconds=120,
-            fixed_outer_split=False)
+        config=case_config(remaining,args.mode,args.fit_time_multiplier)
         write(control/'config.json',config)
         name_tag='mlmom-release-'+uuid.uuid4().hex[:10]
         if args.image:
@@ -191,6 +201,7 @@ def main():
             environment='linux/docker' if args.image else sys.platform,command=['python3' if args.image else sys.executable,'solution.py','task.md'],
             run_dir=str(platform_dir/'run'),status='failed')
         if args.mode=='real':report.update(model=settings.model,diagnostic_api=args.diagnostic_api)
+        report['fit_time_multiplier']=args.fit_time_multiplier
         started=time.monotonic()
         try:
             with (attempt/'run.log').open('w',encoding='utf-8') as log:

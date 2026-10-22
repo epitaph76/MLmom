@@ -69,7 +69,8 @@ class PlanningLimitTests(unittest.TestCase):
 
     def test_batch_limit_and_config_limits(self):
         self.assertEqual(RunConfig().max_candidates,2)
-        for params in ({'max_candidates':3},{'coding_seconds':301},{'initial_experiment_seconds':301}):
+        self.assertEqual(RunConfig(initial_experiment_seconds=360).initial_experiment_seconds,360)
+        for params in ({'max_candidates':3},{'coding_seconds':301},{'initial_experiment_seconds':901}):
             with self.assertRaises(ValidationError): RunConfig(**params)
         h=case()[3].hypothesis
         with self.assertRaises(ValidationError): HypothesisBatch(hypotheses=[h,h,h])
@@ -88,6 +89,9 @@ class PlanningLimitTests(unittest.TestCase):
         cat=plan.model_copy(update={'tool_id':'catboost','skill_ids':['catboost']})
         self.assertTrue(validate_plan(cat,context,tools,Skills(),budget,lightweight=True).valid)
         self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,lightweight=True,initial_experiment_seconds=30).valid)
+        longer=plan.model_copy(update={'time_limit_seconds':360})
+        self.assertFalse(validate_plan(longer,context,tools,Skills(),budget,lightweight=True).valid)
+        self.assertTrue(validate_plan(longer,context,tools,Skills(),budget,lightweight=True,initial_experiment_seconds=360).valid)
 
     def test_native_backend_single_loophole_closed_but_native_advanced_allowed(self):
         context,tools,budget,plan=case()

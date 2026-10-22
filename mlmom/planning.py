@@ -37,7 +37,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         if plan.ensemble_components: errors.append('Lightweight plans cannot contain ensembles')
         if tool and (tool.native_hpo or tool.cost_tag == 'slow'):
             errors.append('Lightweight plans cannot use native AutoML or slow backends')
-        if plan.time_limit_seconds > min(300, initial_experiment_seconds):
+        if plan.time_limit_seconds > initial_experiment_seconds:
             errors.append('Lightweight experiment exceeds the initial experiment limit')
     if plan.cpus > budget.available_cpus or plan.memory_gb > budget.available_memory_gb:
         errors.append('Requested resources exceed worker capacity')
@@ -217,7 +217,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'imbalance for weighting/thresholds. Candidate ensembles and AutoML blending/stacking are disabled. '
                         'When lightweight=true require strategy=single, max_trials=1, no '
                         'ensemble, no native AutoML or slow backend, and time_limit_seconds at most '
-                        f'{min(300,initial_experiment_seconds)}. Never override orchestration resources; '
+                        f'{initial_experiment_seconds}. Never override orchestration resources; '
                         'exclude targets, IDs and evaluation data from features. Always use execution_mode=custom: '
                         'the preprocessing agent implements transforms; the model coder implements the estimator. In lightweight mode '
                         'keep preprocessing cheap and parameters fixed for the initial fit. Declare a small compatible '

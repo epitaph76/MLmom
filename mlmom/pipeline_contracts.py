@@ -12,7 +12,7 @@ class RunConfig(StrictModel):
     final_reserve_seconds: float = Field(2400, ge=0)
     first_submission_seconds: float = Field(600, gt=0)
     experiment_seconds: float = Field(1800, gt=0)
-    initial_experiment_seconds: float = Field(300, gt=0, le=300)
+    initial_experiment_seconds: float = Field(300, gt=0, le=900)
     coding_seconds: float = Field(300, gt=0, le=300)
     prediction_seconds: float = Field(180, gt=0)
     max_rounds: int = Field(100, ge=1)
