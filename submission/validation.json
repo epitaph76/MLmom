@@ -1,52 +1,52 @@
 {
-  "status": "failed",
+  "status": "not_verified",
   "checks": {
     "source_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 180,
+        "count": 191,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 416.738974481,
+        "duration_seconds": 541.2026197360001,
         "python": "3.12.15",
         "os": "Linux",
         "source": "checkout",
         "runtime": "/repo",
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
+        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
       }
     },
     "packaged_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 180,
+        "count": 191,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 517.0547721759999,
-        "runtime": "/repo/artifacts/release-abc-v6/packaged/platform/.mlmom-runtime-7ce9abbe0c337d44",
+        "duration_seconds": 592.2382601950003,
+        "runtime": "/repo/artifacts/release-unbounded-ensembles-final-20261022171642/packaged/platform/.mlmom-runtime-ecd6e32a3907328c",
         "python": "3.12.15",
         "os": "Linux",
         "source": "extracted ZIP",
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
+        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
       }
     },
     "linux_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 180,
+        "count": 191,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 517.0547721759999,
-        "runtime": "/repo/artifacts/release-abc-v6/packaged/platform/.mlmom-runtime-7ce9abbe0c337d44",
+        "duration_seconds": 592.2382601950003,
+        "runtime": "/repo/artifacts/release-unbounded-ensembles-final-20261022171642/packaged/platform/.mlmom-runtime-ecd6e32a3907328c",
         "python": "3.12.15",
         "os": "Linux",
         "source": "extracted ZIP",
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936"
+        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
       }
     },
     "offline": {
@@ -57,7 +57,7 @@
           "report": {
             "case": "regression",
             "attempt": 1,
-            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+            "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -65,8 +65,10 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\offline\\regression\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-unbounded-ensembles-final-20261022171642\\offline\\regression\\attempt-1\\task\\run",
             "status": "passed",
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": false,
             "exit_code": 0,
             "verification": {
               "status": "passed",
@@ -77,14 +79,14 @@
               "incumbent_rechecks": 2,
               "generated_path": true,
               "relocated_model_equal": true,
-              "submission_sha256": "207bf182fd470102b1329b1968ba3f46ae5846e37b365ab519f965c1f44361c8"
+              "submission_sha256": "dc02cc8938c0978531686b053e7b17bfe36050fa23e80f08f99b598f33a616b4"
             },
-            "duration_seconds": 449.2970000000005,
+            "duration_seconds": 493.8909999999996,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
               "completed_rounds": 3,
-              "completed_optuna_trials": 11,
+              "completed_optuna_trials": 12,
               "passed": true
             }
           }
@@ -94,7 +96,7 @@
           "report": {
             "case": "multiclass",
             "attempt": 1,
-            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
+            "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -102,8 +104,10 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-v6\\offline\\multiclass\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-unbounded-ensembles-final-20261022171642\\offline\\multiclass\\attempt-1\\task\\run",
             "status": "passed",
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": false,
             "exit_code": 0,
             "verification": {
               "status": "passed",
@@ -116,7 +120,7 @@
               "relocated_model_equal": true,
               "submission_sha256": "b8d6d74f5575c02a06615d0ba066a9d10084cca9f8f6e41cda397a83f07fb639"
             },
-            "duration_seconds": 200.96900000000005,
+            "duration_seconds": 197.95299999999952,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
@@ -129,63 +133,15 @@
       }
     },
     "real_api": {
-      "status": "failed",
+      "status": "not_verified",
       "cases": {
         "regression": {
-          "status": "failed",
-          "report": {
-            "case": "regression",
-            "attempt": 1,
-            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-            "mode": "real",
-            "environment": "linux/docker",
-            "command": [
-              "python3",
-              "solution.py",
-              "task.md"
-            ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-qwen-restart-20261022152031\\real-regression\\regression\\attempt-1\\task\\run",
-            "status": "failed",
-            "model": "qwen/qwen3.8-27b",
-            "exit_code": 2,
-            "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 897.6099999999997,
-            "pipeline_stop_reason": "planning_attempts_exhausted",
-            "process_acceptance": {
-              "target_completed_rounds": 3,
-              "completed_rounds": 0,
-              "completed_optuna_trials": 0,
-              "passed": false
-            }
-          }
+          "status": "not_verified",
+          "reason": "No report supplied"
         },
         "multiclass": {
-          "status": "failed",
-          "report": {
-            "case": "multiclass",
-            "attempt": 1,
-            "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-            "mode": "real",
-            "environment": "linux/docker",
-            "command": [
-              "python3",
-              "solution.py",
-              "task.md"
-            ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-abc-qwen-restart-20261022152031\\real-multiclass\\multiclass\\attempt-1\\task\\run",
-            "status": "failed",
-            "model": "qwen/qwen3.8-27b",
-            "exit_code": 2,
-            "reason": "Independent acceptance failed; see run.log",
-            "duration_seconds": 982.875,
-            "pipeline_stop_reason": "planning_attempts_exhausted",
-            "process_acceptance": {
-              "target_completed_rounds": 3,
-              "completed_rounds": 0,
-              "completed_optuna_trials": 0,
-              "passed": false
-            }
-          }
+          "status": "not_verified",
+          "reason": "No report supplied"
         }
       }
     },
@@ -390,61 +346,23 @@
         "limitations": [
           "CPU-only Torch may carry +cpu; Python patch release may differ from organizer.",
           "Matching dependencies does not establish organizer-platform equivalence."
-        ],
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-        "docker": {
-          "ServerVersion": "29.7.2",
-          "OperatingSystem": "Docker Desktop",
-          "OSType": "linux",
-          "NCPU": 12,
-          "MemTotal": 8175370240,
-          "Driver": "overlayfs"
-        },
-        "image": {
-          "Id": "sha256:5fd881afe667ea808755c6c40356d685072c0ef39903aaaf81fe15b01c0acc7f",
-          "RepoTags": [
-            "mlmom-ml:test"
-          ],
-          "Created": "2026-10-20T17:29:33.976758135Z",
-          "Architecture": "amd64",
-          "Os": "linux"
-        },
-        "execution_limits": {
-          "source_tests": {
-            "cpus": 4,
-            "cpuset": "8-11",
-            "memory": "8g"
-          },
-          "packaged_tests": {
-            "cpus": 4,
-            "cpuset": "0-3",
-            "memory": "8g"
-          },
-          "release_cases": {
-            "cpus": 4,
-            "memory": "6g"
-          },
-          "relocated_inference": {
-            "cpus": 2,
-            "memory": "4g"
-          }
-        }
+        ]
       }
     }
   },
   "supplemental_tests": [],
-  "created_utc": "2026-10-22T15:39:20.895984+00:00",
-  "base_commit": "03d22dd5c0a966e339aa376b270e6b0e4aea4c0e",
+  "created_utc": "2026-10-22T17:29:36.674483+00:00",
+  "base_commit": "dc6262f06b121394ee31aad2dfbf15065a174e44",
   "package": {
     "path": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-solution.zip",
-    "sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-    "bytes": 149273,
+    "sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
+    "bytes": 152274,
     "root_files": [
       "mlmom_bundle.py",
       "requirements.txt",
       "solution.py"
     ],
-    "source_bundle_digest": "7ce9abbe0c337d44ee2b49c43cc344e4bf4b6514f4eff0dc6762f7ee0d6f756c",
+    "source_bundle_digest": "ecd6e32a3907328c17684e139fcfb91bab738ddf2a91c3910d420419a3cc3269",
     "bundled_source_matches_checkout": true,
     "secret_scan": "passed",
     "requirements_sha256": "9173b0388532fbd2a709e4f4b3029e3b9ccab685fce43a85261ffa1ba95efbe6"
@@ -452,74 +370,65 @@
   "environment_limits": [
     "Docker image approximates provided dependencies; organizer infrastructure is not verified.",
     "Offline LLM is an external test fixture; production runtime has no offline fallback.",
-    "Real API allowance is at most 1800 seconds per task, including all attempts and verification."
+    "Timeouts are opt-in. The bounded Qwen acceptance procedure explicitly enables a 1800-second limit per task, including attempts and verification."
   ],
-  "planner_input_audit": {
-    "status": "issues_found",
-    "report": "artifacts/release-abc-qwen-restart-20261022152031/audit/AUDIT.md",
-    "findings": [
-      "Incorrect DNS conditional percentage propagated to hypothesis and plan",
-      "Regression histogram boundary mislabeled as q75",
-      "Duplicate grouping requested in prose but absent from confirmed group columns",
-      "B2 gap: active ready-adapter suggestion remains in planner payload",
-      "Categorical cross-tab observations cite profile instead of exact SQL result"
-    ],
-    "fixed": false
-  },
-  "real_api_run_summary": {
-    "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-    "model": "qwen/qwen3.8-27b",
-    "base_url": "https://changellenge.up.railway.app/v1",
-    "allowance_per_task_seconds": 1800,
-    "allowance_total_seconds": 3600,
-    "completed_cases": [
+  "historical_diagnostic": {
+    "same_build": false,
+    "counts_towards_current_acceptance": false,
+    "report_path": "artifacts/release-abc-deepseek-extended-20261022160643/real/reports.json",
+    "archive_sha256": "bd2c0483a139318b45e05d2dee36f0f13f0bbb1ad96a34af4e56da95a943293c",
+    "diagnostic_only": true,
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "cases": [
       {
         "case": "regression",
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-        "deadline": 1792684232.1629536,
-        "duration_seconds": 897.6099999999997,
-        "scout_status": "partial",
-        "observations": 7,
-        "proposals": 0,
-        "validator_timeouts": [
-          {
-            "elapsed_seconds": 874.344409501,
-            "error_type": "APITimeoutError"
-          }
-        ],
-        "process_acceptance": {
-          "target_completed_rounds": 3,
-          "completed_rounds": 0,
-          "completed_optuna_trials": 0,
-          "passed": false
-        }
+        "metric": "rmse",
+        "score": 44.068342800555904,
+        "split_id": "r3-dd4b103688ce25e4",
+        "candidate_id": "r3-h6-lgbm-drop-near-noise-weather-v1",
+        "cycles": 3,
+        "outer_splits": 3,
+        "incumbent_rechecks": 2,
+        "rows": 22449,
+        "relocated_model_equal": true,
+        "duration_seconds": 3122.4840000000004
       },
       {
         "case": "multiclass",
-        "archive_sha256": "d9c7644212f0187727f57a9d12139aad0b31dd75e209923c19ffd3c2a52c4936",
-        "deadline": 1792684232.1629536,
-        "duration_seconds": 982.875,
-        "scout_status": "completed",
-        "observations": 4,
-        "proposals": 4,
-        "validator_timeouts": [
-          {
-            "elapsed_seconds": 750.518169714,
-            "error_type": "APITimeoutError"
-          },
-          {
-            "elapsed_seconds": 961.238622477,
-            "error_type": "APITimeoutError"
-          }
-        ],
-        "process_acceptance": {
-          "target_completed_rounds": 3,
-          "completed_rounds": 0,
-          "completed_optuna_trials": 0,
-          "passed": false
-        }
+        "metric": "f1_macro",
+        "score": 0.5884877038165967,
+        "split_id": "r4-845e49df44f50ebb",
+        "candidate_id": "r4-h4_proto_freq_tail-v1",
+        "cycles": 3,
+        "outer_splits": 4,
+        "incumbent_rechecks": 3,
+        "rows": 41166,
+        "relocated_model_equal": true,
+        "duration_seconds": 3733.405999999999
       }
+    ]
+  },
+  "execution_policy": {
+    "timeouts_enabled_by_default": false,
+    "ensembles_allowed": true,
+    "cpu_memory_trial_round_limits_retained": true,
+    "sdk_unchanged_from": "e7eb233"
+  },
+  "decision_skill_source": {
+    "commit": "7235080535e6161cbf8494a7436abfa0a23fb479",
+    "cards": [
+      "hypothesis_generator",
+      "planner",
+      "result_validator"
     ],
-    "actual_total_run_seconds": 1880.4849999999997
+    "version": "1.2.0",
+    "adapted": true
+  },
+  "diagnostic_secret_scan": {
+    "status": "passed",
+    "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
+    "artifact_text_files_checked": 26678,
+    "matches": [],
+    "temporary_api_files": []
   }
 }

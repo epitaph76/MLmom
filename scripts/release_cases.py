@@ -122,7 +122,7 @@ def main():
     parser.add_argument('--diagnostic-api',action='store_true',help='Explicit diagnostic provider/model run, excluded from release acceptance')
     parser.add_argument('--seconds',type=float,default=1800)
     parser.add_argument('--fit-time-multiplier',type=float,default=1,help='Explicitly scale experiment and search windows up to 3x; total deadline is separate')
-    parser.add_argument('--enable-timeouts',action='store_true',help='Opt in to stage and wall-clock deadlines for diagnostic runs')
+    parser.add_argument('--enable-timeouts',action='store_true',help='Opt in to stage and wall-clock deadlines for this run')
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--regression-task',type=Path,default=ROOT.parent/'data/Регрессия/task.md')
     parser.add_argument('--multiclass-task',type=Path,default=ROOT.parent/'data/Многоклассовая классификация/task.md')

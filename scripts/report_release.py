@@ -90,7 +90,7 @@ def main():
     report.update(created_utc=datetime.now(timezone.utc).isoformat(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),package=info,
         environment_limits=['Docker image approximates provided dependencies; organizer infrastructure is not verified.',
                             'Offline LLM is an external test fixture; production runtime has no offline fallback.',
-                            'Real API allowance is at most 1800 seconds per task, including all attempts and verification.'])
+                            'Timeouts are opt-in. The bounded Qwen acceptance procedure explicitly enables a 1800-second limit per task, including attempts and verification.'])
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
     print(json.dumps(dict(status=report['status'],sha256=info['sha256'],checks={k:v['status'] for k,v in report['checks'].items()})))
