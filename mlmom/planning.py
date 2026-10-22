@@ -123,9 +123,16 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             'Canonical task and planning_brief.requirements are authoritative; never replace them with narrative '
             'assumptions. Account for mandatory_findings even when not selected in ranked_findings. '
             'Proposed experiments are not measured benefits. ')
+        instruction += (' technique_skills lists compatible preprocessing/modeling techniques as metadata. '
+            'Choose only techniques justified by the profile, findings or hypothesis. Planner must describe '
+            'the intended operations in preprocessing/model assignment and include their skill_id in '
+            'plan.skill_ids alongside the backend skill. Runtime sends implementation instructions to '
+            'the owning role; preprocessing.py preserves rows, while sampling and target transforms '
+            'belong to coding_agent. Catalog availability alone is not evidence of benefit. ')
         if role_tools is not None:
             instruction += 'Use read_task if a task nuance needs clarification. '
-        payload=dict(payload,skills=skills.list(role=role),
+        payload=dict(payload,technique_skills=skills.technique_catalog(context.task.task_type),
+                     skills=skills.list(role=role),
                      skill_instructions=skills.load([],context.task.task_type,role=role))
         if role_tools is not None:
             from .tools import ToolSet

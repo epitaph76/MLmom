@@ -17,6 +17,7 @@ from tests.fakes import GENERATED_CODE as ADAPTER_CODE
 class Skills:
     def load(self,*args,**kwargs): return []
     def list(self,**kwargs): return []
+    def technique_catalog(self,task_type): return []
 
 
 def case():

@@ -1,0 +1,9 @@
+{
+  "skill_id": "categorical_encoding",
+  "version": "1.0.0",
+  "title": "Categorical encoding",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

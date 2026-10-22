@@ -29,6 +29,11 @@ preprocessing_agent пишет только preprocessing.py и описание
 
 Артефакт содержит estimator/, preprocessing.pkl и prepared-config.pkl. Native-файлы сохраняются внутри estimator/. Старые кандидаты без preprocessing.py используют прежний SDK. preprocessing_hash хранится в CandidateVersion, полный code_hash покрывает все Python-модули.
 
+Planner получает technique_skills: метаданные совместимых скилов предобработки и imbalance.
+Выбранные ID из plan.skill_ids загружаются исполняющей роли; базовый preprocessing_core
+подключается автоматически. Sampling и преобразование y принадлежат кодеру модели,
+preprocessing.py сохраняет строки. Детали — в docs/SKILLS.md.
+
 ## Контроль обучения
 
 training_agent получает TrainingCheckpoint с планом, внутренними метриками, параметрами, ошибками и остатком бюджета. Метки внешнего holdout и LLM-ключи не передаются worker. Агент вызывается после первого fit, после пакета Optuna и при ошибке; на отдельных итерациях boosting он не вызывается. Native AutoML остаётся внутри библиотеки: точки контроля — завершение native fit или ошибка.

@@ -32,7 +32,10 @@ from mlmom.resources import SandboxManager
 runtime=Path(mlmom.__file__).resolve().parent.parent
 assert runtime.parent==Path(sys.argv[1]).resolve()
 registry=SkillRegistry(runtime/'skills')
-assert len(registry.list())==22
+assert len(registry.list())==30
+catalog={s['skill_id'] for s in registry.technique_catalog('multiclass_classification')}
+assert {'categorical_encoding','missing_values','preprocessing_core','imbalance'}<=catalog
+assert registry.owners['imbalance']=='coding_agent'
 loaded=registry.load(['sklearn'],'regression')
 assert {s['skill_id'] for s in loaded}=={'candidate_sdk','validation','metrics','preprocessing','sklearn'}
 assert all(s['status']=='ready' for s in loaded)

@@ -1,70 +1,118 @@
 {
   "date": "2026-10-22",
-  "working_tree_changes": true,
   "package": {
-    "archive": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-organizers-20261022.zip",
+    "archive": "submission/mlmom-organizers-20261022.zip",
     "canonical_copy": "submission/mlmom-solution.zip",
-    "sha256": "dfd40c6ce57c96e1274fc66f3e84f2257de2df7c5851f7ff06612caf4d6300e6",
-    "bytes": 136224,
+    "sha256": "5a5446f7d3534c58597b9454b1560c6999fba46cf31773596ecf84ca89894bc1",
+    "bytes": 141781,
     "source_matches": true,
     "official_requirements_identical": true,
-    "runtime_digest": "b1446ade2f7e9d39b6dd47307d9b7fdd621b27b06d83fc0d2cc7e392cd6562a5",
+    "configured_secrets_absent": true,
+    "runtime_digest": "844a1fc925ca13285097a43ffce237b7fe0f7df017c669924732f4257007372a",
     "root_files": [
       "solution.py",
       "requirements.txt",
       "mlmom_bundle.py"
-    ]
+    ],
+    "skill_manifests": 30
   },
   "tests": {
     "status": "passed",
-    "count": 83,
-    "failures": 0,
-    "errors": 0,
-    "skipped": 0,
-    "seconds": 22.514999999999418,
-    "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\context-agent-final\\platform\\.mlmom-runtime-b1446ade2f7e9d39"
-  },
-  "source_tests": {
-    "status": "passed",
-    "count": 5,
-    "duration_seconds": 72.107,
-    "scope": "tests.test_pipeline",
-    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\context-agent-pipeline-tests.log"
-  },
-  "organizer_inputs": [
-    {
-      "archive": "Многоклассовая классификация-20261020T130139Z-1-001.zip",
-      "task_type": "multiclass_classification",
-      "target": [
-        "attack_cat"
-      ],
-      "metric": "macro_f1",
-      "complete_original_task_received": true,
-      "task_chars": 3151,
-      "brief_status": "completed",
-      "ranked_findings": 7,
-      "roles": [
-        "reconnaissance_agent",
-        "context_agent"
+    "unique_tests": 158,
+    "verification_mode": "Full packaged suite, with all five affected test modules rerun after adding technique_catalog to the Skills test double. Runtime sources and ZIP did not change between these runs.",
+    "full_scan": {
+      "status": "failed",
+      "count": 158,
+      "failures": 0,
+      "errors": 17,
+      "skipped": 0,
+      "duration_seconds": 429.03099999999995,
+      "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\preprocessing-skills-release\\platform\\.mlmom-runtime-844a1fc925ca1328"
+    },
+    "fixture_recheck": {
+      "status": "passed",
+      "count": 40,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 4.546999999999912,
+      "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\preprocessing-skills-release\\platform\\.mlmom-runtime-844a1fc925ca1328",
+      "modules": [
+        "tests.test_generated_candidates",
+        "tests.test_planning_limits",
+        "tests.test_planning_recovery",
+        "tests.test_real_failure_regressions",
+        "tests.test_short_cycles"
       ]
     },
-    {
-      "archive": "Регрессия-20261020T130119Z-1-001.zip",
-      "task_type": "regression",
-      "target": [
-        "site_eui"
-      ],
-      "metric": "rmse",
-      "complete_original_task_received": true,
-      "task_chars": 7047,
-      "brief_status": "completed",
-      "ranked_findings": 13,
-      "roles": [
-        "reconnaissance_agent",
-        "context_agent"
-      ]
-    }
-  ],
+    "resolved_test_ids": [
+      "tests.test_generated_candidates.GeneratedCandidateTests.test_first_cycle_allows_real_preprocessing_and_keeps_declared_hpo_space",
+      "tests.test_planning_limits.PlanningLimitTests.test_bad_alternative_does_not_discard_valid_plan",
+      "tests.test_planning_limits.PlanningLimitTests.test_baseline_can_publish_before_planning_bad_alternative",
+      "tests.test_planning_limits.PlanningLimitTests.test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends",
+      "tests.test_planning_limits.PlanningLimitTests.test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends",
+      "tests.test_planning_limits.PlanningLimitTests.test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends",
+      "tests.test_planning_limits.PlanningLimitTests.test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends",
+      "tests.test_planning_limits.PlanningLimitTests.test_lazy_probe_only_selected_backend_and_ensemble_components",
+      "tests.test_planning_limits.PlanningLimitTests.test_planner_validator_and_selected_skills_have_hypothesis_trace_context",
+      "tests.test_planning_limits.PlanningLimitTests.test_unavailable_api_for_alternative_keeps_accepted_baseline",
+      "tests.test_planning_recovery.PlanningRecoveryTests.test_validation_retry_reuses_hypothesis_and_proposed_code_plan",
+      "tests.test_real_failure_regressions.RealFailureRegressions.test_legacy_hypothesis_reference_resolves_only_verified_candidates",
+      "tests.test_real_failure_regressions.RealFailureRegressions.test_matching_cpu_parameter_is_normalized_but_override_is_rejected",
+      "tests.test_real_failure_regressions.RealFailureRegressions.test_semantic_rejection_never_uses_timeout_fallback",
+      "tests.test_real_failure_regressions.RealFailureRegressions.test_validator_format_failure_never_reinvokes_planner",
+      "tests.test_real_failure_regressions.RealFailureRegressions.test_validator_timeout_never_bypasses_review_for_generated_plans",
+      "tests.test_short_cycles.ShortCycleTests.test_validator_is_told_min_delta_is_not_hpo_continuation"
+    ]
+  },
+  "skills": {
+    "total": 30,
+    "ready": 27,
+    "placeholder": 3,
+    "new_preprocessing_cards": 8,
+    "merged_imbalance_version": "2.0.1",
+    "upstream_commit": "9b500446ebb06837729eec36546ae66c269106e7",
+    "planner_receives_compatible_technique_metadata": true,
+    "instructions_scoped_to_owner": true,
+    "preprocessing_core_automatic": true
+  },
+  "prior_build_organizer_input_checks": {
+    "package_sha256": "dfd40c6ce57c96e1274fc66f3e84f2257de2df7c5851f7ff06612caf4d6300e6",
+    "results": [
+      {
+        "archive": "Многоклассовая классификация-20261020T130139Z-1-001.zip",
+        "task_type": "multiclass_classification",
+        "target": [
+          "attack_cat"
+        ],
+        "metric": "macro_f1",
+        "complete_original_task_received": true,
+        "task_chars": 3151,
+        "brief_status": "completed",
+        "ranked_findings": 7,
+        "roles": [
+          "reconnaissance_agent",
+          "context_agent"
+        ]
+      },
+      {
+        "archive": "Регрессия-20261020T130119Z-1-001.zip",
+        "task_type": "regression",
+        "target": [
+          "site_eui"
+        ],
+        "metric": "rmse",
+        "complete_original_task_received": true,
+        "task_chars": 7047,
+        "brief_status": "completed",
+        "ranked_findings": 13,
+        "roles": [
+          "reconnaissance_agent",
+          "context_agent"
+        ]
+      }
+    ]
+  },
   "live_api_called": false,
   "roles": {
     "task_definition": false,

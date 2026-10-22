@@ -1,0 +1,9 @@
+{
+  "skill_id": "missing_values",
+  "version": "1.0.0",
+  "title": "Missing-value handling",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

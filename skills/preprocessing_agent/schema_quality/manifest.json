@@ -1,0 +1,9 @@
+{
+  "skill_id": "schema_quality",
+  "version": "1.0.1",
+  "title": "Schema and data quality",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

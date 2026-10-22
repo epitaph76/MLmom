@@ -47,7 +47,8 @@ never validation data. Fit all vocabularies, imputers, feature statistics on X o
 encoding produce group-safe OOF training encodings; transform uses train-fitted inference maps.
 Preserve rows and order. Implement planned categories, missingness, text and feature operations.
 The spec declares dataframe, dense or sparse output, feature semantics and backend constraints.
-Use only installed allowed libraries and X/y/context; no files, network, environment or model training.
+Use only installed allowed libraries and X/y/context; no files, network or environment access.
+Planned train-only feature selectors may be fitted; do not train the predictive estimator or change y.
 State must be cloudpickle serializable. No import-time training. Support unseen categories,
 missing values, empty text, and stable feature order. The SDK owns fitting and persistence.
 During repair retain previous_spec unless the output interface must change.

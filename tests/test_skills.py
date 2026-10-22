@@ -55,7 +55,7 @@ class SkillTests(unittest.TestCase):
 
     def test_backend_manifests_match_adapter_tasks_and_dependencies(self):
         registry = SkillRegistry(ROOT)
-        self.assertEqual(len(registry.list()), 22)
+        self.assertEqual(len(registry.list()), 30)
         for tool, distribution, _, _, tasks, *_ in DEFINITIONS:
             with self.subTest(tool=tool):
                 manifest = registry.manifests[tool]
@@ -85,6 +85,24 @@ class SkillTests(unittest.TestCase):
                    side_effect=importlib.metadata.PackageNotFoundError('flaml')):
             with self.assertRaises(importlib.metadata.PackageNotFoundError):
                 registry.load(['flaml'], 'regression')
+
+    def test_technique_catalog_exposes_compatible_metadata_without_role_instructions(self):
+        registry = SkillRegistry(ROOT)
+        regression = {s['skill_id']: s for s in registry.technique_catalog('regression')}
+        classification = {s['skill_id']: s for s in registry.technique_catalog('multiclass_classification')}
+        self.assertEqual(set(regression), {key for key, owner in registry.owners.items()
+                                          if owner == 'preprocessing_agent'})
+        self.assertEqual(set(classification), set(regression) | {'imbalance'})
+        self.assertEqual(classification['imbalance']['owner'], 'coding_agent')
+        for card in classification.values():
+            self.assertEqual(set(card), {'skill_id', 'title', 'owner', 'task_types'})
+        # Discovery does not grant Planner access to implementation instructions.
+        with self.assertRaisesRegex(ValueError, 'not available'):
+            registry.load(['categorical_encoding'], 'regression', role='planner')
+        loaded = registry.load(['missing_values', 'categorical_encoding'], 'regression',
+                               role='preprocessing_agent', include_references=True, max_chars=48000)
+        self.assertTrue({'preprocessing_core', 'missing_values', 'categorical_encoding'}
+                        <= {s['skill_id'] for s in loaded})
 
     def test_each_task_loads_all_compatible_cards_within_budget(self):
         registry = SkillRegistry(ROOT)

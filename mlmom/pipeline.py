@@ -232,7 +232,9 @@ class Pipeline:
             ml_tools=[{k:v for k,v in t.model_dump(mode='json').items() if k in
                 {'tool_id','available','reason','task_types','skill_ids','native_hpo','cost_tag','supports_weights','version'}}
                 for t in self.tools.values()],
-            skills=self.skills.list(role='planner'),budget=self.budget.snapshot().model_dump(),
+            skills=self.skills.list(role='planner'),
+            technique_skills=self.skills.technique_catalog(context.task.task_type),
+            budget=self.budget.snapshot().model_dump(),
             previous=dict(round_id=previous.get('round_id'),failures=previous.get('failures',[])[-5:],
                 decisions=[{k:d[k] for k in ('candidate_id','experiment_id','accepted','reason','score','reference_score') if k in d}
                            for d in decisions[-5:] if d.get('experiment_id')!=champion_id]),

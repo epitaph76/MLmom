@@ -51,12 +51,21 @@ def only_sklearn():return {'sklearn':installed_tools()['sklearn']}
 
 class PipelineIntegrationTests(unittest.TestCase):
     def test_two_rounds_regression_and_multiclass_and_resume(self):
+        class TechniqueClient(OfflineLLM):
+            def generate(self, role, instruction, payload, schema, tools=None):
+                result = super().generate(role, instruction, payload, schema, tools)
+                if role == 'planner':
+                    for plan in result.plans:
+                        plan.skill_ids += ['missing_values', 'categorical_encoding']
+                        if payload['task']['task_type'] == 'multiclass_classification':
+                            plan.skill_ids += ['imbalance']
+                return result
         for kind in ['regression','multiclass_classification']:
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp); task=dataset(root/'input',kind)
                 config=RunConfig(hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
                     prediction_seconds=10,experiment_seconds=20,reserve_cpus=0,reserve_memory_gb=0)
-                client=OfflineLLM()
+                client=TechniqueClient()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
                     pipeline=Pipeline(task,config,run_dir=root/'run',client=client)
                     result=pipeline.run()
@@ -64,8 +73,10 @@ class PipelineIntegrationTests(unittest.TestCase):
                 expected={
                     'hypothesis_generator':{'hypothesis_generator'}, 'planner':{'planner'},
                     'plan_validator':{'validation','metrics'},
-                    'preprocessing_agent':{'candidate_sdk','preprocessing'},
-                    'coding_agent':{'candidate_sdk','metrics','sklearn'},
+                    'preprocessing_agent':{'candidate_sdk','preprocessing','preprocessing_core',
+                                           'missing_values','categorical_encoding'},
+                    'coding_agent':{'candidate_sdk','metrics','sklearn'} |
+                                   ({'imbalance'} if kind=='multiclass_classification' else set()),
                     'training_agent':{'metrics','hpo'},
                     'reconnaissance_agent':{'reconnaissance_agent'},'result_validator':{'result_validator'},
                     'context_agent':{'context_agent'},
@@ -73,6 +84,12 @@ class PipelineIntegrationTests(unittest.TestCase):
                 for role,payload in client.calls:
                     cards=payload.get('skill_instructions',payload.get('skills',[]))
                     if role in expected:self.assertEqual({s['skill_id'] for s in cards},expected[role])
+                    if role in {'hypothesis_generator','planner','plan_validator'}:
+                        catalog={s['skill_id']:s for s in payload['technique_skills']}
+                        self.assertIn('missing_values',catalog)
+                        self.assertIn('categorical_encoding',catalog)
+                        self.assertEqual('imbalance' in catalog,kind=='multiclass_classification')
+                        self.assertTrue(all('content' not in card for card in catalog.values()))
                 read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
                 self.assertEqual(read.status,'error')
                 self.assertEqual(result['submission']['model_role'],'submission_refit',result)

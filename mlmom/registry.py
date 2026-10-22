@@ -13,7 +13,7 @@ SUPERVISED = ['regression','binary_classification','multiclass_classification']
 MULTI = SUPERVISED + ['multioutput_regression','multilabel_classification']
 CORE_SKILLS = ('candidate_sdk', 'validation', 'metrics', 'preprocessing')
 ROLE_DEFAULTS = {
-    'preprocessing_agent': ('candidate_sdk', 'preprocessing'),
+    'preprocessing_agent': ('candidate_sdk', 'preprocessing', 'preprocessing_core'),
     'coding_agent': ('candidate_sdk', 'metrics'),
     'training_agent': ('metrics', 'hpo'),
     'plan_validator': ('validation', 'metrics'),
@@ -92,6 +92,14 @@ class SkillRegistry:
         if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')
         return [dict(s.model_dump(mode='json'), owner=self.owners[s.skill_id])
                 for s in self.manifests.values() if self.allowed(s.skill_id, role)]
+
+    def technique_catalog(self, task_type):
+        """Planning metadata only; implementation instructions remain role-scoped."""
+        return [dict(skill_id=s.skill_id, title=s.title, owner=self.owners[s.skill_id],
+                     task_types=list(s.task_types))
+                for s in self.manifests.values()
+                if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id == 'imbalance')
+                and s.status == 'ready' and (not s.task_types or task_type in s.task_types)]
 
     def load(self, ids: list[str], task_type: str, *, role=None, max_chars=24000,include_references=False):
         if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')

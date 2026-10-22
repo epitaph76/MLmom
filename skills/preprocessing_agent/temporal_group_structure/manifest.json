@@ -1,0 +1,9 @@
+{
+  "skill_id": "temporal_group_structure",
+  "version": "1.0.1",
+  "title": "Temporal and grouped data",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}
