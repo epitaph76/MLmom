@@ -27,12 +27,14 @@ classes, groups, sample_weight, validation_X/y, validation_groups/weight, work_d
 preprocessing.py is read-only and owned by a separate role. The SDK supplies already transformed X
 and context.validation_X in preprocessing_spec's declared dataframe/dense/sparse representation.
 Do not import preprocessing or fit feature cleaning/encoding/imputation again. Backend reference
-excerpts must be adapted to this separation. Implement the selected model directly, target/output
-transforms and constraints, prediction/class ordering and portable estimator persistence.
+excerpts must be adapted to this separation. Implement the selected model directly,
+prediction/class ordering and portable estimator persistence. Runtime owns target_transform,
+weight_policy and prediction_policy: do not implement log1p/expm1, clipping or custom weights again.
+Pass context.sample_weight to the backend unchanged; do not mutate fitted parameters after fit.
 Consume all config['model_params'], including declared search parameters. No Optuna loop inside fit:
 the runner supplies each trial. Reuse validation only for stopping/selection, never ordinary fitting.
 export_model_params() MUST return the COMPLETE reproducible model_params, not a patch: retain
-every fixed parameter, nested ensemble config, blend weight, target/output option and flat HPO
+every fixed backend parameter, nested ensemble config, blend weight and flat backend HPO
 override. Only explicitly permitted stopping can replace counts with measured selected counts.
 The runner rejects incomplete exports. Smoke recreates, refits and compares effective configuration
 and predictions. Expose self.model for a single estimator; ensembles MUST implement
@@ -83,6 +85,34 @@ class CodeBundle(StrictModel):
     files: dict[str,str] = Field(min_length=1,max_length=20)
 
 
+class SourcePatch(StrictModel):
+    path: str
+    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    old_text: str = Field(min_length=1)
+    new_text: str
+
+
+class CodePatch(StrictModel):
+    patches: list[SourcePatch] = Field(default_factory=list,max_length=20)
+
+
+def reuse_assignment(previous, plan):
+    if not previous or not previous.get('plan') or not previous.get('preprocessing_spec'):
+        return False, False
+    old=previous['plan']
+    same_pre=(old.get('preprocessing',[])==plan.preprocessing and old.get('tool_id')==plan.tool_id
+              and bool(previous.get('dependencies_match')))
+    pre_source=previous.get('files',{}).get('preprocessing.py','')
+    # A preprocessor that reads model_params may change its behavior when they change.
+    if 'model_params' in pre_source and old.get('model_params')!=plan.model_params:
+        same_pre=False
+    same_model=(same_pre and old.get('ensemble_components',[])==plan.ensemble_components
+                and set(old.get('model_params',{}))==set(plan.model_params)
+                and (old.get('model_params')!=plan.model_params or
+                     old.get('hypothesis',{}).get('hypothesis_id')==plan.hypothesis.hypothesis_id))
+    return same_pre,same_model
+
+
 class CodingState(TypedDict, total=False):
     payload: dict
     attempts: int
@@ -100,10 +130,20 @@ class CodingState(TypedDict, total=False):
 def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, tools, context,
                        sandbox, budget, config, round_id, previous=None, runtime_feedback=None, preprocessing_skills=None):
     workspace = Workspace(workspace,revision_dir=store.root/'source_revisions'/round_id/plan.hypothesis.hypothesis_id,
-                          writable=lambda name:name != 'preprocessing.py')
+                          writable=lambda name:name != 'preprocessing.py' and not name.startswith('components/'))
     pre_workspace = Workspace(workspace.root,revision_dir=workspace.revision_dir,
                               writable=lambda name:name == 'preprocessing.py')
     budget_key=f'{round_id}-{plan.hypothesis.hypothesis_id}'
+    reuse_pre,reuse_estimator=reuse_assignment(previous,plan)
+    if reuse_pre and not runtime_feedback and not (workspace.root/'preprocessing.py').is_file():
+        for name,source in previous['files'].items():
+            if name=='preprocessing.py':
+                pre_workspace.write_file(name,source)
+            elif reuse_estimator:
+                workspace.write_file(name,source)
+        from .persistence import file_hash
+        store.put('preprocessing',budget_key,dict(spec=previous['preprocessing_spec'],sha256=file_hash(workspace.root/'preprocessing.py')))
+        store.event('source_reused',budget_key,dict(preprocessing=True,estimator=reuse_estimator))
     def coding_capacity():
         # Preserve a complete selected fit and prediction window, including
         # when previous experiments increase the final-training reserve.
@@ -128,6 +168,10 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         return max(0.,remaining()-verification_reserve)
 
     def preprocessing(state):
+        if plan.ensemble_sources:
+            return dict(preprocessing_valid=True,preprocessing_hash=None,
+                        preprocessing_spec=dict(description='Raw inputs; every frozen component owns preprocessing',output='dataframe'),
+                        preprocessing_attempts=0,reuse_model=False)
         attempts=state.get('preprocessing_attempts',0)+1
         original=getattr(client,'deadline',None)
         original_steps=getattr(client,'max_steps',None)
@@ -136,16 +180,28 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             saved=store.get('preprocessing',budget_key)
             from .persistence import file_hash
             path=workspace.root/'preprocessing.py'
-            repair=bool(runtime_feedback and 'preprocessing.py' in str(runtime_feedback)) or any('preprocessing.py' in e for e in state.get('errors',[]))
+            repair=bool(runtime_feedback and 'preprocessing.py' in str(runtime_feedback)) or bool(state.get('errors'))
             if saved and path.is_file() and file_hash(path)==saved['sha256'] and not repair:
-                return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'])
+                return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'],
+                            reuse_model=bool(reuse_estimator and (workspace.root/'candidate.py').is_file() and not runtime_feedback))
             if generation_remaining()<.5:raise LLMUnavailable('No preprocessing generation time remains')
             if original is not None:client.deadline=min(original,time.time()+generation_remaining())
-            bundle=client.generate('preprocessing_agent',PREPROCESSING_PROMPT,
+            repairing=path.is_file()
+            prompt=PREPROCESSING_PROMPT
+            if repairing:
+                prompt+=' Repair the supplied existing preprocessing.py using CodePatch only; do not return source/spec or replace the whole file.'
+            bundle=client.generate('preprocessing_agent',prompt,
                 dict(plan=plan.model_dump(mode='json'),task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else vars(context.task),
                      feature_schema=schema,skills=preprocessing_skills or [],feedback=state.get('errors',[]),
                      runtime_feedback=runtime_feedback,previous_spec=saved['spec'] if saved else None,
-                     previous=previous),PreprocessingBundle,None)
+                     previous={'source':path.read_text(encoding='utf-8'),'sha256':file_hash(path)} if repairing else None),CodePatch if repairing else PreprocessingBundle,None)
+            if repairing:
+                pre_workspace.apply_patches([p.model_dump() for p in bundle.patches])
+                source=path.read_text(encoding='utf-8')
+                spec=saved['spec'] if saved else store.get('preprocessing_spec_draft',budget_key)
+                if not spec:raise ValueError('preprocessing.py repair has no saved output specification')
+                bundle=PreprocessingBundle(source=source,spec=spec)
+            store.put('preprocessing_spec_draft',budget_key,bundle.spec.model_dump(mode='json'))
             tree=ast.parse(bundle.source)
             if 'create_preprocessor' not in {n.name for n in tree.body if isinstance(n,ast.FunctionDef)}:
                 raise ValueError('preprocessing.py must define create_preprocessor')
@@ -162,7 +218,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         except GlobalAPIError:
             raise
         except (ValueError,SyntaxError,LLMUnavailable) as error:
-            return dict(preprocessing_valid=False,preprocessing_attempts=attempts,errors=[str(error)])
+            return dict(preprocessing_valid=False,preprocessing_attempts=attempts,
+                        errors=[str(error) if isinstance(error,LLMUnavailable) else 'preprocessing.py: '+str(error)])
         finally:
             if original is not None:client.deadline=original
             if original_steps is not None:client.max_steps=original_steps
@@ -217,18 +274,43 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 # All API steps and their retries share the same persisted
                 # deadline as source repairs and smoke/inspection workers.
                 client.deadline=min(original_deadline,time.time()+generation_remaining())
-            bundle = client.generate('coding_agent',MODEL_PROMPT,
-                dict(state['payload'],feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
+            import hashlib
+            repairing=(workspace.root/'candidate.py').is_file()
+            payload=dict(state['payload'])
+            payload.pop('previous',None)
+            current={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py') and name!='preprocessing.py' and not name.startswith('components/')}
+            repair_tools=workspace.tools(repair=True)
+            repair_tools.tools.update({name:value for name,value in role_tools.tools.items() if name not in {'write_file','apply_patch','read_file'}})
+            instruction=MODEL_PROMPT
+            if plan.ensemble_sources:
+                instruction = ('Implement only a frozen-source composition entry point. Components are already bundled read-only; '
+                    'the SDK handles raw inputs, component policies, OOF, audit, fit and inference. Return candidate.py with '
+                    'from pathlib import Path; from mlmom.sdk import FrozenEnsemble; '
+                    'def create_candidate(config): return FrozenEnsemble(config, Path(__file__).resolve().parent / "components"); '
+                    'def load_candidate(artifact_dir): return FrozenEnsemble.load(artifact_dir). '
+                    'Use ordinary Python newlines. Do not generate preprocessing.py or rewrite components. '
+                    'Do not implement another estimator or change the recipe. During repairs preserve this SDK contract.')
+            if repairing:
+                instruction+=' Existing files must be repaired with CodePatch only: {"patches":[{"path":"candidate.py","sha256":"...","old_text":"unique block","new_text":"replacement"}]}. Never return files or replace a whole file. Empty patches means keep tool-written source.'
+            bundle = client.generate('coding_agent',instruction,
+                dict(payload,feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
                      preprocessing_spec=state['preprocessing_spec'],
-                     current_files={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py')}),
-                CodeBundle,None if config.coding_direct_first and attempts==1 and not runtime_feedback else role_tools)
-            if sum(map(len,bundle.files.values())) > 200000: raise ValueError('Generated source exceeds workspace budget')
-            for name,content in bundle.files.items():
-                if not name.endswith('.py'): raise ValueError('Final bundle must contain Python source only')
-                workspace.write_file(name,content)
+                     current_files=current,file_hashes={name:hashlib.sha256(workspace.path(name).read_bytes()).hexdigest() for name in current}),
+                CodePatch if repairing else CodeBundle,repair_tools if repairing else
+                None if config.coding_direct_first and attempts==1 and not runtime_feedback else role_tools)
+            if repairing:
+                workspace.apply_patches([p.model_dump() for p in bundle.patches])
+            else:
+                if sum(map(len,bundle.files.values())) > 200000: raise ValueError('Generated source exceeds workspace budget')
+                for name,content in bundle.files.items():
+                    if not name.endswith('.py'): raise ValueError('Final bundle must contain Python source only')
+                    workspace.write_file(name,content)
             from .persistence import file_hash
-            if file_hash(workspace.root/'preprocessing.py')!=state['preprocessing_hash']:
+            if not plan.ensemble_sources and file_hash(workspace.root/'preprocessing.py')!=state['preprocessing_hash']:
                 raise ValueError('Locked transform source was modified')
+            if plan.ensemble_sources:
+                from .ensemble_planning import bundle_components
+                bundle_components(plan,store,workspace.root)
             return {'attempts':attempts,'errors':[],'warnings':[]}
         except GlobalAPIError:
             raise

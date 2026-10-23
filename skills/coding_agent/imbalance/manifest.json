@@ -1,12 +1,14 @@
 {
   "skill_id": "imbalance",
-  "version": "2.0.1",
-  "title": "Imbalanced classification",
+  "version": "2.1.0",
+  "title": "Classification and regression weighting",
   "status": "ready",
   "task_types": [
     "binary_classification",
     "multiclass_classification",
-    "multilabel_classification"
+    "multilabel_classification",
+    "regression",
+    "multioutput_regression"
   ],
   "ml_tools": [],
   "dependencies": []

@@ -79,7 +79,7 @@ class Candidate:
     def fit(self,X,y,context):
         assert context.validation_X is None
         self.size=len(X)
-        self.value=float(np.mean(y))+self.params.get('offset',0)
+        self.value=float(self.params.get('constant',np.mean(y)))
         self.model=DummyRegressor(strategy='constant',constant=self.value).fit(X,y)
         Path(context.work_dir,'fit.json').write_text(json.dumps(dict(rows=len(X),groups=None if context.groups is None else context.groups.tolist())))
         return self
@@ -188,16 +188,16 @@ class InnerExecutionTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp:
             _,_,_,job,request=self.request(Path(tmp))
-            request['plan'].update(strategy='optuna',search_space={'offset':dict(type='float',low=0,high=1000)})
+            request['plan'].update(strategy='optuna',search_space={'constant':dict(type='float',low=0,high=1000)})
             def interrupted_study(objective,**kwargs):
-                objective({'offset':0},0,10)
-                score=objective({'offset':1000},1,10)
+                objective({'constant':0},0,10)
+                score=objective({'constant':1000},1,10)
                 # The first objective finished but its study transaction was
                 # interrupted before tell(); resume marks it FAIL.
-                return dict(trials=[dict(number=0,params={'offset':0},status='fail',score=None,duration_seconds=1,error='interrupted'),
-                    dict(number=1,params={'offset':1000},status='complete',score=score,duration_seconds=1,error=None)])
+                return dict(trials=[dict(number=0,params={'constant':0},status='fail',score=None,duration_seconds=1,error='interrupted'),
+                    dict(number=1,params={'constant':1000},status='complete',score=score,duration_seconds=1,error=None)])
             with patch('mlmom.hpo.run_search',side_effect=interrupted_study):result=train(request,job)
-            self.assertEqual(result['best_params']['offset'],1000)
+            self.assertEqual(result['best_params']['constant'],1000)
             self.assertEqual(result['internal_score'],result['trials'][1]['score'])
 
 

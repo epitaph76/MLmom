@@ -4,9 +4,14 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import Field, model_validator
 from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
+from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy, Intervention
 
 
 class RunConfig(StrictModel):
+    thinking_mode: Literal['default', 'off'] = 'default'
+    role_thinking: dict[str, Literal['default', 'off']] = Field(default_factory=lambda: {'context_agent':'off', 'training_agent':'off'})
+    network_failure_threshold: int = Field(3, ge=1)
+    network_cooldown_seconds: float = Field(30, gt=0)
     timeouts_enabled: bool = False
     profile: Literal['dev', 'platform'] = 'platform'
     total_seconds: float = Field(10800, gt=0)
@@ -19,6 +24,8 @@ class RunConfig(StrictModel):
     max_rounds: int = Field(100, ge=1)
     plateau_rounds: int = Field(5, ge=1)
     max_candidates: int = Field(2, ge=1, le=2)
+    ensemble_search_enabled: bool = True
+    ensemble_agent_seconds: float = Field(120, gt=0)
     max_workers: int = Field(3, ge=1, le=3)
     max_attempts: int = Field(3, ge=1, le=10)
     runtime_repairs: int = Field(2, ge=0, le=5)
@@ -141,6 +148,9 @@ class Hypothesis(StrictModel):
     baseline: bool = False
     based_on: str | None = None
     based_on_hypothesis_id: str | None = None
+    kind: Literal['single', 'family', 'ensemble'] = 'single'
+    model_family: str | None = None
+    family_tools: list[str] = Field(default_factory=list, max_length=3)
 
 
 class HypothesisBatch(StrictModel):
@@ -148,6 +158,12 @@ class HypothesisBatch(StrictModel):
 
 
 class HypothesisPlan(StrictModel):
+    contract_version: Literal[2] = 2
+    target_transform: TargetTransform = Field(default_factory=TargetTransform)
+    weight_policy: WeightPolicy = Field(default_factory=WeightPolicy)
+    prediction_policy: PredictionPolicy = Field(default_factory=PredictionPolicy)
+    intervention: Intervention = Field(default_factory=Intervention)
+    validation_metadata: dict[str, Any] = Field(default_factory=dict)
     hypothesis: Hypothesis
     tool_id: str
     skill_ids: list[str]
@@ -171,6 +187,41 @@ class HypothesisPlan(StrictModel):
     change_kind: Literal['experiment','single_change_ablation'] = 'experiment'
     validation_protocol: dict[str, Any] = Field(default_factory=dict)
     parameter_routes: dict[str, str] = Field(default_factory=dict, description='For ensembles, map each flat HPO parameter to its fitted component name.')
+    search_group_id: str | None = None
+    search_group_kind: Literal['single', 'family', 'ensemble'] = 'single'
+    parent_hypothesis: Hypothesis | None = None
+    ensemble_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
+
+
+class SearchGroupPlan(StrictModel):
+    hypothesis: Hypothesis
+    kind: Literal['single', 'family', 'ensemble'] = 'single'
+    variants: list[HypothesisPlan] = Field(min_length=1, max_length=4)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def valid_variants(self):
+        limit = {'single': 1, 'family': 3, 'ensemble': 4}[self.kind]
+        ids = [p.hypothesis.hypothesis_id for p in self.variants]
+        if len(ids) > limit or len(ids) != len(set(ids)):
+            raise ValueError('Invalid/duplicate variants in search group')
+        if any((p.search_group_id or p.hypothesis.hypothesis_id) != self.hypothesis.hypothesis_id for p in self.variants):
+            raise ValueError('Variant belongs to a different search group')
+        return self
+
+
+class EnsembleProposal(StrictModel):
+    component_experiment_ids: list[str] = Field(default_factory=list, max_length=3)
+    rationale: str = Field(min_length=1,max_length=4000)
+    skip: bool = False
+
+    @model_validator(mode='after')
+    def distinct_components(self):
+        if not self.rationale.strip():raise ValueError('An ensemble proposal/skip requires an explanation')
+        if not self.skip and (len(self.component_experiment_ids) < 2 or
+                              len(set(self.component_experiment_ids)) != len(self.component_experiment_ids)):
+            raise ValueError('Select two or three distinct component experiments, or skip with a reason')
+        return self
 
 
 class PlanBatch(StrictModel):
@@ -181,6 +232,7 @@ class ValidationReport(StrictModel):
     valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CandidateVersion(StrictModel):
@@ -231,6 +283,8 @@ class TrialResult(StrictModel):
 
 
 class ExperimentRun(StrictModel):
+    model_spec: dict[str, Any] | None = None
+    intervention: Intervention | None = None
     experiment_id: str
     round_id: str
     candidate_id: str
@@ -289,6 +343,7 @@ class SelectedPreviousResults(StrictModel):
     failures: list[dict[str, Any]] = Field(default_factory=list)
     champion_id: str | None = None
     decisions: list[dict[str, Any]] = Field(default_factory=list)
+    search_groups: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SubmissionArtifact(StrictModel):

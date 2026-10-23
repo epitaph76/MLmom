@@ -28,7 +28,9 @@ def profile_summary(profile):
 
 def plan_summary(plan):
     return {key:plan[key] for key in ('hypothesis','tool_id','skill_ids','model_params','preprocessing',
-        'strategy','search_space','execution_mode','prediction_kind') if key in plan}
+        'strategy','search_space','execution_mode','prediction_kind','contract_version','target_transform',
+        'weight_policy','prediction_policy','intervention','ensemble_components','stopping_policy',
+        'search_group_id','search_group_kind','parent_hypothesis','ensemble_sources') if key in plan}
 
 
 def experiment_summary(run):
@@ -56,8 +58,12 @@ def champion_snapshot(champion):
     plan=plan_summary(champion.plan.model_dump(mode='json'))
     original=plan.pop('hypothesis',None)
     plan.update(model_params=params,strategy='single',search_space={})
+    spec=champion.run.model_spec
+    if spec:
+        from .model_spec import with_spec
+        plan=with_spec(plan,spec)
     return dict(candidate_id=champion.candidate.candidate_id,code_hash=champion.candidate.code_hash,
-        preprocessing_hash=champion.candidate.preprocessing_hash,configuration_hash=config_hash(params),
+        preprocessing_hash=champion.candidate.preprocessing_hash,configuration_hash=config_hash(spec or params),model_spec=spec,
         model_params=params,plan=plan,original_hypothesis=original,
         evaluation=evaluation_summary(champion.evaluation.model_dump()),
         execution_status=(champion.run.execution_report or {}).get('status','unknown_legacy'))

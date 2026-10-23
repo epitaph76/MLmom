@@ -35,6 +35,10 @@ class RepairLLM(OfflineLLM):
         if role=='coding_agent':
             self.code_calls+=1
             code=broken_code(150) if self.refit_failure else broken_code(60) if self.code_calls==1 else ADAPTER_CODE
+            if schema.__name__=='CodePatch':
+                source=payload['current_files']['candidate.py']
+                defective=next(line for line in source.splitlines() if 'intentional real-data fit failure' in line)
+                return schema(patches=[dict(path='candidate.py',sha256=payload['file_hashes']['candidate.py'],old_text=defective+'\n',new_text='')])
             return CodeBundle(files={'candidate.py':code})
         return super().generate(role,instruction,payload,schema,tools)
 

@@ -43,7 +43,8 @@ def verify_observation_handoff(run_dir, reports):
             except (ValueError,TypeError):continue
             if role=='context_agent':
                 observed=[f.get('evidence',{}).get('observation_id') for f in content.get('dataset_facts',[]) if f.get('kind')=='observation']
-            else:observed=[o.get('observation_id') for o in content.get('reconnaissance',{}).get('observations',[])]
+            else:observed=[o.get('observation_id') for o in content.get('reconnaissance',{}).get('observations',[])]+[
+                o.get('observation_id') for o in content.get('observation_index',[])]
             seen[role].update(ids & set(observed))
     shared=seen['context_agent'] & seen['hypothesis_generator']
     if not shared:raise ValueError('No saved measured observation reached both context_agent and hypothesis_generator')
@@ -217,12 +218,12 @@ def main():
             command=['docker','run','--rm','--name',name_tag,'--cpus','4','--memory','6g',
                 '-v',f'{platform_dir}:/case','-v',f'{control}:/control','-v',f'{ROOT}:/fixtures:ro',
                 '-w','/case','-e','MLMOM_CONFIG=/control/config.json','-e','MLMOM_RUN_DIR=/case/run']
-            if args.mode=='offline':command+=['-e','MLMOM_RELEASE_OFFLINE=1','-e','PYTHONPATH=/control:/fixtures']
+            if args.mode=='offline':command+=['--network','none','-e','MLMOM_RELEASE_OFFLINE=1','-e','PYTHONPATH=/control:/fixtures']
             if secrets:
                 (control/'api.env').write_text('\n'.join(k+'='+v for k,v in secrets.items())+'\n',encoding='utf-8')
                 command+=['--env-file',str(control/'api.env')]
             command+=['--entrypoint','python3',args.image,'solution.py','task.md']
-            verify=['docker','run','--rm','--cpus','2','--memory','4g','-v',f'{platform_dir}:/case','-v',f'{ROOT}:/fixtures:ro',
+            verify=['docker','run','--rm','--network','none','--cpus','2','--memory','4g','-v',f'{platform_dir}:/case','-v',f'{ROOT}:/fixtures:ro',
                     '-w','/case','--entrypoint','python3',args.image,'/fixtures/scripts/release_cases.py',
                     '--verify-run','/case/run','--output','/case','--expected-rows',str(rows),'--expected-metric',metric]
             env=os.environ.copy()

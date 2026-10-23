@@ -46,6 +46,8 @@ class TargetEncodingBoundaryTests(unittest.TestCase):
             context.task=type(context.task).model_validate(dict(context.task.model_dump(),
                 validation_strategy='group_kfold',group_columns=['group'],weight_column='weight'))
             request['context']=context.model_dump(mode='json')
+            candidate=code/'candidate.py'
+            candidate.write_text(candidate.read_text(encoding='utf-8').replace('.fit(X,y)', '.fit(X,y,sample_weight=context.sample_weight)'),encoding='utf-8')
             (code/'preprocessing.py').write_text(ENCODER,encoding='utf-8');request['code_hash']=tree_hash(code)
             result=train(request,job)
             protocol=json.loads(Path(result['validation_protocol_ref']).read_text())

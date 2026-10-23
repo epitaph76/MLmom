@@ -52,6 +52,7 @@ class OfflineLLM:
             return schema(source=PREPROCESSING_CODE,spec=dict(description='Train-only numeric imputation and OHE',output='dense'))
         if role=='coding_agent':return CodeBundle(files={'candidate.py':MODEL_CODE})
         if role=='training_agent':return schema(action=payload['checkpoint']['default_action'],reason='Offline programmatic policy')
+        if role=='ensemble_agent':return schema(skip=True,rationale='Legacy fixture does not propose ensembles')
         if role=='reconnaissance_agent':
             if self.fail: raise RuntimeError('API unavailable')
             if payload.get('initial') and not payload.get('confirmed_task'):

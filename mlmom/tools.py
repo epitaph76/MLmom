@@ -86,7 +86,7 @@ class Workspace:
         if self.writable is not None and not self.writable(p.relative_to(self.root).as_posix()):
             raise ValueError('This file belongs to another coding role')
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding='utf-8')
+        p.write_text(content, encoding='utf-8',newline='\n')
         if self.revision_dir is not None:
             import hashlib
             from .persistence import atomic_json
@@ -113,13 +113,47 @@ class Workspace:
                 if len(results) >= 50: return results
         return results
 
-    def tools(self):
+    def apply_patches(self, patches):
+        import hashlib
+        pending={}
+        originals={}
+        for patch in patches:
+            path=patch['path']
+            target=self.path(path)
+            if self.writable is not None and not self.writable(target.relative_to(self.root).as_posix()):
+                raise ValueError('This file belongs to another coding role')
+            if path not in originals:
+                originals[path]=self.read_file(path)
+                pending[path]=originals[path]
+            if hashlib.sha256(target.read_bytes()).hexdigest()!=patch['sha256']:
+                raise ValueError(f'Stale patch for {path}: source SHA256 differs')
+            old,new=patch['old_text'],patch['new_text']
+            if not old or pending[path].count(old)!=1:
+                raise ValueError('Patch must identify exactly one nonempty source block')
+            if old.strip()==originals[path].strip():
+                raise ValueError('Repair cannot replace the entire existing file')
+            pending[path]=pending[path].replace(old,new,1)
+        for path,text in pending.items():
+            self.write_file(path,text)
+        return [dict(path=path,sha256=hashlib.sha256(self.path(path).read_bytes()).hexdigest()) for path in pending]
+
+    def tools(self, *, repair=False):
         result = ToolSet()
         for name in ['list_files','read_file','write_file','apply_patch','search']:
             result.register(name, getattr(self,name), {
                 'list_files':'List candidate workspace files.', 'read_file':'Read candidate source.',
                 'write_file':'Create or update candidate source.', 'apply_patch':'Replace exactly one source block.',
                 'search':'Search candidate source files.'}[name])
+        if repair:
+            result.tools.pop('write_file',None)
+            def read_file(path: str):
+                import hashlib
+                text=self.read_file(path)
+                return dict(path=path,source=text,sha256=hashlib.sha256(self.path(path).read_bytes()).hexdigest())
+            result.register('read_file',read_file,'Read current source and its SHA256 for scoped patches.')
+            def apply_patch(path: str, sha256: str, old_text: str, new_text: str):
+                return self.apply_patches([dict(path=path,sha256=sha256,old_text=old_text,new_text=new_text)])
+            result.register('apply_patch',apply_patch,'Apply one scoped repair to an existing file, with its current SHA256.')
         return result
 
 

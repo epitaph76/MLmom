@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import hashlib
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -50,7 +52,14 @@ def role_window(client, role, key, seconds):
 
 class RoleClient:
     def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None, request_callback=None, trace=None, budget_store=None,
-                 planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True):
+                 planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True,
+                 thinking_mode='default',role_thinking=None,network_failure_threshold=3,network_cooldown_seconds=30,network_circuit=None):
+        from .llm_policy import NetworkCircuit
+        self.network_circuit = network_circuit or NetworkCircuit(network_failure_threshold,network_cooldown_seconds)
+        self.thinking_mode = thinking_mode
+        self.role_thinking = dict({'context_agent':'off','training_agent':'off'},**(role_thinking or {}))
+        self.thinking_unsupported = False
+        self.request_fingerprints=Counter()
         self.settings = settings
         self.timeouts_enabled = timeouts_enabled
         self.model = settings.model
@@ -109,15 +118,32 @@ class RoleClient:
         if self.timeouts_enabled and time.time() >= self.deadline:
             raise LLMUnavailable('LLM deadline reached')
         params = dict(model=self.model, messages=request_messages(messages), temperature=0)
+        from .llm_policy import thinking_parameters
+        thinking = thinking_parameters(self.model,self.role_thinking.get(role,self.thinking_mode))
+        if thinking and not self.thinking_unsupported:
+            params['extra_body'] = thinking
+        emit('llm.request_size',dict(message_chars=sum(len(json.dumps(m,ensure_ascii=False)) for m in params['messages']),
+            tool_schema_chars=len(json.dumps(tools or [],ensure_ascii=False)),message_count=len(params['messages']),
+            thinking_mode=self.role_thinking.get(role,self.thinking_mode)))
         if tools:
             params['tools'] = tools
             params['parallel_tool_calls'] = False
         else:
             params['response_format'] = {'type':'json_object'}
+        fingerprint=hashlib.sha256(json.dumps(params,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        self.request_fingerprints[(role,fingerprint)]+=1
+        if self.request_fingerprints[(role,fingerprint)]>1:
+            emit('llm.repeated_payload',dict(role=role,sha256=fingerprint,count=self.request_fingerprints[(role,fingerprint)]))
         last = None
         for attempt in range(3):
             remaining = self.deadline-time.time() if self.timeouts_enabled else 1e12
             if remaining <= 0: break
+            try:
+                permit = self.network_circuit.acquire(remaining if self.timeouts_enabled else None)
+            except TimeoutError as error:
+                raise LLMUnavailable(str(error)) from None
+            if permit[0]:
+                emit('llm.network_probe',dict(role=role))
             started=time.monotonic()
             if self.request_callback:
                 self.request_callback(dict(role=role,attempt=attempt+1,status='started'))
@@ -138,6 +164,7 @@ class RoleClient:
                         'usage':response.usage.model_dump() if response.usage else None}
                     emit('llm.response', raw, request_id=getattr(response,'_request_id',None))
                 choice=response.choices[0]
+                self.network_circuit.success(permit)
                 finish_reason=getattr(choice,'finish_reason',None)
                 if self.usage_callback and response.usage:
                     self.usage_callback(dict(response.usage.model_dump(),role=role,request_seconds=time.monotonic()-started,
@@ -148,8 +175,14 @@ class RoleClient:
                                      'the client did not request an output token limit.')
                 return request_messages([message])[0]
             except BadRequestError as error:
+                self.network_circuit.success(permit)
                 # Retry only optional API extensions; never switch provider/model.
-                if 'parallel_tool_calls' in params:
+                body=str(getattr(error,'body','') or error).lower()
+                if 'extra_body' in params and any(word in body for word in ('thinking','reasoning','enable_thinking')):
+                    params.pop('extra_body')
+                    self.thinking_unsupported=True
+                    emit('llm.fallback',dict(removed_parameter='thinking',reason='unsupported by this connection'))
+                elif 'parallel_tool_calls' in params:
                     params.pop('parallel_tool_calls')
                     emit('llm.fallback', {'removed_parameter':'parallel_tool_calls'})
                 elif 'response_format' in params:
@@ -157,8 +190,17 @@ class RoleClient:
                     emit('llm.fallback', {'removed_parameter':'response_format'})
                 else:
                     raise LLMUnavailable(f'Provider rejected request ({error.status_code})') from None
+                if permit[0]:
+                    raise LLMUnavailable('Probe reached provider; optional parameter rejected, fallback saved') from None
             except (APIConnectionError, APITimeoutError, RateLimitError) as error:
+                if isinstance(error,RateLimitError):
+                    self.network_circuit.success(permit)
+                if not isinstance(error,RateLimitError):
+                    self.network_circuit.failure(permit)
+                    emit('llm.network_state',dict(failures=self.network_circuit.failures,open=self.network_circuit.open_until is not None))
                 last = type(error).__name__
+                if permit[0]:
+                    raise LLMUnavailable('Network recovery probe failed: '+last) from None
                 if self.request_callback:
                     self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last,
                                                request_seconds=time.monotonic()-started))
@@ -166,7 +208,8 @@ class RoleClient:
                 emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
                 time.sleep(delay)
             except APIStatusError as error:
-                if error.status_code == 402 or 'budget has been exceeded' in str(getattr(error,'body','')).lower():
+                if error.status_code == 402 or any(word in str(getattr(error,'body','')).lower() for word in ('budget has been exceeded','budget_exceeded')):
+                    self.network_circuit.success(permit)
                     daily='budget has been exceeded' in str(getattr(error,'body','')).lower()
                     message=('Organizer daily API budget exceeded; resets at 03:00 MSK; further requests stopped' if daily else
                              'Provider billing/API budget unavailable (HTTP '+str(error.status_code)+'); further requests stopped')
@@ -176,7 +219,11 @@ class RoleClient:
                         self.budget_store.put('provider_failure','global',dict(status_code=error.status_code,reason=message))
                     raise self.terminal_error from None
                 if error.status_code in {500,502,503,504}:
+                    self.network_circuit.failure(permit)
+                    emit('llm.network_state',dict(failures=self.network_circuit.failures,open=self.network_circuit.open_until is not None))
                     last = f'HTTP {error.status_code}'
+                    if permit[0]:
+                        raise LLMUnavailable('Network recovery probe failed: '+last) from None
                     if attempt < 2:
                         delay = min(2**attempt, max(0,self.deadline-time.time())) if self.timeouts_enabled else 2**attempt
                         emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
@@ -184,7 +231,12 @@ class RoleClient:
                             self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last))
                         time.sleep(delay)
                     continue
+                self.network_circuit.success(permit)
                 raise LLMUnavailable(f'Provider request failed ({error.status_code})') from None
+            except Exception:
+                # Parsing/schema/callback errors do not leave the single probe locked.
+                self.network_circuit.success(permit)
+                raise
         raise LLMUnavailable(last or 'LLM request retry limit reached')
 
     def complete(self, messages):
@@ -259,7 +311,7 @@ class RoleClient:
                         results=[]
                         for entry in requested:
                             if (not isinstance(entry,dict) or set(entry)!={'name','arguments','reason'} or
-                                entry['name'] not in {'read_task','read_skills','read_history','list_skills','list_ml_tools'} or
+                                entry['name'] not in {'read_task','read_skills','read_history','list_skills','list_ml_tools','read_evidence'} or
                                 not isinstance(entry['arguments'],dict) or not isinstance(entry['reason'],str) or
                                 not entry['reason'].strip() or tools is None):
                                 raise ValueError('Planning context read needs an allowed tool, arguments and a specific reason')

@@ -1,5 +1,13 @@
 # Агенты и контроль обучения
 
+Семейства моделей и отдельная роль `ensemble_agent` описаны в
+[SEARCH_GROUPS_RU.md](SEARCH_GROUPS_RU.md). Planner оформляет группы поиска,
+кодеры реализуют варианты, workers используют общий admission ресурсов.
+
+Контракт v2 после lifecycle-аудита: [MODEL_CONTRACT_V2_RU.md](MODEL_CONTRACT_V2_RU.md).
+Он уточняет владение target/weight/output policies, fit-time provenance,
+передачу CV-метрик, CodePatch и режимы thinking в новых запусках.
+
 После аудита 22.10 runtime проверяет фактическое исполнение и полный export/recreate
 до внешней оценки, Champion и публикации. Advisory result_validator не может отменить
 отказ machine gate. Контракты и доказательства:

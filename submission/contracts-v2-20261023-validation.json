@@ -1,0 +1,1216 @@
+{
+  "status": "not_verified",
+  "checks": {
+    "source_tests": {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "count": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project",
+        "os": "Windows",
+        "python": "3.12.10",
+        "source": "full suite plus affected-module rerun",
+        "initial_full_suite": {
+          "status": "failed",
+          "count": 245,
+          "failures": 0,
+          "errors": 1,
+          "skipped": 0,
+          "duration_seconds": 724.2029999999941,
+          "python": "3.12.10",
+          "os": "Windows",
+          "source": "checkout",
+          "runtime": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project",
+          "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4"
+        },
+        "initial_full_suite_report": "artifacts\\contracts-v2-20261023\\source-tests\\tests.json",
+        "verification_method": "The runtime ZIP is unchanged. One obsolete fixture passed a custom offset as a backend parameter. It now uses native DummyRegressor.constant. Both affected modules were rerun; the original failed report/log remain intact.",
+        "fixture_sha256": "34740d8c9dfdf63b26a13c8fd6a6e3b511a50b6f2ed63a727298f749e9c4aa4c",
+        "rerun": {
+          "count": 10,
+          "test_ids": [
+            "tests.test_inner_validation.InnerExecutionTests.test_failed_study_trial_cannot_supply_selected_configuration",
+            "tests.test_inner_validation.InnerExecutionTests.test_feature_duplicate_constraints_reach_preprocessing_context",
+            "tests.test_inner_validation.InnerExecutionTests.test_fold_isolation_oof_aggregation_and_mandatory_full_refit",
+            "tests.test_inner_validation.InnerExecutionTests.test_incomplete_trial_never_creates_publishable_progress",
+            "tests.test_inner_validation.InnerExecutionTests.test_resume_reuses_completed_single_trial",
+            "tests.test_inner_validation.InnerExecutionTests.test_stop_still_refits_and_resume_preserves_deadline",
+            "tests.test_inner_validation.InnerProtocolTests.test_all_strategies_are_reproducible_and_keep_outer_indices",
+            "tests.test_inner_validation.InnerProtocolTests.test_group_holdout_and_strict_infeasibility",
+            "tests.test_inner_validation.InnerProtocolTests.test_rare_class_and_missing_class_are_rejected",
+            "tests.test_target_encoding_boundary.TargetEncodingBoundaryTests.test_group_oof_and_metadata_are_local_to_each_validation_fold"
+          ],
+          "status": "passed",
+          "duration_seconds": 12.062000000005355
+        }
+      }
+    },
+    "packaged_tests": {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "count": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "runtime": "/evidence/linux-packaged/platform/.mlmom-runtime-0011ad67d59d7d7a",
+        "os": "Linux",
+        "python": "3.12.15",
+        "source": "full suite plus affected-module rerun",
+        "initial_full_suite": {
+          "status": "failed",
+          "count": 245,
+          "failures": 0,
+          "errors": 1,
+          "skipped": 0,
+          "duration_seconds": 592.758521139,
+          "runtime": "/evidence/linux-packaged/platform/.mlmom-runtime-0011ad67d59d7d7a",
+          "python": "3.12.15",
+          "os": "Linux",
+          "source": "extracted ZIP",
+          "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4"
+        },
+        "initial_full_suite_report": "/evidence/linux-packaged/tests.json",
+        "verification_method": "The runtime ZIP is unchanged. One obsolete fixture passed a custom offset as a backend parameter. It now uses native DummyRegressor.constant. Both affected modules were rerun; the original failed report/log remain intact.",
+        "fixture_sha256": "34740d8c9dfdf63b26a13c8fd6a6e3b511a50b6f2ed63a727298f749e9c4aa4c",
+        "rerun": {
+          "count": 10,
+          "test_ids": [
+            "tests.test_inner_validation.InnerExecutionTests.test_failed_study_trial_cannot_supply_selected_configuration",
+            "tests.test_inner_validation.InnerExecutionTests.test_feature_duplicate_constraints_reach_preprocessing_context",
+            "tests.test_inner_validation.InnerExecutionTests.test_fold_isolation_oof_aggregation_and_mandatory_full_refit",
+            "tests.test_inner_validation.InnerExecutionTests.test_incomplete_trial_never_creates_publishable_progress",
+            "tests.test_inner_validation.InnerExecutionTests.test_resume_reuses_completed_single_trial",
+            "tests.test_inner_validation.InnerExecutionTests.test_stop_still_refits_and_resume_preserves_deadline",
+            "tests.test_inner_validation.InnerProtocolTests.test_all_strategies_are_reproducible_and_keep_outer_indices",
+            "tests.test_inner_validation.InnerProtocolTests.test_group_holdout_and_strict_infeasibility",
+            "tests.test_inner_validation.InnerProtocolTests.test_rare_class_and_missing_class_are_rejected",
+            "tests.test_target_encoding_boundary.TargetEncodingBoundaryTests.test_group_oof_and_metadata_are_local_to_each_validation_fold"
+          ],
+          "status": "passed",
+          "duration_seconds": 5.12958495099997
+        }
+      }
+    },
+    "linux_tests": {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "count": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "runtime": "/evidence/linux-packaged/platform/.mlmom-runtime-0011ad67d59d7d7a",
+        "os": "Linux",
+        "python": "3.12.15",
+        "source": "full suite plus affected-module rerun",
+        "initial_full_suite": {
+          "status": "failed",
+          "count": 245,
+          "failures": 0,
+          "errors": 1,
+          "skipped": 0,
+          "duration_seconds": 592.758521139,
+          "runtime": "/evidence/linux-packaged/platform/.mlmom-runtime-0011ad67d59d7d7a",
+          "python": "3.12.15",
+          "os": "Linux",
+          "source": "extracted ZIP",
+          "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4"
+        },
+        "initial_full_suite_report": "/evidence/linux-packaged/tests.json",
+        "verification_method": "The runtime ZIP is unchanged. One obsolete fixture passed a custom offset as a backend parameter. It now uses native DummyRegressor.constant. Both affected modules were rerun; the original failed report/log remain intact.",
+        "fixture_sha256": "34740d8c9dfdf63b26a13c8fd6a6e3b511a50b6f2ed63a727298f749e9c4aa4c",
+        "rerun": {
+          "count": 10,
+          "test_ids": [
+            "tests.test_inner_validation.InnerExecutionTests.test_failed_study_trial_cannot_supply_selected_configuration",
+            "tests.test_inner_validation.InnerExecutionTests.test_feature_duplicate_constraints_reach_preprocessing_context",
+            "tests.test_inner_validation.InnerExecutionTests.test_fold_isolation_oof_aggregation_and_mandatory_full_refit",
+            "tests.test_inner_validation.InnerExecutionTests.test_incomplete_trial_never_creates_publishable_progress",
+            "tests.test_inner_validation.InnerExecutionTests.test_resume_reuses_completed_single_trial",
+            "tests.test_inner_validation.InnerExecutionTests.test_stop_still_refits_and_resume_preserves_deadline",
+            "tests.test_inner_validation.InnerProtocolTests.test_all_strategies_are_reproducible_and_keep_outer_indices",
+            "tests.test_inner_validation.InnerProtocolTests.test_group_holdout_and_strict_infeasibility",
+            "tests.test_inner_validation.InnerProtocolTests.test_rare_class_and_missing_class_are_rejected",
+            "tests.test_target_encoding_boundary.TargetEncodingBoundaryTests.test_group_oof_and_metadata_are_local_to_each_validation_fold"
+          ],
+          "status": "passed",
+          "duration_seconds": 5.12958495099997
+        }
+      }
+    },
+    "offline": {
+      "status": "passed",
+      "cases": {
+        "regression": {
+          "status": "passed",
+          "report": {
+            "case": "regression",
+            "attempt": 1,
+            "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+            "mode": "offline",
+            "environment": "linux/docker",
+            "command": [
+              "python3",
+              "solution.py",
+              "task.md"
+            ],
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\contracts-v2-20261023\\offline\\regression\\attempt-1\\task\\run",
+            "status": "passed",
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": true,
+            "exit_code": 0,
+            "verification": {
+              "status": "passed",
+              "rows": 22449,
+              "primary_metric": "rmse",
+              "completed_cycles": 3,
+              "outer_splits": 3,
+              "incumbent_rechecks": 2,
+              "generated_path": true,
+              "relocated_model_equal": true,
+              "submission_sha256": "6631f402c4a90c6b91d6978106b3a8548ec051c32a57817e4bad5e193e0427a3",
+              "execution_fidelity_verified": true,
+              "verified_fits": 7,
+              "final_full_refit": true,
+              "observation_handoff": {
+                "verified": false,
+                "reason": "Offline fixture; real request handoff checked separately"
+              },
+              "observation_handoff_verified": false
+            },
+            "duration_seconds": 410.82799999999406,
+            "pipeline_stop_reason": "target_completed_rounds",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 3,
+              "completed_optuna_trials": 2,
+              "passed": true
+            }
+          }
+        },
+        "multiclass": {
+          "status": "passed",
+          "report": {
+            "case": "multiclass",
+            "attempt": 1,
+            "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+            "mode": "offline",
+            "environment": "linux/docker",
+            "command": [
+              "python3",
+              "solution.py",
+              "task.md"
+            ],
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\contracts-v2-20261023\\offline\\multiclass\\attempt-1\\task\\run",
+            "status": "passed",
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": true,
+            "exit_code": 0,
+            "verification": {
+              "status": "passed",
+              "rows": 41166,
+              "primary_metric": "f1_macro",
+              "completed_cycles": 3,
+              "outer_splits": 3,
+              "incumbent_rechecks": 2,
+              "generated_path": true,
+              "relocated_model_equal": true,
+              "submission_sha256": "b8d6d74f5575c02a06615d0ba066a9d10084cca9f8f6e41cda397a83f07fb639",
+              "execution_fidelity_verified": true,
+              "verified_fits": 7,
+              "final_full_refit": true,
+              "observation_handoff": {
+                "verified": false,
+                "reason": "Offline fixture; real request handoff checked separately"
+              },
+              "observation_handoff_verified": false
+            },
+            "duration_seconds": 184.57800000000861,
+            "pipeline_stop_reason": "target_completed_rounds",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 3,
+              "completed_optuna_trials": 2,
+              "passed": true
+            }
+          }
+        }
+      }
+    },
+    "real_api": {
+      "status": "not_verified",
+      "cases": {
+        "regression": {
+          "status": "not_verified",
+          "reason": "No report supplied"
+        },
+        "multiclass": {
+          "status": "not_verified",
+          "reason": "No report supplied"
+        }
+      }
+    },
+    "platform": {
+      "status": "not_verified",
+      "reason": "Organizer platform has not been exercised"
+    },
+    "environment": {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "os": "Linux",
+        "python": "3.12.15",
+        "packages": {
+          "numpy": {
+            "expected": "1.26.4",
+            "actual": "1.26.4",
+            "matches": true
+          },
+          "scipy": {
+            "expected": "1.12.0",
+            "actual": "1.12.0",
+            "matches": true
+          },
+          "pandas": {
+            "expected": "2.2.3",
+            "actual": "2.2.3",
+            "matches": true
+          },
+          "polars": {
+            "expected": "1.26.0",
+            "actual": "1.26.0",
+            "matches": true
+          },
+          "pyarrow": {
+            "expected": "19.0.1",
+            "actual": "19.0.1",
+            "matches": true
+          },
+          "joblib": {
+            "expected": "1.4.2",
+            "actual": "1.4.2",
+            "matches": true
+          },
+          "threadpoolctl": {
+            "expected": "3.6.0",
+            "actual": "3.6.0",
+            "matches": true
+          },
+          "scikit-learn": {
+            "expected": "1.5.2",
+            "actual": "1.5.2",
+            "matches": true
+          },
+          "catboost": {
+            "expected": "1.2.8",
+            "actual": "1.2.8",
+            "matches": true
+          },
+          "lightgbm": {
+            "expected": "4.6.0",
+            "actual": "4.6.0",
+            "matches": true
+          },
+          "xgboost": {
+            "expected": "2.1.4",
+            "actual": "2.1.4",
+            "matches": true
+          },
+          "imbalanced-learn": {
+            "expected": "0.12.4",
+            "actual": "0.12.4",
+            "matches": true
+          },
+          "category-encoders": {
+            "expected": "2.6.4",
+            "actual": "2.6.4",
+            "matches": true
+          },
+          "feature-engine": {
+            "expected": "1.8.3",
+            "actual": "1.8.3",
+            "matches": true
+          },
+          "statsmodels": {
+            "expected": "0.14.0",
+            "actual": "0.14.0",
+            "matches": true
+          },
+          "optuna": {
+            "expected": "4.2.1",
+            "actual": "4.2.1",
+            "matches": true
+          },
+          "torch": {
+            "expected": "2.5.1",
+            "actual": "2.5.1+cpu",
+            "matches": true
+          },
+          "autogluon.tabular": {
+            "expected": "1.3.1",
+            "actual": "1.3.1",
+            "matches": true
+          },
+          "lightautoml": {
+            "expected": "0.4.2",
+            "actual": "0.4.2",
+            "matches": true
+          },
+          "flaml": {
+            "expected": "2.3.6",
+            "actual": "2.3.6",
+            "matches": true
+          },
+          "openai": {
+            "expected": "1.68.2",
+            "actual": "1.68.2",
+            "matches": true
+          },
+          "httpx": {
+            "expected": "0.28.1",
+            "actual": "0.28.1",
+            "matches": true
+          },
+          "tenacity": {
+            "expected": "9.0.0",
+            "actual": "9.0.0",
+            "matches": true
+          },
+          "langchain": {
+            "expected": "0.3.27",
+            "actual": "0.3.27",
+            "matches": true
+          },
+          "langchain-openai": {
+            "expected": "0.3.23",
+            "actual": "0.3.23",
+            "matches": true
+          },
+          "langgraph": {
+            "expected": "0.6.7",
+            "actual": "0.6.7",
+            "matches": true
+          },
+          "pydantic": {
+            "expected": "2.10.6",
+            "actual": "2.10.6",
+            "matches": true
+          },
+          "python-dotenv": {
+            "expected": "1.0.1",
+            "actual": "1.0.1",
+            "matches": true
+          },
+          "PyYAML": {
+            "expected": "6.0.2",
+            "actual": "6.0.2",
+            "matches": true
+          },
+          "orjson": {
+            "expected": "3.10.15",
+            "actual": "3.10.15",
+            "matches": true
+          },
+          "jsonschema": {
+            "expected": "4.23.0",
+            "actual": "4.23.0",
+            "matches": true
+          },
+          "matplotlib": {
+            "expected": "3.9.4",
+            "actual": "3.9.4",
+            "matches": true
+          },
+          "seaborn": {
+            "expected": "0.13.2",
+            "actual": "0.13.2",
+            "matches": true
+          },
+          "tqdm": {
+            "expected": "4.67.1",
+            "actual": "4.67.1",
+            "matches": true
+          },
+          "psutil": {
+            "expected": "6.1.1",
+            "actual": "6.1.1",
+            "matches": true
+          },
+          "cloudpickle": {
+            "expected": "3.1.1",
+            "actual": "3.1.1",
+            "matches": true
+          },
+          "setuptools": {
+            "expected": "80.9.0",
+            "actual": "80.9.0",
+            "matches": true
+          }
+        },
+        "requirements_sha256": "9173b0388532fbd2a709e4f4b3029e3b9ccab685fce43a85261ffa1ba95efbe6",
+        "limitations": [
+          "CPU-only Torch may carry +cpu; Python patch release may differ from organizer.",
+          "Matching dependencies does not establish organizer-platform equivalence."
+        ]
+      }
+    }
+  },
+  "supplemental_tests": [
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "checks": [
+          {
+            "task_type": "regression",
+            "status": "passed",
+            "smoke_roundtrip": "passed",
+            "policy": "tail_aware",
+            "target_transform": "log1p",
+            "selected_quantile": 0.9,
+            "hpo_trials": 2,
+            "full_refit": true,
+            "model_spec_preserved": true,
+            "isolated_directory": "/evidence/policy-probes/isolated/regression"
+          },
+          {
+            "task_type": "multiclass_classification",
+            "status": "passed",
+            "smoke_roundtrip": "passed",
+            "policy": "sqrt_balanced",
+            "target_transform": "identity",
+            "selected_quantile": 0.99,
+            "hpo_trials": 1,
+            "full_refit": true,
+            "model_spec_preserved": true,
+            "isolated_directory": "/evidence/policy-probes/isolated/multiclass_classification"
+          }
+        ],
+        "failures": 0,
+        "errors": 0,
+        "network_used": false
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "failures": 0,
+        "errors": 0,
+        "network_enabled": false,
+        "original_case_mounted": false,
+        "checks": [
+          {
+            "task_type": "regression",
+            "exit_code": 0,
+            "stdout": "{\"status\": \"passed\", \"rows\": 32, \"original_case_mounted\": false}"
+          },
+          {
+            "task_type": "multiclass_classification",
+            "exit_code": 0,
+            "stdout": "{\"status\": \"passed\", \"rows\": 32, \"original_case_mounted\": false}"
+          }
+        ],
+        "setup_correction": "Initial verifier inferred the regression prediction kind from a temporary directory name. The corrected verifier reads explicit prediction metadata; the original failure is recorded in isolation-setup-failure.json."
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "requests": 51,
+        "before_chars": 4950791,
+        "after_chars": 4497470,
+        "reduction_percent": 9.156536803916788,
+        "failures": 0,
+        "errors": 0,
+        "rows": [
+          {
+            "case": "regression",
+            "role": "hypothesis_generator",
+            "seq": 393,
+            "before_chars": 73272,
+            "after_chars": 54658,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 406,
+            "before_chars": 79852,
+            "after_chars": 63585,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 419,
+            "before_chars": 79921,
+            "after_chars": 63654,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "hypothesis_generator",
+            "seq": 795,
+            "before_chars": 91513,
+            "after_chars": 79172,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 808,
+            "before_chars": 97690,
+            "after_chars": 87696,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 821,
+            "before_chars": 97759,
+            "after_chars": 87765,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 847,
+            "before_chars": 97644,
+            "after_chars": 87650,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 860,
+            "before_chars": 97713,
+            "after_chars": 87719,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 911,
+            "before_chars": 97942,
+            "after_chars": 87948,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 990,
+            "before_chars": 98364,
+            "after_chars": 88370,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1002,
+            "before_chars": 98573,
+            "after_chars": 88579,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1068,
+            "before_chars": 98355,
+            "after_chars": 88361,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1081,
+            "before_chars": 98424,
+            "after_chars": 88430,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "hypothesis_generator",
+            "seq": 1281,
+            "before_chars": 90957,
+            "after_chars": 82835,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1294,
+            "before_chars": 97189,
+            "after_chars": 91414,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1307,
+            "before_chars": 97258,
+            "after_chars": 91483,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1339,
+            "before_chars": 98645,
+            "after_chars": 92870,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1401,
+            "before_chars": 98601,
+            "after_chars": 92826,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1414,
+            "before_chars": 97080,
+            "after_chars": 91305,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1446,
+            "before_chars": 97629,
+            "after_chars": 91854,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1459,
+            "before_chars": 97149,
+            "after_chars": 91374,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1481,
+            "before_chars": 97492,
+            "after_chars": 91717,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1513,
+            "before_chars": 97383,
+            "after_chars": 91608,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1545,
+            "before_chars": 97685,
+            "after_chars": 91910,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1585,
+            "before_chars": 97948,
+            "after_chars": 92173,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "hypothesis_generator",
+            "seq": 1729,
+            "before_chars": 110673,
+            "after_chars": 100459,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1742,
+            "before_chars": 116742,
+            "after_chars": 108875,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1755,
+            "before_chars": 116809,
+            "after_chars": 108942,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1768,
+            "before_chars": 116811,
+            "after_chars": 108944,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1783,
+            "before_chars": 116846,
+            "after_chars": 108979,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1821,
+            "before_chars": 117706,
+            "after_chars": 109839,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1834,
+            "before_chars": 116915,
+            "after_chars": 109048,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1875,
+            "before_chars": 117511,
+            "after_chars": 109644,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1888,
+            "before_chars": 117580,
+            "after_chars": 109713,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1920,
+            "before_chars": 117615,
+            "after_chars": 109748,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1933,
+            "before_chars": 117684,
+            "after_chars": 109817,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "regression",
+            "role": "planner",
+            "seq": 1965,
+            "before_chars": 118524,
+            "after_chars": 110657,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "hypothesis_generator",
+            "seq": 206,
+            "before_chars": 43046,
+            "after_chars": 36338,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 219,
+            "before_chars": 49497,
+            "after_chars": 45136,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 232,
+            "before_chars": 49566,
+            "after_chars": 45205,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 244,
+            "before_chars": 49584,
+            "after_chars": 45223,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 266,
+            "before_chars": 49677,
+            "after_chars": 45316,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "hypothesis_generator",
+            "seq": 563,
+            "before_chars": 82601,
+            "after_chars": 73376,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 576,
+            "before_chars": 88768,
+            "after_chars": 81890,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 589,
+            "before_chars": 88837,
+            "after_chars": 81959,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 640,
+            "before_chars": 88764,
+            "after_chars": 81886,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "hypothesis_generator",
+            "seq": 1211,
+            "before_chars": 112054,
+            "after_chars": 94681,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 1224,
+            "before_chars": 118518,
+            "after_chars": 103492,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 1262,
+            "before_chars": 118683,
+            "after_chars": 103657,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 1275,
+            "before_chars": 118752,
+            "after_chars": 103726,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          },
+          {
+            "case": "multiclass",
+            "role": "planner",
+            "seq": 1313,
+            "before_chars": 118990,
+            "after_chars": 103964,
+            "all_observation_ids_preserved": true,
+            "requirements_preserved": true,
+            "critical_evidence_preserved": true
+          }
+        ],
+        "limits": [
+          "Offline JSON-character comparison on saved contexts; includes the new output schema, not current generated narratives/system prompts. Not a tokenizer or monetary savings estimate."
+        ]
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "diagnostic_only": true,
+        "http_attempts": 4,
+        "organizer_gateway_verified": false,
+        "failures": 0,
+        "errors": 0,
+        "checks": [
+          {
+            "role": "context_agent",
+            "status": "passed"
+          },
+          {
+            "role": "training_agent",
+            "status": "passed"
+          },
+          {
+            "role": "planner",
+            "status": "passed"
+          },
+          {
+            "role": "coding_agent",
+            "status": "passed"
+          }
+        ],
+        "usage": [
+          {
+            "completion_tokens": 175,
+            "prompt_tokens": 511,
+            "total_tokens": 686,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cached_tokens": 0
+            },
+            "cost": 0.02107311931725,
+            "role": "context_agent",
+            "request_seconds": 2.5160000000032596,
+            "finish_reason": "stop"
+          },
+          {
+            "completion_tokens": 30,
+            "prompt_tokens": 245,
+            "total_tokens": 275,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 0,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cached_tokens": 0
+            },
+            "cost": 0.00635151820875,
+            "role": "training_agent",
+            "request_seconds": 1.2810000000026776,
+            "finish_reason": "stop"
+          },
+          {
+            "completion_tokens": 796,
+            "prompt_tokens": 1784,
+            "total_tokens": 2580,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 744,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cached_tokens": 0
+            },
+            "cost": 0.086450253318,
+            "role": "planner",
+            "request_seconds": 6.640999999988708,
+            "finish_reason": "stop"
+          },
+          {
+            "completion_tokens": 769,
+            "prompt_tokens": 2096,
+            "total_tokens": 2865,
+            "completion_tokens_details": {
+              "accepted_prediction_tokens": null,
+              "audio_tokens": null,
+              "reasoning_tokens": 637,
+              "rejected_prediction_tokens": null
+            },
+            "prompt_tokens_details": {
+              "audio_tokens": null,
+              "cached_tokens": 0
+            },
+            "cost": 0.090000142947,
+            "role": "coding_agent",
+            "request_seconds": 6.062999999994645,
+            "finish_reason": "stop"
+          }
+        ],
+        "fixture_correction": "The third request correctly asked for backend metadata omitted by the tiny diagnostic fixture.",
+        "limits": [
+          "Context/training thinking disabled verified on personal DeepSeek only; organizer Qwen gateway not exercised. Third request requested missing fixture metadata; fourth validated both the complete plan and patch."
+        ]
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "failures": 0,
+        "errors": 0,
+        "watchdog_unchanged": true,
+        "frozen_archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "personal_key_pattern_scan": "passed",
+        "new_artifacts_with_key_pattern": []
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+        "legacy_archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "exit_code": 0,
+        "network_enabled": false,
+        "original_artifacts_mounted": false,
+        "rows": 128,
+        "predictions_equal": true,
+        "original_artifacts_accessible": false,
+        "network": "disabled"
+      }
+    }
+  ],
+  "created_utc": "2026-10-23T14:00:46.472719+00:00",
+  "base_commit": "9f349056bffc4432082535fe5299adf94b6b4c3a",
+  "package": {
+    "path": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\contracts-v2-20261023\\mlmom-contracts-v2.zip",
+    "sha256": "6e416f6c0acda6cc000091d230e9cf64390a942bf2a05d0525e467de4cba4cc4",
+    "bytes": 184554,
+    "root_files": [
+      "mlmom_bundle.py",
+      "requirements.txt",
+      "solution.py"
+    ],
+    "source_bundle_digest": "0011ad67d59d7d7a94427c95dab780d2df651f2502412f4907e6a601703fd30a",
+    "bundled_source_matches_checkout": true,
+    "secret_scan": "passed",
+    "requirements_sha256": "9173b0388532fbd2a709e4f4b3029e3b9ccab685fce43a85261ffa1ba95efbe6"
+  },
+  "environment_limits": [
+    "Docker image approximates provided dependencies; organizer infrastructure is not verified.",
+    "Offline LLM is an external test fixture; production runtime has no offline fallback.",
+    "Timeout policy is recorded per case; timeouts_enabled=false has no wall-clock acceptance deadline."
+  ]
+}

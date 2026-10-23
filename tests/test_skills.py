@@ -58,7 +58,7 @@ class SkillTests(unittest.TestCase):
 
     def test_backend_manifests_match_adapter_tasks_and_dependencies(self):
         registry = SkillRegistry(ROOT)
-        self.assertEqual(len(registry.list()), 30)
+        self.assertEqual(len(registry.list()), 31)
         for tool, distribution, _, _, tasks, *_ in DEFINITIONS:
             with self.subTest(tool=tool):
                 manifest = registry.manifests[tool]
@@ -79,7 +79,7 @@ class SkillTests(unittest.TestCase):
     def test_incompatible_unknown_and_missing_dependency_rejected(self):
         registry = SkillRegistry(ROOT)
         for ids, task in [(['statsmodels'], 'multiclass_classification'),
-                          (['imbalance'], 'regression'), (['ensembles'], 'ranking')]:
+                          (['imbalance'], 'clustering'), (['ensembles'], 'ranking')]:
             with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'incompatible'):
                 registry.load(ids, task)
         with self.assertRaisesRegex(ValueError, 'Unknown skill'):
@@ -94,7 +94,7 @@ class SkillTests(unittest.TestCase):
         regression = {s['skill_id']: s for s in registry.technique_catalog('regression')}
         classification = {s['skill_id']: s for s in registry.technique_catalog('multiclass_classification')}
         self.assertEqual(set(regression), {key for key, owner in registry.owners.items()
-                        if owner == 'preprocessing_agent'} | {'ensembles'})
+                        if owner == 'preprocessing_agent'} | {'ensembles','imbalance'})
         self.assertEqual(set(classification), set(regression) | {'imbalance'})
         self.assertEqual(classification['imbalance']['owner'], 'coding_agent')
         for card in classification.values():

@@ -11,6 +11,57 @@ from .evaluation import prediction_kind
 from .registry import LIGHTAUTOML_OBJECTIVES
 from .agents import LLMUnavailable, StructuredOutputError, role_window
 from .tracing import bind, emit
+from .model_spec import normalize_protocol, constant_space, apply_overrides, Intervention
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def categorical_probe():
+    """A small executable counterexample, using no user data or API tokens."""
+    import numpy as np
+    import pandas as pd
+    import lightgbm as lgb
+    train=pd.DataFrame({'category':pd.Categorical(['a','b']*16)})
+    estimator=lgb.LGBMRegressor(n_estimators=3,min_child_samples=1,num_leaves=3,n_jobs=1,verbosity=-1)
+    estimator.fit(train,np.arange(32,dtype=float))
+    incoming=pd.DataFrame({'category':pd.Categorical(['a','unseen',None],categories=['a','b'])})
+    values=estimator.predict(incoming)
+    return dict(probe_id='lightgbm_native_categorical_unseen_nan',backend_version=lgb.__version__,
+                status='passed' if np.isfinite(values).all() else 'failed',synthetic=True,
+                known_unseen_missing_predictions_finite=bool(np.isfinite(values).all()))
+
+
+def ground_semantic_report(report, plan, context):
+    """LLM concerns need inspectable plan evidence; backend guesses cannot veto."""
+    import re
+    errors=[]
+    warnings=list(report.warnings)
+    data=plan.model_dump(mode='json')
+    canonical={'prediction_kind':prediction_kind(context.task.primary_metric,context.task.task_type)}
+    for issue in report.issues:
+        path=issue.get('field','')
+        observed=data
+        try:
+            for key in path.split('.'):
+                observed=observed[int(key)] if isinstance(observed,list) else observed[key]
+        except (KeyError,TypeError,ValueError,IndexError):
+            warnings.append('Ungrounded semantic issue: '+str(issue))
+            continue
+        reason=issue.get('reason','Semantic constraint violation')
+        if issue.get('rule_id')=='task_contract' and path in canonical and observed!=canonical[path]:
+            errors.append(path+': '+reason)
+        elif (issue.get('rule_id')=='holdout_training' and isinstance(observed,str)
+              and issue.get('source_quote') and issue['source_quote'] in observed
+              and re.search(r'fit|train',issue['source_quote'],re.I)
+              and re.search(r'holdout\s+labels|external\s+holdout|test\s+labels',issue['source_quote'],re.I)):
+            errors.append(path+': '+reason)
+        else:
+            warnings.append('Semantic concern requires a reproducible check: '+reason)
+    if not errors:
+        warnings.extend('Unverified semantic concern: '+message for message in report.errors)
+        if not report.valid and not report.errors:
+            warnings.append('Semantic rejection had no grounded field/evidence')
+    return ValidationReport(valid=not errors,errors=errors,warnings=warnings,issues=report.issues)
 
 
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
@@ -18,8 +69,21 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     errors = []
     expected_protocol=dict(strategy=str(context.task.validation_strategy),folds=context.task.validation_folds,
                            duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
-    if plan.validation_protocol and plan.validation_protocol != expected_protocol:
-        errors.append('Declared validation_protocol differs from the confirmed runner protocol')
+    try:
+        plan.validation_protocol,metadata=normalize_protocol(plan.validation_protocol,expected_protocol)
+        plan.validation_metadata.update(metadata)
+    except ValueError as error:
+        errors.append(str(error))
+    if plan.model_params.get('class_weight') == 'sqrt_balanced':
+        errors.append('model_params.class_weight: sqrt_balanced is a runtime weight_policy, not a native backend parameter')
+    if plan.weight_policy.name != 'none' and plan.model_params.get('class_weight') is not None:
+        errors.append('weight_policy conflicts with native model_params.class_weight; declare one source of weights')
+    if plan.target_transform.name!='identity' and 'regression' not in context.task.task_type:
+        errors.append('target_transform requires a regression task')
+    if plan.weight_policy.name in {'balanced','sqrt_balanced'} and context.task.task_type not in {'binary_classification','multiclass_classification'}:
+        errors.append('weight_policy class balancing requires single-target classification')
+    if plan.weight_policy.name=='tail_aware' and context.task.task_type!='regression':
+        errors.append('weight_policy.tail_aware requires single-target regression')
     text=' '.join([plan.hypothesis.description,plan.hypothesis.rationale,*plan.preprocessing]).lower()
     if ('duplicate-aware' in text or 'duplicate aware' in text) and getattr(context.task,'duplicate_policy','allow') != 'group_features':
         errors.append('duplicate-aware validation requires confirmed duplicate_policy=group_features; narrative cannot change the protocol')
@@ -37,6 +101,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         if tool.native_hpo and context.task.group_columns:
             errors.append('Native group-aware validation has not been verified')
         if context.task.task_type not in tool.task_types: errors.append('Tool does not support the task type')
+        if plan.weight_policy.name!='none' and not tool.supports_weights:errors.append('Backend has no verified sample-weight support')
         if context.task.group_columns and not tool.supports_groups and context.task.task_type == 'ranking': errors.append('Ranking requires a group-aware adapter')
         if context.task.weight_column and not tool.supports_weights: errors.append('Adapter does not support sample weights')
         if plan.strategy == 'native' and not tool.native_hpo: errors.append('Native HPO is not supported')
@@ -62,6 +127,13 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         raise
     except Exception as error: errors.append(f'Skills: {error}')
     for name, spec in plan.search_space.items():
+        if name.startswith('policy_params.'):
+            path=name.split('.')
+            policy_fields={'target_transform':set(item for item in type(plan.target_transform).model_fields),
+                           'weight_policy':set(item for item in type(plan.weight_policy).model_fields),
+                           'prediction_policy':set(item for item in type(plan.prediction_policy).model_fields)}
+            if len(path)!=3 or path[1] not in policy_fields or path[2] not in policy_fields[path[1]]:
+                errors.append('Unknown custom policy parameter route: '+name)
         if not isinstance(spec.get('type'),str) or spec.get('type') not in {'int','float','categorical'}: errors.append(f'Invalid search type: {name}')
         elif spec['type'] == 'categorical':
             choices=spec.get('choices')
@@ -92,6 +164,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             errors.append('LightAutoML native objective must match its task: regression=rmse, binary=roc_auc, multiclass=log_loss')
     if plan.ensemble_components:
         for key in plan.search_space:
+            if key.startswith('policy_params.'):continue
             if key not in plan.parameter_routes:
                 errors.append(f'Flat ensemble HPO parameter {key} requires parameter_routes to a named component')
         component_names={entry.get('name',entry.get('tool_id')) for entry in plan.ensemble_components}
@@ -116,6 +189,25 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
                 errors.append('Ensemble component has no verified support for the internal validation strategy')
             if entry and context.task.weight_column and not entry.supports_weights:errors.append('Ensemble component cannot honor sample weights')
             if reserved & set(component.get('model_params',{})):errors.append('Ensemble component overrides infrastructure policy')
+    if plan.ensemble_sources:
+        from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy
+        names=[s.get('name') for s in plan.ensemble_sources]
+        if len(names)<2 or len(set(names))!=len(names) or set(names)!={s.get('name') for s in plan.ensemble_components}:
+            errors.append('Frozen ensemble sources must match two or three distinct declared components')
+        if plan.target_transform!=TargetTransform() or plan.weight_policy!=WeightPolicy() or plan.prediction_policy!=PredictionPolicy():
+            errors.append('Frozen-source ensembles keep policies inside each component; outer policies must be identity')
+        if plan.strategy!='single' or plan.search_space or plan.preprocessing:
+            errors.append('Frozen-source recipes require single execution and component-owned preprocessing')
+        if plan.model_params.get('method') not in {'mean','median','weighted','stack'}:
+            errors.append('Unsupported frozen-source ensemble recipe')
+        if plan.model_params.get('method')=='median' and 'classification' in context.task.task_type:
+            errors.append('Median is a regression-only recipe')
+        for source in plan.ensemble_sources:
+            cfg=source.get('config',{})
+            if cfg.get('ensemble_components') or cfg.get('ensemble_sources'):
+                errors.append('Recursive ensembles are not admitted')
+            if not source.get('candidate_id') or not source.get('experiment_id') or not source.get('code_hash'):
+                errors.append('Frozen ensemble source requires verified candidate/experiment/hash references')
     return ValidationReport(valid=not errors, errors=errors)
 
 
@@ -127,6 +219,8 @@ class PlanningState(TypedDict, total=False):
     errors: list[dict]
     valid: bool
     warnings: list[dict]
+    groups: list[dict]
+    skipped: list[dict]
 
 
 def build_planning_graph(client, context, tools, skills, budget, max_attempts=3, max_candidates=2,
@@ -166,8 +260,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             'Choose only techniques justified by the profile, findings or hypothesis. Planner must describe '
             'the intended operations in preprocessing/model assignment and include their skill_id in '
             'plan.skill_ids alongside the backend skill. Runtime sends implementation instructions to '
-            'the owning role; preprocessing.py preserves rows, while sampling and target transforms '
-            'belong to coding_agent. Catalog availability alone is not evidence of benefit. ')
+            'the owning role; preprocessing.py preserves rows. Runtime owns declared target/weight/output policies; '
+            'custom estimator operations belong to coding_agent. Catalog availability alone is not evidence of benefit. ')
         if role_tools is not None:
             instruction += 'Use read_task if a task nuance needs clarification. '
         payload=dict(payload,technique_skills=skills.technique_catalog(context.task.task_type),
@@ -200,6 +294,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 else:
                     batch = generate('hypothesis_generator',
                         f'Propose 1 to {max_candidates} distinct tabular ML hypotheses. Round 1 or first_candidate_required=true requires a fast baseline. '
+                        'A hypothesis tests an approach, not one library. For a boosting comparison set kind=family, '
+                        'model_family=gradient_boosting: the runner compares compatible LightGBM, CatBoost and XGBoost '
+                        'inside that one hypothesis before tuning the winner. Other families specify up to three family_tools. '
+                        'Do not spend separate hypothesis slots on equivalent boosting implementations. '
                         'When lightweight=true, propose simple fixed-configuration fits only: no HPO, AutoML, neural '
                         'networks. Prefer a cheap single-model baseline; ensembles are permitted when justified. The coder implements the baseline directly using the selected library '
                         'and simple fold-local preprocessing; reference skills provide implementation examples. '
@@ -207,7 +305,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Use supplied history; empty history is normal before the first fit. '
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
-                        'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage.',
+                        'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage. '
+                        'Declare target_transform, weight_policy and prediction_policy separately from native model_params. '
+                        'Runtime owns these operations; never ask the coder to apply them a second time.',
                         dict(state['payload'],lightweight=is_light(state),feedback=errors), HypothesisBatch, role_tools)
                 if len(batch.hypotheses)>max_candidates: raise ValueError('Too many hypotheses for this round')
                 ids=[h.hypothesis_id for h in batch.hypotheses]
@@ -228,8 +328,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         if planning_mode=='baseline': chosen=[h for h in chosen if h.baseline][:1]
         elif planning_mode=='alternatives':
             baseline=next((h.hypothesis_id for h in source if h.baseline),None)
-            chosen=[h for h in chosen if h.hypothesis_id!=baseline]
+            chosen=[h for h in chosen if h.hypothesis_id!=baseline or h.kind=='family']
         chosen.sort(key=lambda h:not h.baseline)
+        from .search_groups import expand_families, collect_groups, configure_composite
+        chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,planning_mode)
         for hypothesis in chosen:
             feedback=[]
             for _ in range(max_attempts):
@@ -239,6 +341,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     saved=progress['proposed'].get(hypothesis.hypothesis_id)
                     batch = PlanBatch(plans=[saved]) if saved else for_hypothesis(hypothesis,generate,'planner',
                         'Turn exactly the supplied hypothesis into one executable plan, preserving its ID, '
+                        'When required_tool_id is supplied, use exactly that backend; it is one member of a family search. '
+                        'When ensemble_sources is supplied, plan a frozen-source composition via SDK FrozenEnsemble; '
+                        'do not recreate base model code or share preprocessing between components. '
                         'meaning and baseline flag. Use available tools and skills, or an installed backend whose '
                         'reason is exactly "adapter probe required": selected backends will be probed before '
                         'validation. Never select missing libraries or version mismatches. Native AutoML requires '
@@ -246,7 +351,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'available shared contracts only. Backend implementation references belong to the coders. '
                         'Use supplied context to return final JSON first; '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
-                        'imbalance for weighting/thresholds. Ensembles are allowed; include the ensembles and component skills. '
+                        'imbalance for supported classification or regression weighting/thresholds. Ensembles are allowed; include the ensembles and component skills. '
                         'When lightweight=true require strategy=single, max_trials=1, no '
                         'native AutoML or slow backend, and an optional time_limit_seconds of '
                         f'{initial_experiment_seconds}. Never override orchestration resources; '
@@ -258,17 +363,31 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'constraints. The runner executes the confirmed internal validation strategy; '
                         'budget all folds plus a mandatory full-train refit. Do not implement CV in candidate.fit. '
                         'Native AutoML requires a verified validation_strategies entry matching the confirmed task. '
-                        'After baseline use strategy=optuna with a small compatible search_space for ordinary estimators; '
+                        'Use strategy=optuna only for an explicitly declared HPO intervention; keep fixed ablations single. '
+                        'Declare target_transform, weight_policy and prediction_policy as runtime policies, never native model_params. '
+                        'Route custom search dimensions as policy_params.<policy>.<field>. '
                         'never implement HPO in candidate.fit. Respect improvement_policy; stacking meta learners require OOF base predictions. '
                         'Backend skills are references, not hidden runtime adapters. The code must consume every '
                         'declared model/search parameter. For text specify a sparse linear estimator with C for '
                         'classification or alpha for regression. '
                         'based_on must be one of known_candidates; hypothesis lineage uses based_on_hypothesis_id.',
                         dict(state['payload'],lightweight=is_light(state),
+                             required_tool_id=family_metadata.get(hypothesis.hypothesis_id,(None,None))[1],
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
+                    if hypothesis.hypothesis_id in family_metadata:
+                        parent, required_tool = family_metadata[hypothesis.hypothesis_id]
+                        if item.tool_id != required_tool:
+                            raise ValueError('Family variant requires tool_id='+required_tool)
+                        item.search_group_id=parent.hypothesis_id
+                        item.search_group_kind='family'
+                        item.parent_hypothesis=parent
+                        item.strategy='single';item.max_trials=1
+                    if state['payload'].get('ensemble_sources'):
+                        item=configure_composite(item,state['payload']['ensemble_sources'],
+                                                 state['payload'].get('ensemble_weight_trials',15))
                     champion=state['payload'].get('champion')
                     if champion and item.hypothesis.based_on==champion['candidate_id']:
                         digest=champion.get('configuration_hash')
@@ -281,13 +400,51 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                 raise ValueError('Single-change preprocessing ablation must retain Champion backend')
                             item.model_params=copy.deepcopy(champion['model_params'])
                             item.strategy='single';item.search_space={};item.max_trials=1
+                            old=champion['plan']
+                            policy_types={'target_transform':type(item.target_transform),'weight_policy':type(item.weight_policy),
+                                          'prediction_policy':type(item.prediction_policy)}
+                            for key,cls in policy_types.items():
+                                if key not in item.model_fields_set:
+                                    setattr(item,key,cls.model_validate(old.get(key,{})))
+                            fields=('preprocessing','target_transform','weight_policy','prediction_policy','ensemble_components','stopping_policy')
+                            current=item.model_dump(mode='json')
+                            changed=[key for key in fields if current[key]!=old.get(key,current[key] if key=='stopping_policy' else
+                                {} if key in policy_types else []) and
+                                not (key in policy_types and current[key]==policy_types[key]().model_dump() and key not in old)]
+                            allowed={key.split('.')[0] for key in item.intervention.changed_fields}
+                            if allowed and set(changed)-allowed:
+                                raise ValueError('Undeclared ablation changes: '+', '.join(sorted(set(changed)-allowed)))
+                            if len(changed)>1:
+                                raise ValueError('Single-change ablation modifies multiple policy/feature groups: '+', '.join(changed))
+                            item.intervention.changed_fields=changed
                     elif item.change_kind=='single_change_ablation':
                         raise ValueError('Single-change ablation requires based_on=current Champion candidate_id')
                     actual_protocol=dict(strategy=str(context.task.validation_strategy),
                         folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
-                    if item.validation_protocol and item.validation_protocol != actual_protocol:
-                        raise ValueError('Declared validation_protocol differs from confirmed runner protocol')
-                    item.validation_protocol=actual_protocol
+                    item.validation_protocol,metadata=normalize_protocol(item.validation_protocol,actual_protocol)
+                    item.validation_metadata.update(metadata)
+                    fixed=constant_space(item.search_space) if item.strategy=='optuna' else None
+                    if fixed is not None:
+                        normalized=apply_overrides(item.model_dump(mode='json'),fixed)
+                        item=HypothesisPlan.model_validate(dict(normalized,strategy='single',search_space={},max_trials=1))
+                        item.intervention.kind='single_configuration'
+                    if item.hypothesis.baseline:
+                        item.intervention.kind='baseline'
+                    elif item.change_kind=='single_change_ablation':
+                        item.intervention.kind='ablation'
+                    elif item.strategy=='optuna':
+                        item.intervention.kind='hpo'
+                    item.intervention.base_candidate_id=item.hypothesis.based_on
+                    if not item.intervention.operations:
+                        item.intervention.operations=list(item.preprocessing)
+                    if not item.intervention.changed_fields:
+                        item.intervention.changed_fields=list(item.search_space)
+                    if not item.intervention.preserved_conditions:
+                        item.intervention.preserved_conditions=['canonical task','metric','validation protocol','data isolation']
+                    if not item.intervention.success_conditions:
+                        item.intervention.success_conditions=['Improve the paired primary metric; no causal claim without a comparable control']
+                    if not item.intervention.rejection_conditions:
+                        item.intervention.rejection_conditions=['Violation of the declared intervention or its subgroup constraints']
                     normalized=[]
                     for name in ('n_jobs','num_threads','thread_count','num_cpus'):
                         if item.model_params.get(name)==item.cpus:
@@ -328,6 +485,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         emit('planning.validation_reused',{'hypothesis_id':hypothesis.hypothesis_id})
                         break
                     instructions=for_hypothesis(hypothesis,skills.load,[],context.task.task_type,role='plan_validator')
+                    probes=[]
+                    if item.tool_id=='lightgbm' and any(word in ' '.join(item.preprocessing).lower() for word in ('categor','unseen')):
+                        try:
+                            probes.append(categorical_probe())
+                        except Exception as error:
+                            probes.append(dict(probe_id='lightgbm_native_categorical_unseen_nan',status='unavailable',error_type=type(error).__name__))
+                        emit('planning.capability_probes',probes)
                     validating=True
                     report=for_hypothesis(hypothesis,generate,'plan_validator',
                         'min_delta is a legacy absolute comparison field, NOT the batched HPO continuation threshold. '
@@ -337,7 +501,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Separate preprocessing and model coders implement the candidate. Check that transforms and parameters can '
                         'implement every claim, with no implicit adapter behavior. The runner owns splits and HPO. '
                         'Require explicit operations and columns for changes such as treating numeric years as '
-                        'categories. Single baseline search_space is for later HPO.',
+                        'categories. Single baseline search_space is for later HPO. '
+                        'Blocking issues must include rule_id, field, reason and source_quote in issues. '
+                        'Use task_contract for canonical task violations or holdout_training for a quoted instruction to train on external labels. '
+                        'Unproven library incompatibilities are warnings. Runtime executes declared target/weight/output policies.',
                         dict(round_number=state['payload'].get('round_number',1),
                              planning_brief=state['payload'].get('planning_brief'),
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
@@ -345,8 +512,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                   dict(task_type=context.task.task_type,primary_metric=context.task.primary_metric),
                              features=getattr(context,'feature_columns',[]),budget=budget.model_dump(),
                              plans=[item.model_dump(mode='json')],
+                             capability_probes=probes,
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)
+                    report=ground_semantic_report(report,item,context)
+                    warnings.extend(report.warnings)
                     if not report.valid or report.errors:
                         raise ValueError('; '.join(report.errors) or 'Semantic validator rejected the plan without an explanation')
                     accepted.append(item.model_dump(mode='json'))
@@ -372,7 +542,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         valid=bool(accepted)
         if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and planning_mode!='alternatives':
             valid=valid and any(p['hypothesis']['baseline'] for p in accepted)
-        return {'plans':accepted,'attempts':attempts,'errors':rejected,'valid':valid,'warnings':warnings}
+        for rejection in rejected:
+            if rejection['hypothesis_id'] in family_metadata:
+                parent,tool_id=family_metadata[rejection['hypothesis_id']]
+                skipped.append(dict(group_id=parent.hypothesis_id,variant_id=rejection['hypothesis_id'],
+                                    tool_id=tool_id,reason='; '.join(rejection['errors'])))
+        return {'plans':accepted,'groups':[g.model_dump(mode='json') for g in collect_groups(accepted,skipped)],
+                'skipped':skipped,'attempts':attempts,'errors':rejected,'valid':valid,'warnings':warnings}
 
     graph = StateGraph(PlanningState)
     graph.add_node('hypotheses',hypotheses); graph.add_node('plan',plan)

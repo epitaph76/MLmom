@@ -233,14 +233,19 @@ class TraceSink:
                     if isinstance(value,(int,float)):
                         row[key]+=value
                         row[key+'_known']+=1
+                for key,details in [('reasoning_tokens','completion_tokens_details'),('cached_tokens','prompt_tokens_details')]:
+                    value=(((raw or {}).get('usage') or {}).get(details) or {}).get(key)
+                    if isinstance(value,(int,float)):
+                        row[key]+=value
+                        row[key+'_known']+=1
             lines = ['# Execution trace', '', f'Run: `{self.scrub(self.run_id)}`', '',
                      f'Events: {len(records)}. Full requests, responses, tools and skills: `trace_payloads/`.', '',
-                     '| Task | Role | Responses | Prompt tokens | Completion tokens | Total tokens | Provider cost |',
-                     '|---|---|---:|---:|---:|---:|---:|']
+                     '| Task | Role | Responses | Prompt tokens | Completion tokens | Total tokens | Provider cost | Reasoning (part of completion) | Cached (part of prompt) |',
+                     '|---|---|---:|---:|---:|---:|---:|---:|---:|']
             clean = lambda value: str(value or '').replace('|', '\\|').replace('\n', ' ')
             for (task,role),row in sorted(usage.items()):
                 numbers=[]
-                for key in ('prompt_tokens','completion_tokens','total_tokens','cost'):
+                for key in ('prompt_tokens','completion_tokens','total_tokens','cost','reasoning_tokens','cached_tokens'):
                     value = f"{row[key]:.6f}" if key=='cost' else str(row[key])
                     numbers.append(value+(' + unknown' if row[key+'_known']<row['responses'] else '')
                                    if row[key+'_known'] else 'unknown')

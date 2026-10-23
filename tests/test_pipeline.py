@@ -88,7 +88,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                         catalog={s['skill_id']:s for s in payload['technique_skills']}
                         self.assertIn('missing_values',catalog)
                         self.assertIn('categorical_encoding',catalog)
-                        self.assertEqual('imbalance' in catalog,kind=='multiclass_classification')
+                        self.assertIn('imbalance',catalog)  # regression weighting is a supported runtime policy too
                         self.assertTrue(all('content' not in card for card in catalog.values()))
                 read=pipeline.role_tools.invoke('read_skills',{'skill_ids':['sklearn']})
                 self.assertEqual(read.status,'error')

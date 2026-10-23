@@ -34,6 +34,12 @@ risk, and the remaining experiment budget. Prefer the cheapest experiment that c
 falsify the claim.
 
 Return at most the requested number of hypotheses. Preserve the required baseline flag.
+Treat equivalent backend implementations as variants of one approach: use kind=family,
+model_family=gradient_boosting for LightGBM/CatBoost/XGBoost. Other model families name
+up to three family_tools. The runner compares initial configurations on the same inner
+split and tunes only the best implementation. Do not use multiple parent slots for
+boosting library names. Ensemble search has its own slot after the first cycle; prefer
+ordinary representation/model interventions here instead of duplicating that search.
 `description` names the single intervention. Write `rationale` compactly in this order:
 `Evidence: ...; Mechanism: ...; Expected effect: ...; Cost: ...; Risk: ...; Verify: ...`.
 Verification must name the comparable reference, metric and acceptance/rejection signal.

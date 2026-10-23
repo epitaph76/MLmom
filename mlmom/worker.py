@@ -147,7 +147,7 @@ def smoke(request, root):
         seed=42,cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=max(1,request['worker_seconds']*.5),
         classes=sorted(y.unique().tolist()) if y is not None and getattr(y,'ndim',1)==1 and ('classification' in kind) else [],
-        groups=groups,work_dir=str(root/'native'),timeouts_enabled=request.get('timeouts_enabled',True))
+        groups=groups,work_dir=str(root/'native'),timeouts_enabled=request.get('timeouts_enabled',True),stage='smoke')
     Path(context.work_dir).mkdir(parents=True,exist_ok=True)
     if request.get('native_holdout'):
         from sklearn.model_selection import train_test_split
@@ -164,7 +164,7 @@ def smoke(request, root):
     frozen=report['exported_params']
     frozen_config=dict(config,model_params=frozen,stopping_policy='fixed',component_stopping_policies={})
     frozen_model=module.create_candidate(copy.deepcopy(frozen_config)) if module else LibraryCandidate(copy.deepcopy(frozen_config))
-    frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),
+    frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),stage='smoke_recreate',fit_id=uuid.uuid4().hex,
                            time_limit_seconds=max(1,request['worker_seconds']*.25),fit_rows=len(X))
     Path(frozen_context.work_dir).mkdir(parents=True,exist_ok=True)
     frozen_model.fit(X,y,frozen_context)
@@ -205,6 +205,7 @@ def smoke(request, root):
 
 
 def train(request, root):
+    from .model_spec import apply_overrides, with_spec
     import numpy as np
     import optuna
     from .pipeline_contracts import TaskContext,HypothesisPlan,TrialResult
@@ -276,7 +277,7 @@ def train(request, root):
         from .execution import audit_fit
         report_path=root/'execution-report.json'
         report=audit_fit(model,params,dict(config,stopping_policy='fixed',component_stopping_policies={}),
-                         c_final,report_path,stage='full_refit',protocol_ref=protocol_ref)
+                         c_final,report_path,stage='final_full_data_refit' if request.get('phase')=='final' else 'full_refit',protocol_ref=protocol_ref)
         params=report['exported_params']
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
         artifact.mkdir(parents=True)
@@ -287,17 +288,21 @@ def train(request, root):
             history_ref=str(artifact/'native-history.json')
             atomic_json(Path(history_ref),history)
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
+            model_spec=report.get('model_spec'),
+            intervention=plan.intervention.model_dump(mode='json'),
             best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
             study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[]),
             full_refit=True,validation_protocol_ref=protocol_ref,execution_report=report,
             execution_report_ref=str(report_path),score_kind=('not_applicable' if score is None else
-                'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),**best_details))
+                'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),
+            **{key:value for key,value in best_details.items() if key != 'model_spec'}))
 
     if request.get('fixed'):
         if fit_budget <= .2: raise TimeoutError('Original training deadline reached before fixed refit')
         model = module.create_candidate(copy.deepcopy(config))
         c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
         c.fit_rows=len(X)
+        c.stage='final_full_data_refit' if request.get('phase')=='final' else 'full_refit'
         model.fit(X,None if unsupervised else y,c)
         c_final=c
         if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')
@@ -324,8 +329,8 @@ def train(request, root):
         if not request.get('timeouts_enabled',True):search_deadline=deadline
         def objective(sampled=None, number=None, seconds=None):
             nonlocal best_score,best_params,best_details
-            params = dict(plan.model_params)
-            params.update(sampled or {})
+            trial_config = apply_overrides(config, sampled or {})
+            params = trial_config['model_params']
             t0 = time.monotonic()
             trial_number=number if number is not None else len(trials)
             trial=TrialResult(number=trial_number,params=params,status='running',duration_seconds=0,
@@ -344,7 +349,7 @@ def train(request, root):
                     a,b=np.asarray(fold['train_indices']),np.asarray(fold['validation_indices'])
                     remaining=until-time.time()
                     if remaining <= .2: raise TimeoutError('Internal validation deadline reached')
-                    model = module.create_candidate(copy.deepcopy(dict(config,model_params=params)))
+                    model = module.create_candidate(copy.deepcopy(trial_config))
                     holdout=protocol['strategy']=='holdout'
                     c=fit_context(context,request,work_dir=trial_root/f"fold-{fold['number']}",
                         X_valid=X.iloc[b] if holdout else None,
@@ -356,9 +361,10 @@ def train(request, root):
                         seconds=remaining/(protocol['n_splits']-fold['number']))
                     fold_started=time.monotonic()
                     c.fit_rows=len(a)
+                    c.stage='inner_fold'
                     model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
                     from .execution import audit_fit
-                    fit_report=audit_fit(model,params,config,c,trial_root/f"fold-{fold['number']}-execution.json",
+                    fit_report=audit_fit(model,params,trial_config,c,trial_root/f"fold-{fold['number']}-execution.json",
                         stage='inner_fold',protocol_ref=protocol_ref)
                     prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
                     score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
@@ -389,6 +395,7 @@ def train(request, root):
                 trial.score_std=float(np.std(scores)) if len(scores)>1 else None
                 trial.status='completed';trial.duration_seconds=time.monotonic()-t0
                 details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
+                details['model_spec']=fit_report.get('model_spec')
                 trial_selection=dict(protocol=protocol,number=trial_number,score=score,params=selected_params,details=details)
                 atomic_json(trial_root/'selection.json',trial_selection)
                 if best_score is None or better(score,best_score,context.task.metric_direction):
@@ -446,10 +453,13 @@ def train(request, root):
         else: control('initial_fit')  # Reuse the completed trial and any committed decision.
         if best_score is None: raise ValueError('No successful internal trial')
         if deadline-time.time() <= .2: raise TimeoutError('No time for mandatory full-train refit')
+        if best_details.get('model_spec'):
+            config=with_spec(config,best_details['model_spec'])
         model = module.create_candidate(copy.deepcopy(dict(config,model_params=best_params)))
         c_final=fit_context(context,request,work_dir=root/'refit-round',
             groups=fit_groups,weights=weights,seconds=deadline-time.time())
         c_final.fit_rows=len(X)
+        c_final.stage='full_refit'
         model.fit(X,None if unsupervised else y,c_final)
         if time.time() >= deadline: raise TimeoutError('Full-train refit exceeded original deadline')
         save_progress(model,best_params,best_score,search_result.get('stop_reason') or

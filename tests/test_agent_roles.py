@@ -83,6 +83,10 @@ class SeparatePreprocessingTests(unittest.TestCase):
             def generate(self,*args):
                 if args[0]=='preprocessing_agent':
                     self.pre_calls+=1
+                    if args[3].__name__=='CodePatch':
+                        previous=args[2]['previous']
+                        return args[3](patches=[dict(path='preprocessing.py',sha256=previous['sha256'],
+                            old_text=f'# revision {self.pre_calls-1}',new_text=f'# revision {self.pre_calls}')])
                     return args[3](source=PREPROCESSING_CODE+f'\n# revision {self.pre_calls}\n',
                         spec=dict(description='Fixed interface',output='dense'))
                 return super().generate(*args)

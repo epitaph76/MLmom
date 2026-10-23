@@ -199,8 +199,11 @@ class RealFailureRegressions(unittest.TestCase):
     def test_semantic_rejection_never_uses_timeout_fallback(self):
         class RejectingValidator(Planner):
             def generate(self,role,*args,**kwargs):
-                if role=='plan_validator': return ValidationReport(valid=False,errors=['Unsafe data use'])
-                return super().generate(role,*args,**kwargs)
+                if role=='plan_validator': return ValidationReport(valid=False,errors=['Unsafe data use'],issues=[
+                    dict(rule_id='holdout_training',field='preprocessing.0',reason='Unsafe data use',source_quote='train on external holdout labels')])
+                result=super().generate(role,*args,**kwargs)
+                if role=='planner':result.plans[0].preprocessing=['train on external holdout labels']
+                return result
         context,tools,budget,plan=case()
         output=build_planning_graph(RejectingValidator(),context,tools,Skills(),budget,
             max_attempts=1,planning_mode='baseline').invoke({'payload':{'round_number':1}})

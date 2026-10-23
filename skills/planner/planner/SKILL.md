@@ -17,9 +17,11 @@ alone is not justification. Use only schema fields accepted by `HypothesisPlan`.
 
 Assign work at the correct boundary. Feature-only transformations that preserve row count
 belong in `preprocessing.py`: imputation, encoding, scaling, text/vector transforms,
-feature construction and selection. Sampling, target transformation and inverse
-transformation, sample/class weights, thresholds, estimator logic and prediction shaping
-belong to the model coder. The runner owns outer splits, the supplied validation set,
+feature construction and selection. Declare target transformation/inverse transformation,
+sample/class weight policies and prediction clipping/nonfinite handling in target_transform,
+weight_policy and prediction_policy, separately from backend model_params. Runtime executes
+these policies. The model coder implements estimator logic and explicit custom operations.
+The runner owns outer splits, the supplied validation set,
 Optuna scheduling and final refit. Never put targets, IDs, group/fold markers or holdout
 information into model features unless the confirmed task explicitly makes them features.
 
@@ -29,6 +31,11 @@ cheap, `max_trials=1`, without native AutoML; a small compatible
 is justified. Native AutoML uses `native` and its supported patience behavior. Parameters
 must be consumed by the implementation, and infrastructure controls such as thread counts,
 devices and time limits remain orchestration fields rather than model/search parameters.
+
+Every experiment declares intervention, base candidate/experiment, changed fields/operations,
+preserved conditions and success/rejection conditions. HPO is a separate child intervention,
+never silently attached to a fixed baseline hypothesis. A one-choice search is a single fit.
+Single-change ablations preserve all other policies/configuration and prohibit extra HPO.
 
 Estimate time, CPU and memory from the selected representation, model and search size.
 Keep the experiment plus evaluation reserve inside the supplied budget. Sparse text or
@@ -60,6 +67,14 @@ requires the backend verified validation_strategies and a saved configuration
 that refits without search. Do not silently replace CV by holdout.
 
 Ensembles are allowed: name components, their backend skills and blending or
+OOF stacking. For required_tool_id, plan exactly that family member with a single
+initial fit; preserve a compatible search_space for winner-only HPO. For ensemble_sources,
+retain the supplied frozen component implementations and independent preprocessing/policies.
+Use SDK FrozenEnsemble, outer identity policies and a single recipe fit; the runner
+expands the resource assignment into a bounded method comparison. Do not tune bases
+again inside an ensemble or replace source components with new implementations.
+
+Legacy hand-authored ensembles use blending or
 stacking operations. Stacking meta learners must use OOF base predictions, with
 trainable preprocessing and target encoding fitted within each base fold and
 groups kept separate. Persist every component and meta-model for portable load.

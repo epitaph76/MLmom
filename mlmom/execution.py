@@ -175,13 +175,18 @@ def _leaves(reports):
 
 def _component_objects(components):
     for name,component in components.items():
-        if type(component).__module__.split('.')[0]=='mlmom' or callable(getattr(component,'fitted_components',None)):
+        if type(component).__module__.startswith('sklearn.multioutput'):
+            for index,value in enumerate(component.estimators_):yield name+f'.target_{index}',value
+        elif type(component).__module__.split('.')[0]=='flaml' and hasattr(getattr(component,'model',None),'estimator'):
+            yield name+'.selected',component.model.estimator
+        elif type(component).__module__.split('.')[0]=='mlmom' or callable(getattr(component,'fitted_components',None)):
             for child,value in _component_objects(fitted_components(component)):yield name+'.'+child,value
         else:yield name,component
 
 
 def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=None):
-    report = dict(version=1,stage=stage,status='failed',requested_params=copy.deepcopy(requested),
+    version = 2 if config.get('contract_version') == 2 else 1
+    report = dict(version=version,stage=stage,status='failed',requested_params=copy.deepcopy(requested),
                   code_hash=config.get('_code_hash'),
                   exported_params=None,components={},errors=[],roundtrip='not_checked',
                   validation_protocol_ref=protocol_ref,timeouts_enabled=context.timeouts_enabled,
@@ -204,6 +209,48 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
         if config.get('ensemble_components') and not callable(getattr(model,'fitted_components',None)):
             raise ValueError('Ensembles must implement fitted_components() for every component and meta learner')
         report['components'] = {name:inspect_component(component) for name,component in components.items()}
+        if version == 2:
+            from .model_spec import model_spec, ModelSpec
+            from .fit_provenance import record_for, records_for
+            method = getattr(model, 'export_model_spec', None)
+            spec = method() if callable(method) else model_spec(config, exported)
+            spec = ModelSpec.model_validate(spec).model_dump(mode='json')
+            if spec['backend_params'] != exported:
+                report['errors'].append('ModelSpec.backend_params differs from exported backend parameters')
+            report['model_spec'] = spec
+            objects = dict(_component_objects(components))
+            for name, actual in _leaves(report['components']):
+                component = objects.get(name)
+                trace = record_for(component, records_for(context)) if component is not None else None
+                if trace is None:
+                    if actual['backend'] != 'torch':
+                        report['errors'].append(f'{name}: missing trusted backend fit-entry provenance')
+                    continue
+                actual['fit_entry'] = trace
+                if config.get('ensemble_sources'):
+                    source=next((s for s in config['ensemble_sources'] if s['name']==name.split('.')[0]),None)
+                    if source:
+                        expected_spec=model_spec(source['config'])
+                        if trace.get('code_hash')!=source['code_hash']:
+                            report['errors'].append(f'{name}: fitted source differs from the frozen component')
+                        for policy in ('target_transform','weight_policy','prediction_policy'):
+                            if trace.get('model_spec',{}).get(policy)!=expected_spec[policy]:
+                                report['errors'].append(f'{name}: component {policy} differs from its frozen policy')
+                        if trace.get('rows')!=context.fit_rows:
+                            report['errors'].append(f'{name}: component did not refit on every current training row')
+                # Constructor state at fit entry takes precedence over post-fit mutable attributes.
+                actual['actual_params'].update(trace['params'])
+                if not trace['completed']:
+                    report['errors'].append(f'{name}: backend fit did not complete')
+                input_trace=trace.get('native_parent_entry') or trace
+                if input_trace['target_fingerprint'] != trace['expected_target_fingerprint']:
+                    columns=trace.get('target_columns')
+                    column_name=name.rsplit('.',1)[-1]
+                    if not (columns and column_name.startswith('target_') and
+                            int(column_name[7:])<len(columns) and trace['target_fingerprint']==columns[int(column_name[7:])]):
+                        report['errors'].append(f'{name}: backend target differs from the declared runtime transformation')
+                if input_trace['weight_fingerprint'] != trace['expected_weight_fingerprint']:
+                    report['errors'].append(f'{name}: backend sample_weight differs from the declared runtime weight policy')
         declared = config.get('ensemble_components',[])
         for entry in declared:
             identity=entry.get('name',entry.get('tool_id'))
@@ -254,6 +301,8 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                     if isinstance(value,str) and isinstance(observed,list) and len(observed)==1:observed=observed[0]
                 if present and not _equal(value,observed):
                     report['errors'].append(f'{name}.{key}: requested {value!r}, actual {observed!r}')
+                elif version==2 and not present and key not in {'estimator','method','weights','components','__native_frozen','__ensemble_frozen'}:
+                    report['errors'].append(f'{name}.{key}: declared backend parameter has no fit-time evidence')
             count = next((expected[key] for key in ('iterations','n_estimators','num_iterations','num_boost_round','epochs') if key in expected),None)
             if count is None:
                 count = native.get('iterations',native.get('n_estimators'))
@@ -301,7 +350,7 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                 if frozen_count != expected[key] and not (policy == 'early_stopping' and
                         context.validation_y is not None and frozen_count == (selected or completed)):
                     report['errors'].append(f'{name}.{key}: export changes fixed iterations {expected[key]} -> {frozen_count}')
-        report['configuration_hash'] = config_hash(exported)
+        report['configuration_hash'] = config_hash(report['model_spec'] if version == 2 else exported)
     except (ValueError,TypeError,AttributeError) as exc:
         report['errors'].append(str(exc))
     report['status'] = 'passed' if not report['errors'] else 'failed'
@@ -312,6 +361,8 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
 
 def compare_roundtrip(first, second):
     errors = []
+    if first.get('version') == 2 and first.get('model_spec') != second.get('model_spec'):
+        errors.append('export/recreate changes the complete ModelSpec')
     before,after = dict(_leaves(first['components'])),dict(_leaves(second['components']))
     if before.keys() != after.keys(): return ['export/recreate changes fitted component names']
     for name,actual in before.items():
@@ -329,13 +380,18 @@ def require_admitted(run, candidate):
     report = run.execution_report
     if not report or report.get('status') != 'passed' or report.get('errors'):
         raise ValueError('Machine execution gate: missing or failed execution provenance')
-    if report.get('version')!=1 or not report.get('components') or any(item.get('inspection')!='verified' for _,item in _leaves(report['components'])):
+    if report.get('version') not in {1,2} or not report.get('components') or any(item.get('inspection')!='verified' for _,item in _leaves(report['components'])):
         raise ValueError('Machine execution gate: actual fitted components are not verified')
     smoke=getattr(candidate,'execution_report',None)
     if not smoke or smoke.get('roundtrip')!='passed' or smoke.get('code_hash')!=candidate.code_hash:
         raise ValueError('Machine execution gate: export/recreate smoke provenance is missing')
+    if report.get('version') == 2 and smoke.get('version') != 2:
+        raise ValueError('Machine execution gate: ModelSpec v2 requires a v2 export/recreate smoke check')
     if report.get('code_hash') != candidate.code_hash:
         raise ValueError('Machine execution gate: execution code hash differs from candidate')
-    if report.get('exported_params') != run.best_params or report.get('configuration_hash') != config_hash(run.best_params):
+    identity = report.get('model_spec') if report.get('version') == 2 else run.best_params
+    if report.get('exported_params') != run.best_params or report.get('configuration_hash') != config_hash(identity):
         raise ValueError('Machine execution gate: saved parameters differ from verified export')
+    if report.get('version') == 2 and getattr(run, 'model_spec', None) != report.get('model_spec'):
+        raise ValueError('Machine execution gate: saved ModelSpec differs from verified execution')
     if not run.full_refit: raise ValueError('Machine execution gate: full-train refit is missing')

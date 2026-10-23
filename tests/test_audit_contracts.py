@@ -129,7 +129,9 @@ class EvidenceContractTests(unittest.TestCase):
                 graph=build_planning_graph(client,pipe.context,pipe.tools,pipe.skills,pipe.budget.snapshot(),planning_mode='baseline')
                 graph.invoke({'payload':payload})
                 received=next(p for role,p in reversed(client.calls) if role=='hypothesis_generator')
-                self.assertTrue(received['reconnaissance']['observations'])
+                self.assertTrue(received['observation_index'])
+                self.assertTrue(all(item.get('source_ref') for item in received['observation_index']))
+                self.assertEqual(received['reconnaissance']['evidence_available_via'],'read_evidence')
             finally:
                 pipe.sandbox.close();pipe.checkpointer.close();pipe.store.close();pipe.trace.close()
 

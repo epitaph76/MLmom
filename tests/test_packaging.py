@@ -32,10 +32,15 @@ from mlmom.resources import SandboxManager
 runtime=Path(mlmom.__file__).resolve().parent.parent
 assert runtime.parent==Path(sys.argv[1]).resolve()
 registry=SkillRegistry(runtime/'skills')
-assert len(registry.list())==30
+assert len(registry.list())==31
 catalog={s['skill_id'] for s in registry.technique_catalog('multiclass_classification')}
 assert {'categorical_encoding','missing_values','preprocessing_core','imbalance'}<=catalog
 assert registry.owners['imbalance']=='coding_agent'
+assert registry.owners['ensemble_agent']=='ensemble_agent'
+assert {card['skill_id'] for card in registry.load([], 'regression', role='ensemble_agent')}=={'ensemble_agent'}
+from mlmom.sdk import FrozenEnsemble
+from mlmom.pipeline_contracts import SearchGroupPlan
+assert FrozenEnsemble.__module__=='mlmom.composite'
 loaded=registry.load(['sklearn'],'regression')
 assert {s['skill_id'] for s in loaded}=={'candidate_sdk','validation','metrics','preprocessing','sklearn'}
 assert all(s['status']=='ready' for s in loaded)

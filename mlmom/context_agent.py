@@ -11,6 +11,7 @@ from .agents import role_window
 from .persistence import atomic_json
 from .pipeline_contracts import PlannerContextDraft
 from .planning_context import profile_summary
+from .context_views import previous_brief_summary
 from .tracing import emit
 
 
@@ -83,7 +84,7 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
     inputs = dict(task_description=task_text, requirements=requirements, dataset_profile=profile_summary(profile),dataset_facts=catalog,
                   reconnaissance_status={key:dict(status=r.get('status'),reason=r.get('reason'),
                     unfinished_checks=r.get('unfinished_checks',[])) for key,r in reports.items()},
-                  previous_brief=previous, dataset_hash=context.dataset_hash)
+                  previous_brief=previous_brief_summary(previous), dataset_hash=context.dataset_hash)
     digest = hashlib.sha256(json.dumps(inputs,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     key=f'r{round_number}-{digest[:20]}'
     cached=store.get('planning_brief_version',key)

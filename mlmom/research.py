@@ -109,6 +109,10 @@ class ReconnaissanceSession:
         self.tools.register('read_task', self.read_task, 'Read the original task text in bounded pages.')
         self.tools.register('confirm_task', self.confirm_task, 'Validate and persist the task before research; returns validation errors.')
         self.tools.register('save_observation', self.save_observation, 'Persist a measured finding with a supplied evidence reference.')
+        from .context_views import paged_evidence
+        self.previous_reports=self.store.list('reconnaissance',limit=3)
+        evidence={f'previous_report:{i}':report for i,report in enumerate(self.previous_reports)}
+        self.tools.tools.update(paged_evidence(evidence).tools)
 
     def _check_time(self):
         if self.budget.now() >= self.deadline or self.budget.snapshot().research_seconds <= 0:
@@ -264,7 +268,9 @@ class ReconnaissanceSession:
                          confirmed_task=self.context.task.model_dump(mode='json') if self.context else saved,
                          observations=[o.model_dump(mode='json') for o in self.observations.values()],
                          history=self.history,skills=self.skills,
-                         previous_reports=self.store.list('reconnaissance',limit=3),
+                         previous_reports=[dict(status=report.get('status'),unfinished_checks=report.get('unfinished_checks',[]),
+                             observation_ids=[o['observation_id'] for o in report.get('observations',[])],
+                             evidence_ref=f'previous_report:{i}') for i,report in enumerate(self.previous_reports)],
                          allowed_metric_options=metric_capabilities(),
                          task_schema=TaskDefinition.model_json_schema()), ReconnaissanceReport,self.tools)
             if not self.context and not self.store.get('confirmed_task','task'):
@@ -376,6 +382,12 @@ def error_slices(y, prediction, X, reference_X, reference_y, task_type):
 
 
 def review_result(client,payload,skills,key,seconds):
+    from .context_views import paged_evidence
+    sources=payload.get('source',{})
+    values={f'source:{name}':text for name,text in sources.items()}
+    payload=dict(payload,source={name:dict(evidence_ref=f'source:{name}',characters=len(text)) for name,text in sources.items()},
+                 evidence_refs=list(dict.fromkeys([*payload.get('evidence_refs',[]),*values])))
+    review_tools=paged_evidence(values) if values else None
     execution=payload.get('execution_report')
     if execution and execution.get('status') != 'passed':
         return ResultReview(implementation='mismatch',effect='inconclusive',
@@ -394,7 +406,9 @@ def review_result(client,payload,skills,key,seconds):
                 'parameters. Separately assess implementation fidelity and empirical support. Use only supplied '
                 'evidence_refs, scores and slices. An overall score gain does not prove a subgroup claim. '
                 'Cross-split historical scores are not comparable. Missing baseline/support means inconclusive. '
-                'Never change code, champion selection or submission.',dict(payload,skills=skills),ResultReview,None)
+                'Use internal_validation for fold stability and OOF; smoke is synthetic and cannot establish full refit. '
+                'Missing metrics are unknown. Read source evidence through read_evidence when needed. '
+                'Never change code, champion selection or submission.',dict(payload,skills=skills),ResultReview,review_tools)
         if not set(result.evidence_refs)<=set(payload.get('evidence_refs',[])):
             raise ValueError('Unknown result evidence reference')
         if (result.effect!='inconclusive' and not comparable) or result.implementation!='matches':
