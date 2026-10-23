@@ -27,3 +27,6 @@ not declare the outer stacking ensemble. Use fresh wrappers in each OOF fold and
 Slice groups/weights to fold training rows and clear validation metadata for each base fold.
 Save/load wrapped bases and meta learner together. Do not stack on globally transformed X.
 Native AutoML components are not admitted until frozen component refit is verified.
+
+## Complete freezing and inspection
+Export the full config: components/meta learner, weights, target/output options and flat HPO values. fitted_components() exposes every named base/meta estimator. Apply flat HPO keys only to plan.parameter_routes components. SDK audits actual execution and export/recreate.

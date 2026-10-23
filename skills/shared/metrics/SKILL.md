@@ -11,3 +11,6 @@ Single-label predictions are original labels or probabilities (n, len(context.cl
 Multilabel: (n, n_targets), one positive probability/binary decision per target; no row normalization. Inspect each target's classes_: constant-positive yields ones, constant-negative zeros. Multioutput regression retains (n, n_outputs); ordinary regression is (n,).
 
 Metric direction affects selection, not prediction sign. Invert normality scores only for anomaly ranking. Never argmax probability metrics. Persist deliberate clipping/inverse transforms, including nonnegative RMSLE outputs. Infrastructure computes final scores.
+
+## Diagnostic and comparison metadata
+Regression diagnostic mae is mean absolute error; rmse is root mean squared error; mean_residual = mean(y_true-y_pred), positive for underprediction. Classification diagnostic error_rate and multilabel hamming_loss have no residual sign. Diagnostic weighting is explicitly unweighted; primary-score weighting is reported separately. Never infer bias direction from absolute errors. score_kind distinguishes inner_cv_mean, inner_oof and outer_holdout; compare only matching dataset/split, metric/options/direction and weighting. allowed_metric_options comes from mlmom.metric_contracts, the same registry used by confirm_task.

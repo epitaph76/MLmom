@@ -205,7 +205,17 @@ class CSVTools:
             cache_dir=str(self.store.root/'csv_cache'), **arguments), directory, seconds=seconds,
             cpus=min(2,self.budget.cpus), memory_gb=min(4.,self.budget.memory_gb))
         if result['status'] != 'completed':
-            raise ValueError(result.get('error') or result.get('stop_reason') or 'CSV calculation failed')
+            from .tools import ToolInputError
+            detail = result.get('error') or result.get('stop_reason') or 'CSV calculation failed'
+            error_path = directory/'tool-error.json'
+            atomic_json(error_path,dict(operation=operation,arguments=arguments,error=detail))
+            hint = ('Polars 1.26: compute CASE expressions in an inner SELECT, then GROUP BY its output column. '
+                    'Use SUM(CASE WHEN ... THEN 1 ELSE 0 END) for conditional counts; avoid scalar subqueries. '
+                    'UNION branches need identical column names/types. Simplify the query after an error.')
+            # Preserve the last backend exception, without feeding the full traceback back to the role.
+            lines = [line.strip() for line in str(detail).splitlines() if line.strip()]
+            reason = next((line for line in reversed(lines) if 'Error:' in line),lines[-1] if lines else 'CSV calculation failed')
+            raise ToolInputError(reason[:700],code='csv_calculation_failed',hint=hint,artifacts=[str(error_path)])
         result = {k:v for k,v in result.items() if k not in {'duration_seconds','peak_memory_gb'}}
         result['source_ref'] = 'csv:'+identity
         while len(json.dumps(result,ensure_ascii=False)) > 32000 and result.get('tables'):
@@ -229,6 +239,12 @@ class CSVTools:
         return self._run('query', sql=validate_sql(sql))
 
     def correlate_csv(self, table: str, columns: list[str], target: str) -> dict:
+        """target is an exact existing column name, never a SQL expression."""
+        spec = self.tables.get(table)
+        if not spec or target not in (spec.get('columns') or []):
+            from .tools import ToolInputError
+            raise ToolInputError('target must be an existing column name, not an SQL expression.',
+                fields=[dict(field='target',actual=target)],hint='For transformed correlations, compute the expression and correlation using query_csv.')
         if not 1 <= len(columns) <= 20:
             raise ValueError('Choose 1..20 numeric columns')
         return self._run('correlate',table=table,columns=columns,target=target)

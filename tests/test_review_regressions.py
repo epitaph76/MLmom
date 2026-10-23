@@ -31,6 +31,7 @@ class Base:
         self.seen=X.to_numpy().copy()
     def predict(self,X,spec):return self.model.predict(X)
 class Stack:
+    def fitted_components(self):return {'base':self.base,'meta':self.meta}
     def fit_stack(self,X,y,context,create_preprocessor):
         self.oof=np.empty(len(X));self.audits=[]
         for a,b in KFold(3,shuffle=True,random_state=43).split(X):

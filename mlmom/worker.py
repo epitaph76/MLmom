@@ -8,8 +8,30 @@ import threading
 import time
 import traceback
 import uuid
+import copy
 from dataclasses import replace
 from pathlib import Path
+
+
+def failure_result(error, root):
+    """Keep complete debugging evidence on disk and send the repair role one defect."""
+    from .execution import FidelityError
+    path = Path(root)/'traceback.log'
+    path.write_text(''.join(traceback.format_exception(type(error),error,error.__traceback__)),encoding='utf-8')
+    frames = traceback.extract_tb(error.__traceback__)
+    authored = [frame for frame in frames if Path(frame.filename).name in {'candidate.py','preprocessing.py'}]
+    frame = authored[-1] if authored else frames[-1] if frames else None
+    source = dict(file=frame.filename,line=frame.lineno,function=frame.name) if frame else None
+    fidelity = isinstance(error,FidelityError)
+    hint = ('Repair the reported configuration, export or stopping defect; inspect execution_report_ref.' if fidelity else
+            'Use apply_patch on the existing source at error_details.source; retain unrelated working code.')
+    message = f'{type(error).__name__}: {str(error)[:1700]}'
+    if source: message += f' [{Path(source["file"]).name}:{source["line"]}]'
+    result = dict(status='failed',error=message,error_code='execution_fidelity_failed' if fidelity else 'worker_runtime_error',
+                  error_details=dict(type=type(error).__name__,source=source,hint=hint),traceback_ref=str(path))
+    if fidelity:
+        result.update(execution_report=error.report,execution_report_ref=error.path,stop_reason='execution_fidelity_failed')
+    return result
 
 
 def watchdog(request):
@@ -43,7 +65,8 @@ def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, group
         cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=max(.1,seconds or request['worker_seconds']*.8),classes=context.classes,
         groups=groups,sample_weight=weights,validation_X=X_valid,validation_y=y_valid,
-        validation_groups=validation_groups,validation_weight=validation_weight,work_dir=str(work_dir),task_context=context)
+        validation_groups=validation_groups,validation_weight=validation_weight,work_dir=str(work_dir),task_context=context,
+        timeouts_enabled=request.get('timeouts_enabled',True))
 
 
 def write_predictions(model, X, kinds, root):
@@ -80,6 +103,7 @@ def smoke(request, root):
     from .adapters import LibraryCandidate,load_adapter
     from .evaluation import checked_predictions
     from .persistence import tree_hash
+    from .execution import audit_fit, compare_roundtrip, FidelityError
     kind = request.get('task_type','regression')
     X,y = synthetic(kind)
     if request.get('feature_schema'):
@@ -108,14 +132,14 @@ def smoke(request, root):
                 if base.ndim==1:base=base[:,None]
                 y=pd.DataFrame({name:base[:,i%base.shape[1]] for i,name in enumerate(names)})
             elif isinstance(y,pd.Series):y.name=names[0]
-    config = request['config']
+    config = dict(request['config'],_code_hash=request.get('code_hash'))
     if request.get('code_dir'):
         if request.get('code_hash') and tree_hash(Path(request['code_dir'])) != request['code_hash']:
             raise ValueError('Candidate hash mismatch')
         module = load_module(request['code_dir'])
-        model = module.create_candidate(config)
+        model = module.create_candidate(copy.deepcopy(config))
     else:
-        model = LibraryCandidate(config)
+        model = LibraryCandidate(copy.deepcopy(config))
         module = None
     import numpy as np
     groups = np.repeat(np.arange(12),5).astype(str) if kind == 'ranking' else None
@@ -123,34 +147,47 @@ def smoke(request, root):
         seed=42,cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=max(1,request['worker_seconds']*.5),
         classes=sorted(y.unique().tolist()) if y is not None and getattr(y,'ndim',1)==1 and ('classification' in kind) else [],
-        groups=groups,work_dir=str(root/'native'))
+        groups=groups,work_dir=str(root/'native'),timeouts_enabled=request.get('timeouts_enabled',True))
     Path(context.work_dir).mkdir(parents=True,exist_ok=True)
     if request.get('native_holdout'):
         from sklearn.model_selection import train_test_split
         a,b=train_test_split(np.arange(len(X)),test_size=.25,random_state=42,
                             stratify=y if 'classification' in kind else None)
+        context.fit_rows=len(a)
         model.fit(X.iloc[a],y.iloc[a],replace(context,validation_X=X.iloc[b],validation_y=y.iloc[b]))
     else:
+        context.fit_rows=len(X)
         model.fit(X,y,context)
-    if hasattr(model,'export_model_params'):
-        frozen=model.export_model_params()
-        json.dumps(frozen,allow_nan=False)
-        if request.get('verify_frozen'):
-            config=dict(config,model_params=frozen)
-            frozen_model=module.create_candidate(config) if module else LibraryCandidate(config)
-            frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),
-                                   time_limit_seconds=max(1,request['worker_seconds']*.25))
-            Path(frozen_context.work_dir).mkdir(parents=True,exist_ok=True)
-            frozen_model.fit(X,y,frozen_context)
-            json.dumps(frozen_model.export_model_params(),allow_nan=False)
-            json.dumps(frozen_model.native_history(),allow_nan=False)
-            checked_predictions(frozen_model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
-                                request.get('prediction_kind','value'))
-            (root/'frozen-model').mkdir(parents=True,exist_ok=True)
-            frozen_model.save(str(root/'frozen-model'))
-            frozen_loaded=module.load_candidate(str(root/'frozen-model')) if module else load_adapter(str(root/'frozen-model'))
-            checked_predictions(frozen_loaded.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
-                                request.get('prediction_kind','value'))
+    inspection_context = replace(context,validation_y=y.iloc[b]) if request.get('native_holdout') else context
+    report_path=root/'execution-report.json'
+    report=audit_fit(model,config.get('model_params',{}),config,inspection_context,report_path,stage='smoke')
+    frozen=report['exported_params']
+    frozen_config=dict(config,model_params=frozen,stopping_policy='fixed',component_stopping_policies={})
+    frozen_model=module.create_candidate(copy.deepcopy(frozen_config)) if module else LibraryCandidate(copy.deepcopy(frozen_config))
+    frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),
+                           time_limit_seconds=max(1,request['worker_seconds']*.25),fit_rows=len(X))
+    Path(frozen_context.work_dir).mkdir(parents=True,exist_ok=True)
+    frozen_model.fit(X,y,frozen_context)
+    recreated=audit_fit(frozen_model,frozen,frozen_config,frozen_context,root/'recreated-report.json',stage='smoke_recreate')
+    errors=compare_roundtrip(report,recreated)
+    if not request.get('native_holdout') and config.get('tool_id') not in {'flaml','autogluon','lightautoml'}:
+        left=np.asarray(model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}))
+        right=np.asarray(frozen_model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}))
+        same=np.array_equal(left,right)
+        if not same and np.issubdtype(left.dtype,np.number) and np.issubdtype(right.dtype,np.number):
+            same=np.allclose(left,right,rtol=1e-6,atol=1e-8)
+        if not same:errors.append('export/recreate changes predictions with the same data and seed')
+    report['roundtrip']='failed' if errors else 'passed'
+    report['errors'].extend(errors)
+    report['status']='failed' if errors else 'passed'
+    from .persistence import atomic_json
+    atomic_json(report_path,report)
+    if errors:raise FidelityError(report,report_path)
+    (root/'frozen-model').mkdir(parents=True,exist_ok=True)
+    frozen_model.save(str(root/'frozen-model'))
+    frozen_loaded=module.load_candidate(str(root/'frozen-model')) if module else load_adapter(str(root/'frozen-model'))
+    checked_predictions(frozen_loaded.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
+                        request.get('prediction_kind','value'))
     kinds = [request.get('prediction_kind','value')]
     for prediction in kinds: checked_predictions(model.predict(X.iloc[:5],{'kind':prediction}),5,prediction)
     (root/'model').mkdir(parents=True,exist_ok=True)
@@ -164,7 +201,7 @@ def smoke(request, root):
         if original.shape != after.shape or not np.array_equal(original,after):
             if not np.issubdtype(original.dtype,np.number) or not np.allclose(original,after):
                 raise ValueError('Model save/load changes predictions')
-    return {'status':'completed'}
+    return {'status':'completed','execution_report':report,'execution_report_ref':str(report_path)}
 
 
 def train(request, root):
@@ -190,6 +227,8 @@ def train(request, root):
     frame = read_table(request['train_path'],table_format=context.table_formats.get(request['train_path']))
     X,y = features(frame,context), targets(frame,context)
     groups = group_keys(frame,context.task.group_columns)
+    from .splitting import validation_groups
+    fit_groups=groups if context.task.task_type=='ranking' else validation_groups(frame,context)
     weights = frame[context.task.weight_column].to_numpy() if context.task.weight_column else None
     kind = prediction_kind(context.task.primary_metric,context.task.task_type)
     unsupervised = context.task.task_type in {'clustering','anomaly_detection'}
@@ -199,7 +238,7 @@ def train(request, root):
     started = time.monotonic()
     best_model = None
     search_result = {}
-    config = plan.model_dump(mode='json')
+    config = dict(plan.model_dump(mode='json'),_code_hash=request.get('code_hash'))
     window_path = root/'training-window.json'
     timed=request.get('timeouts_enabled',True)
     if not window_path.exists():
@@ -224,6 +263,9 @@ def train(request, root):
             remaining_seconds=max(0.,min(details.get('remaining_seconds',fit_budget),fit_budget-(time.monotonic()-started))),
             remaining_trials=details.get('remaining_trials',max(0,min(plan.max_trials,request.get('hpo_max_trials',15))-len(trials))) if plan.strategy=='optuna' else 0,
             default_action=details.get('default_action','continue' if plan.strategy=='optuna' else 'refit'),error=error)
+        checkpoint=checkpoint.model_copy(update=dict(score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
+            outer_split_id=request.get('outer_split_id'),validation_protocol_ref=protocol_ref,
+            metric_options=context.metric_options,weighting='sample_weight' if weights is not None else 'unweighted'))
         if not request.get('training_control'):
             return fallback(checkpoint,'Programmatic policy')
         decision=worker_checkpoint(root,checkpoint,seconds=request.get('training_control_seconds',30) if request.get('timeouts_enabled',True) else None)
@@ -231,7 +273,11 @@ def train(request, root):
         return decision
 
     def save_progress(model, params, score, reason):
-        params=model.export_model_params() if hasattr(model,'export_model_params') else params
+        from .execution import audit_fit
+        report_path=root/'execution-report.json'
+        report=audit_fit(model,params,dict(config,stopping_policy='fixed',component_stopping_policies={}),
+                         c_final,report_path,stage='full_refit',protocol_ref=protocol_ref)
+        params=report['exported_params']
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
         artifact.mkdir(parents=True)
         model.save(str(artifact))
@@ -243,13 +289,17 @@ def train(request, root):
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
             best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
             study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[]),
-            full_refit=True,validation_protocol_ref=protocol_ref,**best_details))
+            full_refit=True,validation_protocol_ref=protocol_ref,execution_report=report,
+            execution_report_ref=str(report_path),score_kind=('not_applicable' if score is None else
+                'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),**best_details))
 
     if request.get('fixed'):
         if fit_budget <= .2: raise TimeoutError('Original training deadline reached before fixed refit')
-        model = module.create_candidate(config)
-        c = fit_context(context,request,work_dir=root/'fixed',groups=groups,weights=weights,seconds=fit_budget)
+        model = module.create_candidate(copy.deepcopy(config))
+        c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
+        c.fit_rows=len(X)
         model.fit(X,None if unsupervised else y,c)
+        c_final=c
         if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')
         save_progress(model,best_params,None,'fixed_configuration')
     else:
@@ -279,7 +329,10 @@ def train(request, root):
             t0 = time.monotonic()
             trial_number=number if number is not None else len(trials)
             trial=TrialResult(number=trial_number,params=params,status='running',duration_seconds=0,
-                kind='native_run' if plan.strategy=='native' else plan.strategy,validation_protocol_ref=protocol_ref)
+                kind='native_run' if plan.strategy=='native' else plan.strategy,validation_protocol_ref=protocol_ref,
+                score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
+                outer_split_id=request.get('outer_split_id'),metric_options=context.metric_options,
+                weighting='sample_weight' if weights is not None else 'unweighted')
             trials.append(trial)
             trial_root=root/f'trial-{trial_number}'
             trial_root.mkdir(exist_ok=True)
@@ -291,28 +344,36 @@ def train(request, root):
                     a,b=np.asarray(fold['train_indices']),np.asarray(fold['validation_indices'])
                     remaining=until-time.time()
                     if remaining <= .2: raise TimeoutError('Internal validation deadline reached')
-                    model = module.create_candidate(dict(config,model_params=params))
+                    model = module.create_candidate(copy.deepcopy(dict(config,model_params=params)))
                     holdout=protocol['strategy']=='holdout'
                     c=fit_context(context,request,work_dir=trial_root/f"fold-{fold['number']}",
                         X_valid=X.iloc[b] if holdout else None,
                         y_valid=y.iloc[b] if holdout and not unsupervised else None,
-                        groups=groups[a] if groups is not None else None,
+                        groups=fit_groups[a] if fit_groups is not None else None,
                         validation_groups=groups[b] if holdout and groups is not None else None,
                         validation_weight=weights[b] if holdout and weights is not None else None,
                         weights=weights[a] if weights is not None else None,
                         seconds=remaining/(protocol['n_splits']-fold['number']))
                     fold_started=time.monotonic()
+                    c.fit_rows=len(a)
                     model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
+                    from .execution import audit_fit
+                    fit_report=audit_fit(model,params,config,c,trial_root/f"fold-{fold['number']}-execution.json",
+                        stage='inner_fold',protocol_ref=protocol_ref)
                     prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
                     score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
                         groups=groups[b] if groups is not None else None,weights=weights[b] if weights is not None else None)
                     if time.time() >= until: raise TimeoutError('Internal fold exceeded validation deadline')
                     trial.fold_results.append(dict(number=fold['number'],score=score,status='completed',
-                        duration_seconds=time.monotonic()-fold_started))
+                        duration_seconds=time.monotonic()-fold_started,execution_status=fit_report['status'],
+                        execution_report_ref=str(trial_root/f"fold-{fold['number']}-execution.json"),
+                        actual_components={name:{key:item.get(key) for key in ('backend','completed_iterations','retained_trees','stopping_reason')}
+                                           for name,item in fit_report['components'].items()},
+                        score_kind='inner_fold',weighting='sample_weight' if weights is not None else 'unweighted'))
                     trial.duration_seconds=time.monotonic()-t0
                     atomic_json(root/'trials.json',trials)
                     predictions.append(prediction);positions.extend(b.tolist())
-                    if holdout and hasattr(model,'export_model_params'):selected_params=model.export_model_params()
+                    if holdout:selected_params=fit_report['exported_params']
                 if plan.strategy=='native' and not selected_params.get('__native_frozen'):
                     raise ValueError('Native AutoML must export a frozen configuration for search-free refit')
                 order=np.argsort(positions);indices=np.asarray(positions)[order]
@@ -340,6 +401,9 @@ def train(request, root):
                 return score
             except optuna.TrialPruned: raise
             except Exception as error:
+                from .execution import FidelityError
+                if isinstance(error,FidelityError):
+                    atomic_json(root/'last-fidelity-failure.json',error.report)
                 trial.status='failed';trial.score=None;trial.error=str(error)[:2000];trial.duration_seconds=time.monotonic()-t0
                 atomic_json(root/'trials.json',trials)
                 if plan.strategy!='optuna':control('failure',error=str(error)[:2000])
@@ -366,7 +430,12 @@ def train(request, root):
                 duration_seconds=t['duration_seconds'],error=t.get('error'))) for t in search_result['trials']]
             atomic_json(root/'trials.json',trials)
             successful=[t for t in trials if t.status=='completed']
-            if not successful:raise ValueError('No successful internal trial')
+            if not successful:
+                failure_path=root/'last-fidelity-failure.json'
+                if failure_path.exists():
+                    from .execution import FidelityError
+                    raise FidelityError(json.loads(failure_path.read_text(encoding='utf-8')),failure_path)
+                raise ValueError('No successful internal trial: '+'; '.join(t.error or '' for t in trials)[-2500:])
             winner=(min if context.task.metric_direction=='minimize' else max)(successful,key=lambda t:t.score)
             chosen=json.loads((root/f'trial-{winner.number}'/'selection.json').read_text(encoding='utf-8'))
             if chosen['protocol']!=protocol or chosen['score']!=winner.score:
@@ -377,9 +446,11 @@ def train(request, root):
         else: control('initial_fit')  # Reuse the completed trial and any committed decision.
         if best_score is None: raise ValueError('No successful internal trial')
         if deadline-time.time() <= .2: raise TimeoutError('No time for mandatory full-train refit')
-        model = module.create_candidate(dict(config,model_params=best_params))
-        model.fit(X,None if unsupervised else y,fit_context(context,request,work_dir=root/'refit-round',
-            groups=groups,weights=weights,seconds=deadline-time.time()))
+        model = module.create_candidate(copy.deepcopy(dict(config,model_params=best_params)))
+        c_final=fit_context(context,request,work_dir=root/'refit-round',
+            groups=fit_groups,weights=weights,seconds=deadline-time.time())
+        c_final.fit_rows=len(X)
+        model.fit(X,None if unsupervised else y,c_final)
         if time.time() >= deadline: raise TimeoutError('Full-train refit exceeded original deadline')
         save_progress(model,best_params,best_score,search_result.get('stop_reason') or
                       ('training_agent_stop' if control_action=='stop' else 'completed'))
@@ -468,8 +539,8 @@ def main():
         else: raise ValueError(f'Unknown worker action: {action}')
         atomic_json(root/'result.json',result)
         faulthandler.cancel_dump_traceback_later()
-    except Exception:
-        atomic_json(root/'result.json',dict(status='failed',error=traceback.format_exc()[-8000:]))
+    except Exception as exc:
+        atomic_json(root/'result.json',failure_result(exc,root))
         sys.exit(1)
 
 

@@ -73,6 +73,7 @@ import cloudpickle
 from sklearn.ensemble import VotingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
 class Candidate:
+    def fitted_components(self):return dict(zip(['linear','ridge'],self.model.estimators_))
     def fit(self,X,y,context):
         self.model=VotingRegressor([('linear',LinearRegression()),('ridge',Ridge(alpha=1.))],n_jobs=1)
         self.model.fit(X,y)
@@ -90,7 +91,7 @@ def load_candidate(path):
             (code/'candidate.py').write_text(source,encoding='utf-8')
             (code/'preprocessing.py').unlink()
             request.update(timeouts_enabled=False,worker_seconds=.001,code_hash=tree_hash(code))
-            request['plan'].update(skill_ids=['sklearn','ensembles'],ensemble_components=[{'tool_id':'sklearn'},{'tool_id':'sklearn'}])
+            request['plan'].update(skill_ids=['sklearn','ensembles'],ensemble_components=[{'name':'linear','tool_id':'sklearn'},{'name':'ridge','tool_id':'sklearn'}])
             result=train(request,job)
             self.assertTrue(result['full_refit'])
             self.assertEqual(len(result['fold_results']),5)

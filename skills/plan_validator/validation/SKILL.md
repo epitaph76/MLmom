@@ -13,3 +13,5 @@ Only operations needing OOF predictions should create folds inside X/y. Single-l
 Fit transforms, resampling and target statistics within each training fold. Fill OOF values at original row positions exactly once. Slice groups/weights with indices. Verify both sides support the metric; do not silently weaken validation to make a fit succeed.
 
 Multilabel needs per-label coverage checks; single-label stratification cannot handle its matrix. Define constant-label behavior. Temporal data needs chronological splits, but current MLmom rejects time_column/forecasting tasks: report deferred support, never substitute random CV.
+
+Reject a narrative duplicate-aware protocol unless confirmed duplicate_policy=group_features. validation_protocol must match the immutable task. Require full export/recreate and fitted component inspection; plan stopping_policy and component policies must be executable with the confirmed validation. A single-change ablation freezes Champion config/hash without additional HPO. Flat ensemble search keys need parameter_routes. Machine execution admission is independent of this advisory source review.

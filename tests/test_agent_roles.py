@@ -40,7 +40,9 @@ class RoleSkillTests(unittest.TestCase):
                     return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['invented'])
                 return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['r2-score'])
         for comparable,expected in [(True,'supported'),(False,'inconclusive')]:
-            report=review_result(Reviewer(),dict(comparable_reference=comparable,evidence_refs=['r2-score']),cards,'review',1)
+            evaluation=dict(score_kind='outer_holdout',dataset_hash='data',split_id='r2',metric='rmse',direction='minimize',metric_options={},weighting='unweighted',score=.9)
+            reference=dict(evaluation,score=1) if comparable else None
+            report=review_result(Reviewer(),dict(evaluation=evaluation,execution_report={'status':'passed'},comparable_reference=reference,evidence_refs=['r2-score']),cards,'review',1)
             self.assertEqual(report.effect,expected)
             self.assertEqual(report.implementation,'matches')
         report=review_result(Reviewer(),dict(invent_reference=True,evidence_refs=['r2-score']),cards,'review',1)

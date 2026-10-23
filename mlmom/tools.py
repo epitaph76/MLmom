@@ -13,6 +13,12 @@ from .pipeline_contracts import ToolResult, ValidationReport
 from .tracing import span, emit
 
 
+class ToolInputError(ValueError):
+    def __init__(self, message, *, code='invalid_arguments', fields=(), hint=None, artifacts=()):
+        super().__init__(message)
+        self.code, self.fields, self.hint, self.artifacts = code, list(fields), hint, list(artifacts)
+
+
 class ToolSet:
     def __init__(self):
         self.tools = {}
@@ -46,6 +52,9 @@ class ToolSet:
             return ToolResult(status='ok', data=result, duration_seconds=time.monotonic()-start)
         except Exception as error:
             return ToolResult(status='error', error=f'{type(error).__name__}: {str(error)[:2500]}',
+                              error_code=getattr(error,'code',type(error).__name__),
+                              field_errors=getattr(error,'fields',[]), hint=getattr(error,'hint',None),
+                              artifacts=getattr(error,'artifacts',[]),
                               duration_seconds=time.monotonic()-start)
 
 
@@ -116,7 +125,7 @@ class Workspace:
 
 FORBIDDEN = {'os','subprocess','socket','requests','httpx','urllib','ftplib','pip','ctypes','multiprocessing',
              'psutil','sqlite3','keyring','shutil'}
-ALLOWED = {'mlmom','numpy','pandas','scipy','sklearn','catboost','lightgbm','xgboost','flaml','autogluon',
+ALLOWED = {'__future__','mlmom','numpy','pandas','scipy','sklearn','catboost','lightgbm','xgboost','flaml','autogluon',
            'lightautoml','statsmodels','torch','imblearn','category_encoders','feature_engine','optuna',
            'polars','pyarrow','joblib','cloudpickle','math','statistics','typing','collections','functools',
            'itertools','dataclasses','pathlib','json','re','time','random','copy','warnings','pickle'}

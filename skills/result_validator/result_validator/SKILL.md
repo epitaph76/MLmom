@@ -54,3 +54,8 @@ Internal arithmetic mean, fold dispersion and pooled OOF metric are different
 evidence; none replaces the current external holdout comparison. The reference
 champion must be refitted with saved parameters on the same cycle train. A
 failed incumbent recheck or incomplete fold protocol leaves effect inconclusive.
+
+## Machine provenance and metric meaning
+execution_report is authoritative. A failed gate means implementation=mismatch and effect=inconclusive; a finite score cannot override it. Missing provenance is unknown, never proof of a completed intervention. Read actual iterations, retained trees, effective parameters, stopping reason and export/recreate result.
+
+Regression slices expose mae/rmse and mean_residual, defined as y_true-y_pred. Positive residual means underprediction; MAE has no direction. Classification uses error_rate; multilabel uses hamming_loss. Diagnostic weighting is explicit. score_kind distinguishes inner_cv_mean, inner_oof and outer_holdout. Only a reference with the same dataset/split, metric/options/direction and weighting is comparable; Python supplies relative_gain only for that case. Historical values are not current baselines.

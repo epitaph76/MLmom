@@ -32,6 +32,10 @@ def cases(reports, sha, mode):
             if (r.get('mode')!=mode or r.get('environment')!='linux/docker' or v.get('status')!='passed'
                     or v.get('completed_cycles',0)<3 or not v.get('generated_path') or not v.get('relocated_model_equal')):
                 check=dict(status='failed',reason='Missing Linux/generated/three-cycle/relocation evidence',report=r)
+            if not v.get('execution_fidelity_verified') or not v.get('final_full_refit'):
+                check=dict(status='failed',reason='Missing verified execution/final full refit evidence',report=r)
+            if mode=='real' and not v.get('observation_handoff_verified'):
+                check=dict(status='failed',reason='Saved observation handoff was not verified in actual provider requests',report=r)
             if mode=='real' and (r.get('diagnostic_api') or r.get('model')!='qwen/qwen3.8-27b'):
                 check=dict(status='failed',reason='Required non-diagnostic Qwen run not verified',report=r)
         checks[name]=check
@@ -90,7 +94,7 @@ def main():
     report.update(created_utc=datetime.now(timezone.utc).isoformat(),base_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),package=info,
         environment_limits=['Docker image approximates provided dependencies; organizer infrastructure is not verified.',
                             'Offline LLM is an external test fixture; production runtime has no offline fallback.',
-                            'Timeouts are opt-in. The bounded Qwen acceptance procedure explicitly enables a 1800-second limit per task, including attempts and verification.'])
+                            'Timeout policy is recorded per case; timeouts_enabled=false has no wall-clock acceptance deadline.'])
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
     print(json.dumps(dict(status=report['status'],sha256=info['sha256'],checks={k:v['status'] for k,v in report['checks'].items()})))

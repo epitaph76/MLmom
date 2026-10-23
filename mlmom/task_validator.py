@@ -204,16 +204,11 @@ class TaskValidator:
 
     def _validate_metric_options(self, task: TaskDefinition, add: Any) -> None:
         metric=_normalise_metric(task.primary_metric)
-        allowed={
-            'ndcg':{'k'},'map':{'k'},'mean_average_precision':{'k'},'mrr':{'k'},
-            'roc_auc':{'average','multi_class','max_fpr'},'auc':{'average','multi_class','max_fpr'},
-            'log_loss':set(),'silhouette':{'sample_size','random_state','metric'},
-            'average_precision':{'average','pos_label'},'precision':{'average','pos_label'},'recall':{'average','pos_label'},
-            'f1':{'average','pos_label'},'f1_macro':{'average'},'macro_f1':{'average'},'f1_micro':{'average'},
-            'micro_f1':{'average'},'f1_weighted':{'average'},'weighted_f1':{'average'},
-            'rmse':{'multioutput'},'mse':{'multioutput'},'mae':{'multioutput'},'r2':{'multioutput'},
-        }.get(metric,set())
-        if set(task.metric_options)-allowed:add('unsupported_metric_options','Unsupported metric arguments.',field='metric_options')
+        from .metric_contracts import METRIC_OPTIONS
+        allowed=METRIC_OPTIONS.get(metric,set())
+        if set(task.metric_options)-allowed:
+            add('unsupported_metric_options',f'Unsupported metric arguments for {metric}; allowed keys: {sorted(allowed)}. RMSE already includes the square root.',
+                field='metric_options',expected=sorted(allowed),actual=sorted(task.metric_options))
         try:json.dumps(task.metric_options,allow_nan=False)
         except (TypeError,ValueError):add('invalid_metric_option','Metric arguments must be finite JSON values.',field='metric_options')
         for key in ['k','sample_size']:

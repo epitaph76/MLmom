@@ -77,8 +77,10 @@ class DecisionSkillCardTests(unittest.TestCase):
 
     def test_result_support_requires_known_evidence_and_comparable_reference(self):
         skills = self.registry.load([], 'regression', role='result_validator')
-        payload = dict(evidence_refs=['evaluation:candidate'],
-                       comparable_reference={'split_id': 'same-split', 'score': 1.0})
+        evaluation=dict(score_kind='outer_holdout',dataset_hash='data',split_id='same-split',score=.9,
+                        metric='rmse',metric_options={},direction='minimize',weighting='unweighted')
+        payload = dict(evidence_refs=['evaluation:candidate'],execution_report={'status':'passed'},evaluation=evaluation,
+                       comparable_reference=dict(evaluation,score=1.0))
         good = ResultClient()
         supported = review_result(good, payload, skills, 'good', 1)
         self.assertTrue(good.seen_skill)

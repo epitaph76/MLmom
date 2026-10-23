@@ -160,11 +160,25 @@ def score_predictions(y, prediction, context: TaskContext, *, X=None, groups=Non
     return result
 
 
+def error_metrics(y, prediction, task_type):
+    truth,pred=np.asarray(y),np.asarray(prediction)
+    if 'regression' in task_type:
+        residual=truth-pred
+        return dict(mae=float(np.abs(residual).mean()),rmse=float(np.sqrt(np.square(residual).mean())),
+                    mean_residual=float(residual.mean()),residual_definition='y_true - y_pred',
+                    positive_residual_means='underprediction',weighting='unweighted',
+                    aggregation='mean_over_rows_and_targets' if residual.ndim>1 else 'mean_over_rows')
+    key='hamming_loss' if task_type == 'multilabel_classification' else 'error_rate'
+    return {key:float(np.mean(truth != pred)), 'weighting':'unweighted'}
+
+
 def diagnostics(y, prediction, context: TaskContext, *, X=None) -> dict:
     if y is None:
         labels, counts = np.unique(prediction, return_counts=True)
         return {'cluster_sizes': dict(zip(map(str, labels), map(int, counts)))}
-    if 'classification' in context.task.task_type and np.asarray(y).ndim == 1:
+    if context.task.task_type == 'multilabel_classification':
+        result=error_metrics(y,prediction,context.task.task_type)
+    elif 'classification' in context.task.task_type and np.asarray(y).ndim == 1:
         if np.asarray(prediction).ndim!=1:return {}
         result={'classification_report': m.classification_report(y, prediction, output_dict=True, zero_division=0),
                 'confusion_matrix': m.confusion_matrix(y, prediction, labels=context.classes).tolist(),
@@ -176,6 +190,7 @@ def diagnostics(y, prediction, context: TaskContext, *, X=None) -> dict:
                 'mean_residual': float(np.mean(error))}
         row_error=np.abs(error) if error.ndim==1 else np.abs(error).mean(axis=1)
     else:return {}
+    result.update(error_metrics(y,prediction,context.task.task_type))
     slices=[]
     if X is not None:
         for column in X.select_dtypes(include='number').columns[:3]:
@@ -183,7 +198,8 @@ def diagnostics(y, prediction, context: TaskContext, *, X=None) -> dict:
             except ValueError:continue
             for quantile in range(4):
                 mask=bins==quantile
-                if mask.sum()>=20:slices.append({'feature':column,'quantile':quantile+1,'rows':int(mask.sum()),'mean_error':float(np.mean(row_error[mask]))})
+                if mask.sum()>=20:slices.append(dict(feature=column,quantile=quantile+1,rows=int(mask.sum()),
+                    **error_metrics(np.asarray(y)[mask],np.asarray(prediction)[mask],context.task.task_type)))
     result['safe_slices']=slices
     return result
 
@@ -195,14 +211,23 @@ def better(new: float, old: float, direction: str, delta=0.) -> bool:
 
 def compact_diagnostics(value):
     """Keep numerical evidence in prompts; full matrices remain in artifacts."""
-    result={k:v for k,v in value.items() if k in {'artifact_ref','absolute_error_quantiles','mean_residual','cluster_sizes'}}
+    result={k:v for k,v in value.items() if k in {'artifact_ref','absolute_error_quantiles','mae','rmse','mean_residual',
+        'residual_definition','positive_residual_means','weighting','error_rate','hamming_loss','cluster_sizes'}}
     report=value.get('classification_report',{})
     classes=[(k,v) for k,v in report.items() if isinstance(v,dict) and k not in {'macro avg','weighted avg','micro avg'}]
     if classes:result['worst_classes']=dict(sorted(classes,key=lambda item:item[1].get('f1-score',0))[:5])
     if 'macro avg' in report:result['macro_average']=report['macro avg']
-    result['worst_slices']=sorted(value.get('safe_slices',[]),key=lambda row:-row['mean_error'])[:6]
+    def normalize(row):
+        row=dict(row)
+        if 'mean_error' in row:
+            # Old regression diagnostics identify their kind via mean_residual.
+            key='mae' if 'mean_residual' in value else 'error_rate' if 'classification_report' in value else 'unknown_legacy_error'
+            row[key]=row.pop('mean_error')
+        return row
+    def magnitude(row):return next((row[k] or 0 for k in ('mae','error_rate','hamming_loss','unknown_legacy_error') if k in row),0)
+    result['worst_slices']=sorted((normalize(row) for row in value.get('safe_slices',[])),key=lambda row:-magnitude(row))[:6]
     slices=value.get('research_slices',[])
-    result['research_slices']=sorted(slices,key=lambda row:-(row.get('mean_error') or 0))[:12]
+    result['research_slices']=sorted((normalize(row) for row in slices),key=lambda row:-magnitude(row))[:12]
     inspection=value.get('model_inspection',{})
     for key in ['feature_importance','permutation_importance','contributions']:
         data=inspection.get(key)
@@ -215,6 +240,8 @@ def compact_diagnostics(value):
 
 def evaluate(experiment_id: str, split_id: str, y, prediction, context: TaskContext, *, X=None, groups=None, weights=None, label_prediction=None, reference_X=None, reference_y=None) -> EvaluationResult:
     result=EvaluationResult(experiment_id=experiment_id, split_id=split_id,
+        score_kind='outer_holdout',dataset_hash=context.dataset_hash,metric_options=context.metric_options,
+        weighting='sample_weight' if weights is not None else 'unweighted',
         metric=metric_name(context.task.primary_metric), direction=context.task.metric_direction,
         score=score_predictions(y, prediction, context, X=X, groups=groups,weights=weights),
         diagnostics=diagnostics(y, label_prediction if label_prediction is not None else prediction, context, X=X))
@@ -223,3 +250,14 @@ def evaluate(experiment_id: str, split_id: str, y, prediction, context: TaskCont
         X,reference_X,reference_y,context.task.task_type)
     if slices:result.diagnostics['research_slices']=slices
     return result
+
+
+def comparable_scores(candidate, reference):
+    keys=('score_kind','dataset_hash','split_id','metric','metric_options','direction','weighting')
+    return bool(reference) and all(candidate.get(key)==reference.get(key) for key in keys) and bool(candidate.get('dataset_hash'))
+
+
+def relative_gain(candidate, reference):
+    if not comparable_scores(candidate,reference): return None
+    delta = reference['score']-candidate['score'] if candidate['direction']=='minimize' else candidate['score']-reference['score']
+    return delta/max(abs(reference['score']),1e-12)

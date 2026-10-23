@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, GroupShuffleSplit, KFold, StratifiedKFold, GroupKFold
+from sklearn.model_selection import train_test_split, GroupShuffleSplit, KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
 from .pipeline_contracts import SplitSpec, TaskContext
 from .inputs import targets
 
@@ -17,14 +17,42 @@ def group_keys(frame: pd.DataFrame, columns: list[str]):
     return pd.util.hash_pandas_object(frame[columns], index=False).to_numpy().astype(str)
 
 
+def validation_groups(frame, context):
+    """Connected components satisfy both explicit groups and feature-duplicate constraints."""
+    groups = group_keys(frame,context.task.group_columns)
+    if context.task.duplicate_policy == 'allow': return groups
+    columns = [c for c in context.feature_columns if c not in context.task.id_columns+context.task.target_columns]
+    if not columns: raise ValueError('duplicate_policy=group_features requires feature columns')
+    duplicate_codes = pd.factorize(pd.MultiIndex.from_frame(frame[columns]))[0]
+    parent = np.arange(len(frame))
+    def find(item):
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+    for labels in ([duplicate_codes] if groups is None else [duplicate_codes,groups]):
+        first = {}
+        for i,label in enumerate(labels):
+            if label in first:
+                a,b = find(i),find(first[label])
+                parent[max(a,b)] = min(a,b)
+            else: first[label] = i
+    return np.array([str(find(i)) for i in range(len(frame))])
+
+
 def split_indices(frame: pd.DataFrame, context: TaskContext, fraction: float, seed: int):
     if context.task.time_column or context.task.task_type == 'time_series_forecasting':
         raise ValueError('deferred_time_series_support')
-    groups = group_keys(frame, context.task.group_columns)
+    groups = validation_groups(frame,context)
     index = np.arange(len(frame))
     y = targets(frame, context)
     if groups is not None:
-        a, b = next(GroupShuffleSplit(n_splits=1, test_size=fraction, random_state=seed).split(index, groups=groups))
+        if len(np.unique(groups)) < 2: raise ValueError('Insufficient independent groups for holdout')
+        classification = context.task.task_type in {'binary_classification','multiclass_classification'}
+        candidates = GroupShuffleSplit(n_splits=32 if classification else 1,test_size=fraction,random_state=seed).split(index,groups=groups)
+        for a,b in candidates:
+            if not classification or (set(np.asarray(y)[a]) == set(np.asarray(y)) and set(np.asarray(y)[b]) == set(np.asarray(y))): break
+        else: raise ValueError('Insufficient class coverage in group-aware holdout')
         strategy = 'group_shuffle'
     elif context.task.task_type == 'multilabel_classification':
         labels = np.asarray(y, dtype=int)
@@ -80,16 +108,16 @@ def make_split(frame: pd.DataFrame, context: TaskContext, round_id: str, fractio
 
 def inner_protocol(frame, context, *, fraction=.2, seed=43, outer_split_id=None, source_indices=None):
     """Indices are positional, independent of pandas labels and user ID columns."""
-    strategy = context.task.validation_strategy.value
+    strategy = str(context.task.validation_strategy)
     count = context.task.validation_folds
     index = np.arange(len(frame))
     source = np.asarray(source_indices if source_indices is not None else index, dtype=int)
     if len(source) != len(frame) or len(np.unique(source)) != len(source):
         raise ValueError('Invalid outer training index mapping')
-    groups = group_keys(frame, context.task.group_columns)
+    groups = validation_groups(frame,context)
     y = targets(frame, context)
     classification = context.task.task_type in {'binary_classification', 'multiclass_classification'}
-    if groups is not None and strategy not in {'holdout', 'group_kfold'}:
+    if context.task.group_columns and strategy not in {'holdout', 'group_kfold'}:
         raise ValueError('Grouped data requires group_kfold or a group-aware holdout')
     if strategy == 'holdout':
         a, b, implementation = split_indices(frame, context, fraction, seed)
@@ -106,15 +134,23 @@ def inner_protocol(frame, context, *, fraction=.2, seed=43, outer_split_id=None,
                 raise ValueError('StratifiedKFold requires a single classification target')
             if pd.Series(np.asarray(y)).value_counts().min() < count:
                 raise ValueError('Insufficient examples of a rare class for validation_folds')
-            pairs = StratifiedKFold(n_splits=count, shuffle=True, random_state=seed).split(index, y)
+            if groups is not None:
+                if len(np.unique(groups)) < count: raise ValueError('Insufficient independent groups for validation_folds')
+                pairs = StratifiedGroupKFold(n_splits=count,shuffle=True,random_state=seed).split(index,y,groups)
+            else: pairs = StratifiedKFold(n_splits=count, shuffle=True, random_state=seed).split(index, y)
         elif strategy == 'kfold':
             if classification:
                 raise ValueError('Classification requires stratified_kfold or holdout')
-            pairs = KFold(n_splits=count, shuffle=True, random_state=seed).split(index)
+            if groups is not None:
+                if len(np.unique(groups)) < count: raise ValueError('Insufficient independent groups for validation_folds')
+                pairs = GroupKFold(n_splits=count).split(index,y,groups)
+            else: pairs = KFold(n_splits=count, shuffle=True, random_state=seed).split(index)
         else:
             raise ValueError(f'Unsupported internal validation strategy: {strategy}')
         pairs = list(pairs)
         implementation = strategy
+        if context.task.duplicate_policy == 'group_features' and strategy in {'kfold','stratified_kfold'}:
+            implementation = 'stratified_group_kfold' if classification else 'group_kfold'
     folds = []
     all_classes = set(np.asarray(y)) if classification else None
     for number, (a, b) in enumerate(pairs):
@@ -127,6 +163,7 @@ def inner_protocol(frame, context, *, fraction=.2, seed=43, outer_split_id=None,
         folds.append(dict(number=number, train_indices=a.tolist(), validation_indices=b.tolist(),
                           source_train_indices=source[a].tolist(), source_validation_indices=source[b].tolist()))
     return dict(version=1, strategy=strategy, implementation=implementation, seed=seed,
+                duplicate_policy=context.task.duplicate_policy,
                 n_splits=len(folds), validation_folds=count if strategy != 'holdout' else None,
                 fraction=fraction if strategy == 'holdout' else None, aggregation='mean_fold_score',
                 std_ddof=0, dataset_hash=context.dataset_hash, outer_split_id=outer_split_id, folds=folds)

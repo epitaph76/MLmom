@@ -74,3 +74,10 @@ search_space uses typed dictionaries, never grid lists. Example:
  "num_leaves":{"type":"int","low":15,"high":63},
  "boosting_type":{"type":"categorical","choices":["gbdt"]}}
 Only include dimensions actually consumed by the candidate.
+
+## Executable evidence contracts
+Champion.configuration_hash/model_params and its actual plan are authoritative. original_hypothesis is historical prose; do not copy its old score or configuration. For lineage based on current Champion use its configuration_hash as base_config_hash. A preprocessing-only single-change ablation uses change_kind=single_change_ablation: runtime inherits all Champion parameters and disables HPO. Use change_kind=experiment for a bundled intervention or additional tuning.
+
+validation_protocol must match confirmed strategy/folds/duplicate_policy. duplicate_policy=group_features is a real runner protocol; prose cannot enable it after task confirmation. Do not promise unsupported component ablations as completed tests.
+
+Declare stopping_policy=fixed (default), or early_stopping only with confirmed holdout; component_stopping_policies overrides named ensemble components. Ensembles name each component (name, or unique tool_id) and use parameter_routes to route EVERY flat search_space parameter to its fitted component name. The coder must export the complete configuration and expose all fitted components. Unexpected truncation or incomplete export blocks this candidate before comparison.

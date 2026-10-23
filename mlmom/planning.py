@@ -1,6 +1,8 @@
 """Hypothesis planning subgraph and deterministic plan validation."""
 from __future__ import annotations
 
+from .agents import GlobalAPIError
+
 from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 from .pipeline_contracts import (HypothesisBatch, PlanBatch, HypothesisPlan, ValidationReport,
@@ -14,6 +16,19 @@ from .tracing import bind, emit
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
                   *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
+    expected_protocol=dict(strategy=str(context.task.validation_strategy),folds=context.task.validation_folds,
+                           duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
+    if plan.validation_protocol and plan.validation_protocol != expected_protocol:
+        errors.append('Declared validation_protocol differs from the confirmed runner protocol')
+    text=' '.join([plan.hypothesis.description,plan.hypothesis.rationale,*plan.preprocessing]).lower()
+    if ('duplicate-aware' in text or 'duplicate aware' in text) and getattr(context.task,'duplicate_policy','allow') != 'group_features':
+        errors.append('duplicate-aware validation requires confirmed duplicate_policy=group_features; narrative cannot change the protocol')
+    if plan.stopping_policy=='early_stopping' and str(context.task.validation_strategy)!='holdout':
+        errors.append('early_stopping requires the confirmed holdout strategy; CV has no stopping validation set')
+    if any(v=='early_stopping' for v in plan.component_stopping_policies.values()) and str(context.task.validation_strategy)!='holdout':
+        errors.append('Component early_stopping requires holdout')
+    if plan.change_kind=='single_change_ablation' and (plan.strategy!='single' or plan.search_space):
+        errors.append('Single-change ablation must freeze model parameters without additional HPO')
     tool = tools.get(plan.tool_id)
     if not tool or not tool.available: errors.append(f'Tool unavailable: {plan.tool_id}')
     else:
@@ -43,6 +58,8 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     if plan.prediction_kind != prediction_kind(context.task.primary_metric, context.task.task_type):
         errors.append('prediction_kind does not match the primary metric')
     try: skills.load(plan.skill_ids, context.task.task_type)
+    except GlobalAPIError:
+        raise
     except Exception as error: errors.append(f'Skills: {error}')
     for name, spec in plan.search_space.items():
         if not isinstance(spec.get('type'),str) or spec.get('type') not in {'int','float','categorical'}: errors.append(f'Invalid search type: {name}')
@@ -74,6 +91,14 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         if plan.tool_id=='lightautoml' and metric_name(context.task.primary_metric)!=LIGHTAUTOML_OBJECTIVES.get(context.task.task_type):
             errors.append('LightAutoML native objective must match its task: regression=rmse, binary=roc_auc, multiclass=log_loss')
     if plan.ensemble_components:
+        for key in plan.search_space:
+            if key not in plan.parameter_routes:
+                errors.append(f'Flat ensemble HPO parameter {key} requires parameter_routes to a named component')
+        component_names={entry.get('name',entry.get('tool_id')) for entry in plan.ensemble_components}
+        if len(component_names)!=len(plan.ensemble_components):
+            errors.append('Ensemble component names must be unique; add name when using the same backend twice')
+        if set(plan.parameter_routes.values())-component_names:
+            errors.append('parameter_routes names an undeclared ensemble component')
         if len(plan.ensemble_components)<2:errors.append('At least two ensemble components are required')
         if context.task.task_type not in {'regression','multioutput_regression','binary_classification','multiclass_classification','multilabel_classification'}:
             errors.append('Ensemble SDK supports supervised regression/classification')
@@ -244,6 +269,25 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
+                    champion=state['payload'].get('champion')
+                    if champion and item.hypothesis.based_on==champion['candidate_id']:
+                        digest=champion.get('configuration_hash')
+                        if item.base_config_hash and item.base_config_hash != digest:
+                            raise ValueError('base_config_hash differs from the authoritative Champion snapshot')
+                        item.base_config_hash=digest
+                        if item.change_kind=='single_change_ablation':
+                            import copy
+                            if item.tool_id != champion['plan']['tool_id']:
+                                raise ValueError('Single-change preprocessing ablation must retain Champion backend')
+                            item.model_params=copy.deepcopy(champion['model_params'])
+                            item.strategy='single';item.search_space={};item.max_trials=1
+                    elif item.change_kind=='single_change_ablation':
+                        raise ValueError('Single-change ablation requires based_on=current Champion candidate_id')
+                    actual_protocol=dict(strategy=str(context.task.validation_strategy),
+                        folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
+                    if item.validation_protocol and item.validation_protocol != actual_protocol:
+                        raise ValueError('Declared validation_protocol differs from confirmed runner protocol')
+                    item.validation_protocol=actual_protocol
                     normalized=[]
                     for name in ('n_jobs','num_threads','thread_count','num_cpus'):
                         if item.model_params.get(name)==item.cpus:
@@ -314,6 +358,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         continue
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break
+                except GlobalAPIError:
+                    raise
                 except LLMUnavailable as error:
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break

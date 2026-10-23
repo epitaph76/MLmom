@@ -36,6 +36,8 @@ def experiment_summary(run):
     return dict(experiment_id=run['experiment_id'],candidate_id=run.get('candidate_id'),
         round_id=run.get('round_id'),status=run.get('status'),stop_reason=run.get('stop_reason'),
         error=run.get('error'),internal_score=run.get('internal_score'),
+        score_kind=run.get('score_kind','unknown_legacy'),outer_split_id=run.get('split_id'),
+        validation_protocol_ref=run.get('validation_protocol_ref'),
         duration_seconds=run.get('duration_seconds'),best_params=run.get('best_params'),
         trials=dict(total=len(trials),completed=sum(t.get('status')=='completed' for t in trials),
                     failed=sum(t.get('status')=='failed' for t in trials)),
@@ -44,4 +46,18 @@ def experiment_summary(run):
 
 def evaluation_summary(evaluation):
     return {**{k:evaluation[k] for k in ('experiment_id','split_id','metric','direction','score')},
+            **{k:evaluation.get(k) for k in ('score_kind','dataset_hash','metric_options','weighting','validation_protocol_ref')},
             'diagnostics':compact_diagnostics(evaluation.get('diagnostics',{}))}
+
+
+def champion_snapshot(champion):
+    from .execution import config_hash
+    params=champion.run.best_params
+    plan=plan_summary(champion.plan.model_dump(mode='json'))
+    original=plan.pop('hypothesis',None)
+    plan.update(model_params=params,strategy='single',search_space={})
+    return dict(candidate_id=champion.candidate.candidate_id,code_hash=champion.candidate.code_hash,
+        preprocessing_hash=champion.candidate.preprocessing_hash,configuration_hash=config_hash(params),
+        model_params=params,plan=plan,original_hypothesis=original,
+        evaluation=evaluation_summary(champion.evaluation.model_dump()),
+        execution_status=(champion.run.execution_report or {}).get('status','unknown_legacy'))

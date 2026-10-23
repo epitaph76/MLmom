@@ -11,3 +11,5 @@ Start width 32-128, batch 128-512 and bounded epochs. Estimate dense arrays/tens
 Single-label classification uses encoded long targets and raw logits with CrossEntropyLoss, no prior softmax. Binary/multilabel can use float targets with BCEWithLogitsLoss; regression uses MSE/MAE. Apply softmax/sigmoid only at inference; map labels/output columns back to the SDK.
 
 Custom stopping monitors internal validation in eval/no_grad, deep-copies/restores the best state_dict and exports the selected epoch count for fixed refit. Predict in bounded batches. Persist architecture, state_dict, preprocessing and label mapping; load on CPU only from this solution's trusted artifacts. No external checkpoints.
+
+To verify training, call context.track_optimizer(optimizer, batch_size) before the loop. Runtime counts actual optimizer steps and derives complete epochs using fit_rows. Export the complete architecture, optimizer options, batch_size, selected epochs and target/output configuration. Expose self.model, and do not persist FitContext/hooks. Only check remaining_seconds when context.timeouts_enabled; unbounded mode must not truncate training.

@@ -1,3 +1,28 @@
+# Контракты и достоверность экспериментов — 23.10.2026
+
+Текущий [mlmom-solution.zip](mlmom-solution.zip), SHA256
+`cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64`.
+228 тестов исходников и 228 тестов runtime из ZIP прошли на Linux / Python 3.12.15.
+Обе офлайн-задачи прошли по три цикла с полным refit и переносимым inference.
+Проверены лимиты итераций, неполные Torch-эпохи и sparse history CatBoost.
+Последовательный реальный прогон остановлен по API-бюджету (HTTP 422).
+Regression: 3 цикла, полный final refit и переносимый inference подтверждены.
+Multiclass: 2 цикла засчитаны, обучение и анализ третьего выполнены, post-recon
+прерван; final full-data refit не выполнялся. Перенос evaluation model проверен
+отдельно. real_api = failed; общая приёмка не пройдена. Платные запросы остановлены.
+Актуальное состояние: [полный жизненный цикл](../artifacts/qwen-old-gateway-lifecycle-20261023/LIFECYCLE_RU.md).
+Аудит выявил остаточные дефекты контрактов; исходный план исправлений не закрыт.
+[Подробный разбор](../artifacts/qwen-old-gateway-lifecycle-20261023/ANALYSIS_RU.md).
+Прежняя пауза относится к другой попытке; runtime ZIP и .env не изменены.
+
+[Исправления и доказательства](../docs/AUDIT_CONTRACT_FIXES_20261022_RU.md),
+[машинный статус](validation.json). Скрытый платформенный score не проверен.
+Сведения ниже относятся к прежним сборкам; предыдущие ZIP и validation.json сохранены
+в `artifacts/audit-contract-fixes-20261022/`.
+
+
+---
+
 # Выпуск A → B → C — 22.10.2026
 
 Текущая сборка: [mlmom-solution.zip](mlmom-solution.zip), SHA256

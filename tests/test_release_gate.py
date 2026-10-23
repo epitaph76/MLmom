@@ -20,7 +20,8 @@ class ReleaseGateTests(unittest.TestCase):
         test=dict(status='passed',archive_sha256='zip',python='3.12.15',os='Linux')
         def cases(mode):
             return [dict(case=name,status='passed',archive_sha256='zip',mode=mode,environment='linux/docker',model='qwen/qwen3.8-27b',
-                verification=dict(status='passed',completed_cycles=3,generated_path=True,relocated_model_equal=True))
+                verification=dict(status='passed',completed_cycles=3,generated_path=True,relocated_model_equal=True,
+                                  execution_fidelity_verified=True,final_full_refit=True,observation_handoff_verified=mode=='real'))
                 for name in ['regression','multiclass']]
         report=gate('zip',test,test,test,cases('offline'),cases('real'))
         self.assertEqual(report['status'],'passed')

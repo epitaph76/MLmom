@@ -1,6 +1,8 @@
 """Checkpoint decisions in the controller; workers never receive LLM credentials."""
 from __future__ import annotations
 
+from .agents import GlobalAPIError
+
 import math
 import os
 import uuid
@@ -68,6 +70,8 @@ def decide(client, checkpoint, skills, *, seconds=30):
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
                 dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills), TrainingDecision, None)
         return validate_decision(answer, checkpoint)
+    except GlobalAPIError:
+        raise
     except Exception as error:
         emit('training.fallback', {'checkpoint_id': checkpoint.checkpoint_id, 'reason': str(error)[:300]})
         return fallback(checkpoint, 'Programmatic policy: '+str(error)[:300])

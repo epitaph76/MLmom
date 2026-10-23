@@ -1,3 +1,31 @@
+# Контракты и достоверность экспериментов — 23.10.2026
+
+Текущий ZIP SHA256 `cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64`.
+Все 228 тестов прошли и в исходниках, и на runtime из ZIP: Linux / Python 3.12.15,
+0 ошибок, падений и пропусков. Офлайн-приёмка regression и multiclass прошла:
+по три цикла, полный финальный refit и переносимый inference. Зависимости проверены.
+
+Проверены точные лимиты итераций, неполные Torch-эпохи и sparse history CatBoost.
+Реальный Qwen через старый шлюз: regression прошла 3 цикла, final full-data refit
+и переносимый inference. Multiclass завершила 2 цикла; обучение и анализ третьего
+готовы, но post-recon прерван явным HTTP 422 budget_exceeded. Финального refit
+multiclass нет. real_api = failed; общая приёмка не пройдена. Новые платные
+запросы остановлены; таймауты были выключены, .env и runtime hash не изменены.
+Аудит также подтвердил остаточные дефекты export, provenance параметров,
+проверки протокола и контекста reviewer; весь исходный план не считается закрытым.
+Актуальное состояние: [полный жизненный цикл](artifacts/qwen-old-gateway-lifecycle-20261023/LIFECYCLE_RU.md).
+[Разбор сбоев](artifacts/qwen-old-gateway-lifecycle-20261023/ANALYSIS_RU.md),
+[машинный итог](artifacts/qwen-old-gateway-lifecycle-20261023/acceptance-summary.json).
+Прежняя приостановленная попытка с 9 наблюдениями сохранена отдельно как история.
+[Русский отчёт исправлений и доказательства](docs/AUDIT_CONTRACT_FIXES_20261022_RU.md),
+[машинная приёмка](submission/validation.json).
+Скрытый платформенный score не проверялся. Исторические отчёты и SQLite сохранены.
+
+Далее — исторические сведения; они не подтверждают текущую сборку.
+
+
+---
+
 # Исправления ревью — 22.10.2026
 
 Текущий ZIP SHA256 `d00c03291f75bfe0c75c002480c60da5379a169fbab0da91bed895ec815e1f2c`.

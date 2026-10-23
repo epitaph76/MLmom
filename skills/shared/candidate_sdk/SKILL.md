@@ -1,13 +1,19 @@
 ---
 name: candidate-sdk
-description: Implement the separate preprocessing and estimator contracts composed by the MLmom SDK.
+description: Compose preprocessing and estimators with reproducible fit and export.
 ---
-# Separate candidate components
+# Candidate SDK
 
-The planner assigns implementation. preprocessing.py exports create_preprocessor(config), returning a fresh object with fit_transform(X,y,context) and transform(X). Preserve rows/order; use training groups and weights for group-safe OOF statistics. This context never includes validation rows/labels. Store feature order and train-fitted inference maps. The SDK persists the object with cloudpickle; never persist FitContext or training records.
+preprocessing.py exports create_preprocessor(config): fresh fit_transform(X,y,context) and transform(X). Preserve rows/order; fit train-only vocabularies/statistics and group-safe OOF target encodings. SDK withholds validation labels and persists preprocessing with cloudpickle.
 
-candidate.py exports create_candidate(config) and load_candidate(artifact_dir). The model implements fit(X,y,context) returning self, predict(X,prediction_spec) returning an array, and save(artifact_dir). The SDK already transformed X and context.validation_X. Do not fit feature transforms again or import preprocessing.py. Follow preprocessing_spec's dataframe/dense/sparse contract; adapt standalone backend reference excerpts accordingly.
+candidate.py exports create_candidate(config), load_candidate(artifact_dir). Implement fit(X,y,context)->self, predict(X,prediction_spec)->array and save(artifact_dir). X/validation_X are already transformed: follow preprocessing_spec's dataframe/dense/sparse contract; do not import or repeat preprocessing. Own target/output transforms, thresholds and class order. Save portable estimator state, never FitContext/training records. No import/load/predict training or HPO inside fit.
 
-FitContext is a dataclass: task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds, remaining_seconds, classes, groups, sample_weight, validation_X/y, validation_groups/weight, work_dir. Use attributes. The model coder owns target/output transforms and class order. Fixed refit can have no validation. export_model_params() returns selected tree counts/epochs/thresholds consumed without retuning. native_history() is optional.
+FitContext uses attributes: task_type/metric/direction, seed/cpus/memory_gb, time_limit_seconds/remaining_seconds/timeouts_enabled, classes/groups/sample_weight, validation_X/y/groups/weight and work_dir. Fixed refit has no validation.
 
-The SDK creates fresh preprocessing and model objects for each fit, composes prediction and persists both. Save estimator files relative to artifact_dir; native paths must remain portable. The runner owns Optuna, splits and scoring; the checkpoint training agent controls search. No HPO inside fit. No training at import/load/predict. Legacy candidates without preprocessing.py retain the combined SDK.
+export_model_params() returns COMPLETE finite JSON model_params, never a patch: retain all fixed/nested component params, weights, target/output options and flat HPO overrides. Deep-copy configuration; only planned early stopping may replace a count with a measured selected count. Incomplete/changed exports fail. Smoke recreates/refits and compares effective config and ordinary same-data predictions.
+
+Expose self.model for one fitted estimator. Ensembles implement fitted_components(): every named fitted base/meta estimator, including PreparedCandidate bases. Names match plan name/tool_id; parameter_routes assigns flat ensemble HPO keys. Runtime verifies actual backend params/iterations/stopping after every fit, before evaluation/Champion/submission.
+
+Only install deadline callbacks when timeouts_enabled. CatBoost after_iteration: True CONTINUES, False STOPS. Plan stopping_policy/component_stopping_policies govern early stopping. Torch calls context.track_optimizer(optimizer,batch_size) before training; runtime derives epochs from actual optimizer steps and fit_rows.
+
+Stacking implements fit_stack(X,y,context,create_preprocessor) with RAW X. Fit fresh PreparedCandidate bases inside OOF folds and full refit; slice groups/weights and clear validation metadata. Persist bases/meta learner; predict receives RAW X. Ordinary fit remains estimator-only. Legacy files without preprocessing.py retain the combined contract.
