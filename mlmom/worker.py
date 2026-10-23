@@ -34,14 +34,36 @@ def failure_result(error, root):
     return result
 
 
+def parent_is_alive(request):
+    """Check controller identity without comparing wall-clock timestamps.
+
+    ``psutil.Process.create_time`` is wall-clock based on some platforms.  A
+    host/container clock correction therefore used to kill healthy workers as
+    ``parent_exit``.  Direct parenthood is authoritative; the executable path
+    protects the fallback from the unlikely case of PID reuse.
+    """
+    import psutil
+    try:
+        pid=int(request['parent_pid'])
+        parent=psutil.Process(pid)
+        if not parent.is_running():return False
+        if os.getppid()==pid:return True
+        expected=request.get('parent_executable')
+        if not expected:return True  # Backward-compatible request artifact.
+        try:actual=parent.exe()
+        except (psutil.AccessDenied,psutil.ZombieProcess):return True
+        # A Windows venv launcher and psutil may report different absolute
+        # paths for the same interpreter (venv shim versus base runtime).
+        return Path(actual).name.casefold()==Path(expected).name.casefold()
+    except (KeyError,TypeError,ValueError,psutil.NoSuchProcess,psutil.ZombieProcess):
+        return False
+
+
 def watchdog(request):
     import psutil
     until = time.monotonic()+request['worker_seconds']
     while True:
-        try:
-            parent = psutil.Process(request['parent_pid'])
-            alive = parent.create_time() == request['parent_created']
-        except psutil.Error: alive = False
+        alive = parent_is_alive(request)
         reason = 'parent_exit' if not alive else 'time_limit' if request.get('timeouts_enabled',True) and time.monotonic()>until else None
         try:
             processes=[psutil.Process()]+psutil.Process().children(recursive=True)

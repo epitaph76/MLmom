@@ -16,6 +16,7 @@ from .tools import Workspace,verify_source
 from .persistence import atomic_json,tree_hash
 from .contracts import DatasetProfile
 from .agents import LLMUnavailable
+from .tracing import emit
 
 
 SDK_PROMPT = MODEL_PROMPT = """Implement estimator-only candidate.py for the planner assignment.
@@ -139,6 +140,25 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             repair=bool(runtime_feedback and 'preprocessing.py' in str(runtime_feedback)) or any('preprocessing.py' in e for e in state.get('errors',[]))
             if saved and path.is_file() and file_hash(path)==saved['sha256'] and not repair:
                 return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'])
+            prior_plan=(previous or {}).get('plan') or {}
+            prior_source=(previous or {}).get('files',{}).get('preprocessing.py')
+            prior_spec=(previous or {}).get('preprocessing_spec')
+            prior_hash=(previous or {}).get('preprocessing_hash')
+            same_operations=(prior_plan.get('preprocessing')==plan.preprocessing)
+            if (not repair and plan.change_kind!='single_change_ablation' and same_operations and
+                    prior_source and prior_spec and prior_hash):
+                pre_workspace.write_file('preprocessing.py',prior_source)
+                if file_hash(path)==prior_hash:
+                    errors=[e for e in verify_source(workspace.root).errors if e.startswith('preprocessing.py:')]
+                    if not errors:
+                        saved=dict(spec=prior_spec,sha256=prior_hash)
+                        store.put('preprocessing',budget_key,saved)
+                        emit('coding.preprocessing_reused',{
+                            'candidate_id':previous.get('candidate_id'),
+                            'preprocessing_hash':prior_hash})
+                        return dict(preprocessing_valid=True,preprocessing_spec=prior_spec,
+                            preprocessing_hash=prior_hash,preprocessing_attempts=attempts,
+                            errors=[],reuse_model=False,attempts=state.get('attempts',0))
             if generation_remaining()<.5:raise LLMUnavailable('No preprocessing generation time remains')
             if original is not None:client.deadline=min(original,time.time()+generation_remaining())
             bundle=client.generate('preprocessing_agent',PREPROCESSING_PROMPT,

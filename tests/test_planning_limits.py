@@ -107,6 +107,16 @@ class PlanningLimitTests(unittest.TestCase):
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=20).valid)
         self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=21).valid)
 
+    def test_validation_protocol_accepts_metadata_but_rejects_runner_conflicts(self):
+        context,tools,budget,plan=case()
+        plan.validation_protocol={'strategy':'holdout','folds':5,
+            'metric':'rmse','refit':'full_train','target_scale':'original'}
+        self.assertTrue(validate_plan(plan,context,tools,Skills(),budget).valid)
+        plan.validation_protocol['folds']=3
+        report=validate_plan(plan,context,tools,Skills(),budget)
+        self.assertFalse(report.valid)
+        self.assertIn('folds',report.errors[0])
+
     def test_ensemble_plan_probes_only_selected_backends(self):
         class SelectedPlanner(Planner):
             def generate(self,role,instruction,payload,schema,tools=None):
@@ -161,6 +171,16 @@ class PlanningLimitTests(unittest.TestCase):
         self.assertTrue(out['valid']);self.assertEqual(len(out['plans']),1)
         self.assertEqual(out['errors'][0]['hypothesis_id'],'alt')
 
+    def test_first_accepted_plan_starts_execution_without_planning_rest_of_batch(self):
+        context,tools,budget,plan=case();client=Planner()
+        out=build_planning_graph(client,context,tools,Skills(),budget,
+            return_first_accepted=True).invoke({'payload':{'round_number':2}})
+        self.assertTrue(out['valid'])
+        self.assertEqual([p['hypothesis']['hypothesis_id'] for p in out['plans']],['base'])
+        planned=[payload['hypotheses']['hypotheses'][0]['hypothesis_id']
+                 for role,payload in client.calls if role=='planner']
+        self.assertEqual(planned,['base'])
+
     def test_unavailable_api_for_alternative_keeps_accepted_baseline(self):
         class FailingAlternative(Planner):
             def generate(self,role,instruction,payload,schema,tools=None):
@@ -208,6 +228,34 @@ class Coder:
 
 
 class CodingBudgetTests(unittest.TestCase):
+    def test_model_only_plan_reuses_verified_preprocessing_without_llm_call(self):
+        from mlmom.persistence import file_hash
+        from tests.fakes import PREPROCESSING_CODE
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
+            context,tools,_,plan=case()
+            plan.preprocessing=['Impute numeric values and one-hot encode categoricals']
+            plan.hypothesis.based_on='r1-base-v1'
+            prior_file=root/'prior-preprocessing.py';prior_file.write_text(PREPROCESSING_CODE,encoding='utf-8')
+            prior_hash=file_hash(prior_file)
+            previous=dict(candidate_id='r1-base-v1',files={'preprocessing.py':PREPROCESSING_CODE},
+                plan={'preprocessing':list(plan.preprocessing)},preprocessing_hash=prior_hash,
+                preprocessing_spec={'module':'preprocessing.py','factory':'create_preprocessor',
+                    'description':'Verified prior transforms','output':'dense','constraints':[]})
+            class ReuseCoder(Coder):
+                def __init__(self,*args):super().__init__(*args);self.roles=[]
+                def generate(self,*args):
+                    self.roles.append(args[0])
+                    if args[0]=='preprocessing_agent':raise AssertionError('preprocessing LLM must be skipped')
+                    return super().generate(*args)
+            client=ReuseCoder(budget,1)
+            result=build_coding_graph(client,workspace=root/'workspace',store=store,plan=plan,
+                plan_ref=root/'plan.json',skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
+                config=RunConfig(timeouts_enabled=True),round_id='r2',previous=previous).invoke({'payload':{}})
+            self.assertTrue(result['valid'],result.get('errors'))
+            self.assertEqual(client.roles,['coding_agent'])
+            self.assertEqual(result['preprocessing_hash'],prior_hash)
+
     def test_runtime_repairs_share_original_deadline_and_smoke_is_clamped(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)

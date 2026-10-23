@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 from contextlib import contextmanager
@@ -50,7 +51,8 @@ def role_window(client, role, key, seconds):
 
 class RoleClient:
     def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None, request_callback=None, trace=None, budget_store=None,
-                 planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True):
+                 planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True,
+                 transport_failure_threshold=2,transport_cooldown_seconds=60):
         self.settings = settings
         self.timeouts_enabled = timeouts_enabled
         self.model = settings.model
@@ -62,10 +64,65 @@ class RoleClient:
         self.request_callback = request_callback
         self.trace = trace
         self.budget_store = budget_store
+        self.transport_failure_threshold=max(1,int(transport_failure_threshold))
+        self.transport_cooldown_seconds=max(1.,float(transport_cooldown_seconds))
+        health=budget_store.get('provider_health','global') if budget_store else None
+        self._transport_failures=int((health or {}).get('consecutive_failures',0))
+        self._circuit_open_until=float((health or {}).get('open_until',0))
         self.role_windows = {}
         self.trace_id = 'llm-'+uuid.uuid4().hex
         self.trace_root = Path('artifacts')/self.trace_id
         self.client = OpenAI(api_key=settings.api_key, base_url=settings.base_url, max_retries=0)
+
+    def _save_provider_health(self):
+        if self.budget_store:
+            self.budget_store.put('provider_health','global',dict(
+                consecutive_failures=self._transport_failures,
+                open_until=self._circuit_open_until))
+
+    def _check_provider_circuit(self, role):
+        now=time.time()
+        if self._circuit_open_until>now:
+            remaining=max(0.,self._circuit_open_until-now)
+            emit('llm.circuit_blocked',{'role':role,'retry_after_seconds':remaining,
+                                        'consecutive_failures':self._transport_failures})
+            if self.request_callback:
+                self.request_callback(dict(role=role,status='blocked',reason='provider_circuit_open'))
+            raise LLMUnavailable(f'Provider transport circuit open; retry after {remaining:.1f}s')
+        if self._circuit_open_until:
+            # Exactly the next request is the half-open probe.  This client is
+            # used synchronously by the pipeline, so no parallel probe lock is
+            # required here.
+            self._circuit_open_until=0.
+            self._save_provider_health()
+            emit('llm.circuit_probe',{'role':role,'consecutive_failures':self._transport_failures})
+
+    def _record_transport_failure(self, role, reason):
+        self._transport_failures+=1
+        opened=self._transport_failures>=self.transport_failure_threshold
+        if opened:
+            self._circuit_open_until=time.time()+self.transport_cooldown_seconds
+            emit('llm.circuit_open',{'role':role,'reason':reason,
+                'consecutive_failures':self._transport_failures,
+                'cooldown_seconds':self.transport_cooldown_seconds})
+        self._save_provider_health()
+        return opened
+
+    def _record_transport_success(self, role):
+        if not self._transport_failures and not self._circuit_open_until:return
+        emit('llm.circuit_closed',{'role':role,'previous_failures':self._transport_failures})
+        self._transport_failures=0;self._circuit_open_until=0.
+        self._save_provider_health()
+
+    @staticmethod
+    def _retry_delay(error, attempt):
+        headers=getattr(getattr(error,'response',None),'headers',{}) or {}
+        value=headers.get('retry-after')
+        try:
+            if value is not None:return min(60.,max(0.,float(value)))
+        except (TypeError,ValueError):
+            pass
+        return min(8.,2**attempt)*random.uniform(.8,1.2)
 
     @contextmanager
     def budget_scope(self, role, key, seconds):
@@ -106,6 +163,7 @@ class RoleClient:
 
     def _request_impl(self, messages, *, tools=None, role='reconnaissance_agent'):
         if getattr(self,'terminal_error',None): raise self.terminal_error
+        self._check_provider_circuit(role)
         if self.timeouts_enabled and time.time() >= self.deadline:
             raise LLMUnavailable('LLM deadline reached')
         params = dict(model=self.model, messages=request_messages(messages), temperature=0)
@@ -132,6 +190,7 @@ class RoleClient:
                             'status_code':getattr(error,'status_code',None), 'body':getattr(error,'body',None),
                             'request_id':getattr(error,'request_id',None)})
                         raise
+                    self._record_transport_success(role)
                     raw = response.model_dump(mode='json') if hasattr(response,'model_dump') else {
                         'choices':[{'message':choice.message.model_dump(exclude_none=True),
                                     'finish_reason':getattr(choice,'finish_reason',None)} for choice in response.choices],
@@ -162,7 +221,10 @@ class RoleClient:
                 if self.request_callback:
                     self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last,
                                                request_seconds=time.monotonic()-started))
-                delay=min(2**attempt,max(0,self.deadline-time.time())) if self.timeouts_enabled else 2**attempt
+                if self._record_transport_failure(role,last):
+                    raise LLMUnavailable(f'{last}; provider transport circuit opened') from None
+                delay=self._retry_delay(error,attempt)
+                if self.timeouts_enabled:delay=min(delay,max(0,self.deadline-time.time()))
                 emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
                 time.sleep(delay)
             except APIStatusError as error:
@@ -177,8 +239,11 @@ class RoleClient:
                     raise self.terminal_error from None
                 if error.status_code in {500,502,503,504}:
                     last = f'HTTP {error.status_code}'
+                    if self._record_transport_failure(role,last):
+                        raise LLMUnavailable(f'{last}; provider transport circuit opened') from None
                     if attempt < 2:
-                        delay = min(2**attempt, max(0,self.deadline-time.time())) if self.timeouts_enabled else 2**attempt
+                        delay=self._retry_delay(error,attempt)
+                        if self.timeouts_enabled:delay=min(delay,max(0,self.deadline-time.time()))
                         emit('llm.retry_scheduled', {'reason':last,'delay_seconds':delay})
                         if self.request_callback:
                             self.request_callback(dict(role=role,attempt=attempt+1,status='retry',reason=last))

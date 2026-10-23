@@ -79,16 +79,30 @@ class RealFailureRegressions(unittest.TestCase):
             self.assertEqual(calls[0]['messages'][1],calls[1]['messages'][1])
             self.assertTrue(all('tools' not in c for c in calls))
 
-    def test_502_retries_twice_and_permanent_400_does_not(self):
+    def test_one_502_retries_and_honors_retry_after(self):
         seen=[]
         def handler(request):
             seen.append(request)
-            return httpx.Response(502,json={'error':{'message':'upstream error'}}) if len(seen)<3 else response('{"valid":true}')
+            return httpx.Response(502,headers={'Retry-After':'5'},json={'error':{'message':'upstream error'}}) if len(seen)<2 else response('{"valid":true}')
         client,_=self.client(handler)
         with patch('mlmom.agents.time.sleep') as sleep:
             self.assertTrue(client.generate('planner','test',{},ValidationReport).valid)
-        self.assertEqual([c.args[0] for c in sleep.call_args_list],[1,2])
-        self.assertEqual(len(seen),3)
+        sleep.assert_called_once_with(5.)
+        self.assertEqual(len(seen),2)
+
+    def test_repeated_502_opens_global_circuit_and_stops_retry_multiplication(self):
+        seen=[]
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(502,json={'error':{'message':'upstream error'}})
+        client,_=self.client(handler,transport_cooldown_seconds=60)
+        with patch('mlmom.agents.time.sleep'):
+            with self.assertRaisesRegex(LLMUnavailable,'circuit opened'):
+                client.generate('planner','test',{},ValidationReport)
+            self.assertEqual(len(seen),2)
+            with self.assertRaisesRegex(LLMUnavailable,'circuit open'):
+                client.generate('context_agent','test',{},ValidationReport)
+            self.assertEqual(len(seen),2)
 
     def test_actual_corrupted_validator_key_uses_fresh_context_without_approval_guess(self):
         malformed=json.dumps({')}{':'valid','errors':[], 'warnings':['Preserve original-scale RMSE']})

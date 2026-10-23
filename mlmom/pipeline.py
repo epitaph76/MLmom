@@ -327,9 +327,11 @@ class Pipeline:
         split = self.store.get('split',key)
         if not split:
             raise ValueError('Follow-up reconnaissance requires a completed round split')
-        train_path = self.run_dir/'reconnaissance'/key/'train.csv'
-        train_path.parent.mkdir(parents=True,exist_ok=True)
         training = self.frame.iloc[split['train_indices']]
+        # Execute already materializes this exact partition. Reuse it instead
+        # of keeping another full CSV under reconnaissance/.
+        train_path = self.run_dir/'splits'/key/'train.csv'
+        train_path.parent.mkdir(parents=True,exist_ok=True)
         if not train_path.exists(): training.to_csv(train_path,index=False)
         observations=data_observations(training,self.context,self.context.profile_ref)
         for item in history.get('decisions',[]):
@@ -412,7 +414,6 @@ class Pipeline:
                 return dict(valid=False,plans=[],stop_reason='insufficient_experiment_budget',errors=[{'errors':['Insufficient complete hypothesis budget']}])
         lightweight = not advanced
         if isinstance(self.client,RoleClient):self.client.deadline=self.budget.deadline-self.budget.reserve
-        self.preflight_tools()
         payload=self.planning_payload(state)
         progress=self.store.get('planning_progress',key) or {}
         snapshot=self.budget.snapshot()
@@ -438,7 +439,8 @@ class Pipeline:
             probe_tool=self.probe_ml_tool,evaluation_reserve_seconds=2*self.config.prediction_seconds,
             hypothesis_seconds=self.config.hypothesis_seconds,planner_seconds=self.config.planner_seconds,
             validator_seconds=self.config.validator_seconds,saved_progress=progress,
-            save_progress=lambda value:self.store.put('planning_progress',key,value))
+            save_progress=lambda value:self.store.put('planning_progress',key,value),
+            return_first_accepted=True)
         initial={'payload':payload}
         if hypotheses is not None: initial['hypotheses']=hypotheses
         elif progress.get('hypotheses'):initial['hypotheses']=progress['hypotheses']
@@ -531,7 +533,16 @@ class Pipeline:
             if previous_candidate:
                 if isinstance(previous_candidate,CandidateVersion): previous_candidate=previous_candidate.model_dump()
                 source = Path(previous_candidate['code_dir'])
-                previous = {'candidate_id':previous_candidate['candidate_id'],'files':{p.relative_to(source).as_posix():p.read_text(encoding='utf-8') for p in source.rglob('*.py')}}
+                prior_plan={}
+                prior_plan_ref=Path(previous_candidate.get('plan_ref',''))
+                if prior_plan_ref.is_file():
+                    prior_plan=json.loads(prior_plan_ref.read_text(encoding='utf-8'))
+                prior_preprocessing=self.store.get('preprocessing',prior_plan_ref.stem) if prior_plan_ref.name else None
+                previous = {'candidate_id':previous_candidate['candidate_id'],
+                    'files':{p.relative_to(source).as_posix():p.read_text(encoding='utf-8') for p in source.rglob('*.py')},
+                    'plan':prior_plan,
+                    'preprocessing_hash':previous_candidate.get('preprocessing_hash'),
+                    'preprocessing_spec':(prior_preprocessing or {}).get('spec')}
         skills = self.skills.load([k for k in plan.skill_ids if self.skills.allowed(k,'coding_agent')],
             self.context.task.task_type,role='coding_agent',include_references=True,max_chars=48000)
         preprocessing_skills=self.skills.load([k for k in plan.skill_ids if self.skills.owners[k]=='preprocessing_agent'],
@@ -567,7 +578,11 @@ class Pipeline:
                 memory_gb=min(self.budget.memory_gb,run.resource_memory_gb),cpus=min(self.budget.cpus,run.resource_cpus))
         if result['status']!='completed':
             raise ValueError('Inference failed: '+(result.get('error') or result.get('stop_reason') or 'worker_error'))
-        return {k:read_table(v).to_numpy() for k,v in result['predictions'].items()}
+        predictions = {k:read_table(v).to_numpy() for k,v in result['predictions'].items()}
+        # Keep prediction artifacts and logs referenced by result.json, but
+        # remove the large controller-to-worker input after successful read.
+        features_path.unlink(missing_ok=True)
+        return predictions
 
     def publish(self,champion):
         if self.budget.snapshot().remaining_seconds < 1: return
@@ -889,13 +904,6 @@ class Pipeline:
         previous=SelectedPreviousResults(round_id=round_id,selected=selected,failures=failures,
             champion_id=champion_id,decisions=decisions)
         self.store.put('analysis',round_id,previous,immutable=True)
-        try:
-            self.review_results(rows,context)
-            self.scout(round_id,previous.model_dump(mode='json'))
-        except GlobalAPIError:
-            raise
-        except Exception as error:
-            self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         complete=bool(state.get('incumbent_succeeded',True) and
                       [r for r in rows if not r['run']['incumbent'] and r['evaluation']['diagnostics']])
         self.store.put('cycle',round_id,dict(round_id=round_id,completed=complete,
@@ -911,6 +919,16 @@ class Pipeline:
         if state['round_number']>=self.config.max_rounds:stop='max_rounds'
         if self.config.target_completed_rounds and completed>=self.config.target_completed_rounds:stop='target_completed_rounds'
         if self.budget.snapshot().research_seconds<1:stop='research_deadline'
+        # Result reviews only advise a future planning round. Follow-up
+        # reconnaissance is already loaded lazily by planning_payload, so a
+        # terminal cycle must not spend another API request on either role.
+        if stop is None:
+            try:
+                self.review_results(rows,context)
+            except GlobalAPIError:
+                raise
+            except Exception as error:
+                self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         return {'selected':previous.model_dump(mode='json'),'stale':stale,'stop_reason':stop,'round_number':state['round_number']+1}
 
     def review_results(self,rows,context):

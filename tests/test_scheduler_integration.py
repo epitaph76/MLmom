@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from mlmom.pipeline import Pipeline
 from mlmom.pipeline_contracts import RunConfig, HypothesisBatch
 from mlmom.resources import SandboxManager, ResourceUnavailable, Job
+from mlmom.worker import parent_is_alive
 from tests.fakes import OfflineLLM
 from tests.test_pipeline import dataset, only_sklearn
 
@@ -39,6 +40,15 @@ class AlternativeFailure(OfflineLLM):
 
 
 class SchedulerIntegrationTests(unittest.TestCase):
+    def test_worker_parent_check_ignores_wall_clock_create_time_shift(self):
+        process=Mock()
+        process.is_running.return_value=True
+        process.exe.return_value='C:/Python/python.exe'
+        process.create_time.side_effect=AssertionError('wall-clock timestamp must not be compared')
+        request={'parent_pid':123,'parent_created':1.0,'parent_executable':'C:/Python/python.exe'}
+        with patch('psutil.Process',return_value=process),patch('mlmom.worker.os.getppid',return_value=999):
+            self.assertTrue(parent_is_alive(request))
+
     def test_all_worker_actions_share_cpu_memory_and_slot_admission(self):
         with tempfile.TemporaryDirectory() as tmp:
             manager=SandboxManager(timeouts_enabled=True,budget=budget(),max_workers=3)
@@ -92,7 +102,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         pipeline=object.__new__(Pipeline)
         pipeline.config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,coding_seconds=100,prediction_seconds=10)
         pipeline.restore=lambda state:Mock()
-        pipeline.preflight_tools=lambda **kwargs:None
+        pipeline.preflight_tools=Mock()
         pipeline.client=OfflineLLM()
         from mlmom.tools import ToolSet
         pipeline.tools={};pipeline.skills=Mock();pipeline.role_tools=ToolSet();pipeline.store=Mock()
@@ -110,7 +120,35 @@ class SchedulerIntegrationTests(unittest.TestCase):
                 build.return_value.invoke.return_value={'valid':True,'plans':[]}
                 pipeline.planning_call({'round_number':round_number})
                 self.assertEqual(build.call_args.kwargs['lightweight'],light)
+                self.assertTrue(build.call_args.kwargs['return_first_accepted'])
                 self.assertEqual(build.call_args.args[4].research_seconds,seconds if light else seconds-110)
+        pipeline.preflight_tools.assert_not_called()
+
+    def test_successful_prediction_removes_only_transport_tables(self):
+        import pandas as pd
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline=object.__new__(Pipeline)
+            pipeline.run_dir=Path(tmp)
+            pipeline.config=SimpleNamespace(prediction_seconds=10)
+            pipeline.budget=SimpleNamespace(memory_gb=2,cpus=1,
+                snapshot=lambda:SimpleNamespace(remaining_seconds=30))
+
+            def run(request,directory,**kwargs):
+                self.assertTrue(Path(request['features_path']).is_file())
+                output=directory/'value.parquet'
+                pd.DataFrame({'prediction':[1.,2.]}).to_parquet(output,index=False)
+                (directory/'worker.log').write_text('kept for audit',encoding='utf-8')
+                return {'status':'completed','predictions':{'value':str(output)}}
+
+            pipeline.sandbox=SimpleNamespace(run=run)
+            candidate=SimpleNamespace(candidate_id='c1',code_dir='code',code_hash='hash')
+            trained=SimpleNamespace(experiment_id='e1',model_artifact='model',resource_memory_gb=2,resource_cpus=1)
+            result=pipeline._prediction(candidate,trained,pd.DataFrame({'x':[1,2]}),['value'])
+            self.assertEqual(result['value'].ravel().tolist(),[1.,2.])
+            directory=next((pipeline.run_dir/'predictions').iterdir())
+            self.assertFalse((directory/'features.csv').exists())
+            self.assertTrue((directory/'value.parquet').exists())
+            self.assertTrue((directory/'worker.log').exists())
 
     def test_resume_reuses_valid_alternative_plan_and_preserves_dynamic_reserve(self):
         from mlmom.persistence import ExperimentStore

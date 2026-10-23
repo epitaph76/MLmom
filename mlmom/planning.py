@@ -13,13 +13,30 @@ from .agents import LLMUnavailable, StructuredOutputError, role_window
 from .tracing import bind, emit
 
 
+def confirmed_validation_protocol(context: TaskContext) -> dict:
+    """Return the runner-owned part of the validation protocol.
+
+    Plans may carry explanatory metadata (metric, refit notes, target scale),
+    but only these fields are enforced by the runner.  Comparing the complete
+    free-form dictionary used to reject otherwise compatible plans.
+    """
+    return dict(strategy=str(context.task.validation_strategy),
+                folds=context.task.validation_folds,
+                duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
+
+
+def validation_protocol_errors(declared: dict, expected: dict) -> list[str]:
+    mismatches = [key for key,value in expected.items()
+                  if key in declared and declared[key] != value]
+    return ([f'Declared validation_protocol conflicts with confirmed runner fields: {", ".join(mismatches)}']
+            if mismatches else [])
+
+
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
                   *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
-    expected_protocol=dict(strategy=str(context.task.validation_strategy),folds=context.task.validation_folds,
-                           duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
-    if plan.validation_protocol and plan.validation_protocol != expected_protocol:
-        errors.append('Declared validation_protocol differs from the confirmed runner protocol')
+    expected_protocol=confirmed_validation_protocol(context)
+    errors.extend(validation_protocol_errors(plan.validation_protocol,expected_protocol))
     text=' '.join([plan.hypothesis.description,plan.hypothesis.rationale,*plan.preprocessing]).lower()
     if ('duplicate-aware' in text or 'duplicate aware' in text) and getattr(context.task,'duplicate_policy','allow') != 'group_features':
         errors.append('duplicate-aware validation requires confirmed duplicate_policy=group_features; narrative cannot change the protocol')
@@ -134,7 +151,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                          initial_experiment_seconds=300, hypothesis_ids=None, planning_mode='all',
                          probe_tool=None, evaluation_reserve_seconds=0, candidate_hypotheses=None,
                          hypothesis_seconds=210, planner_seconds=210, validator_seconds=210,
-                         saved_progress=None,save_progress=None):
+                         saved_progress=None,save_progress=None,return_first_accepted=False):
     """Plan hypotheses independently; callers can publish a baseline before alternatives.
 
     Pass a previous output's ``hypotheses`` in the input state to reuse the same
@@ -283,10 +300,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                             item.strategy='single';item.search_space={};item.max_trials=1
                     elif item.change_kind=='single_change_ablation':
                         raise ValueError('Single-change ablation requires based_on=current Champion candidate_id')
-                    actual_protocol=dict(strategy=str(context.task.validation_strategy),
-                        folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
-                    if item.validation_protocol and item.validation_protocol != actual_protocol:
-                        raise ValueError('Declared validation_protocol differs from confirmed runner protocol')
+                    actual_protocol=confirmed_validation_protocol(context)
+                    protocol_errors=validation_protocol_errors(item.validation_protocol,actual_protocol)
+                    if protocol_errors: raise ValueError('; '.join(protocol_errors))
                     item.validation_protocol=actual_protocol
                     normalized=[]
                     for name in ('n_jobs','num_threads','thread_count','num_cpus'):
@@ -368,6 +384,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     progress['proposed'].pop(hypothesis.hypothesis_id,None)
                     progress['accepted'].pop(hypothesis.hypothesis_id,None);persist()
             else: rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':feedback})
+            if accepted and return_first_accepted:
+                emit('planning.first_accepted_ready',{
+                    'hypothesis_id':accepted[0]['hypothesis']['hypothesis_id'],
+                    'deferred_count':max(0,len(chosen)-len(accepted)-len(rejected))})
+                break
         # A rejected alternative never discards an already accepted baseline.
         valid=bool(accepted)
         if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and planning_mode!='alternatives':

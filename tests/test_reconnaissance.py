@@ -236,6 +236,8 @@ class ScoutingTests(unittest.TestCase):
             pipeline.store.put('split','r1',dict(train_indices=[0,1,2,3],holdout_indices=list(range(4,180))))
             report=pipeline.scout('r1',{})
             self.assertEqual(report['status'],'completed',report)
+            self.assertTrue((pipeline.run_dir/'splits'/'r1'/'train.csv').is_file())
+            self.assertFalse((pipeline.run_dir/'reconnaissance'/'r1'/'train.csv').exists())
             follow=next(r for r in pipeline.store.list('csv_result') if 'rows' in r)
             self.assertEqual(follow['rows'],[{'n':4}])
         finally:

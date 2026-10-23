@@ -225,6 +225,7 @@ class SandboxManager:
         for name in ['result.json','limit.json']:
             (directory/name).unlink(missing_ok=True)
         request = dict(request, parent_pid=os.getpid(),parent_created=psutil.Process().create_time(),
+                       parent_executable=os.path.normcase(str(Path(sys.executable).resolve())),
                        worker_seconds=seconds,worker_cpus=cpus,worker_memory_gb=memory_gb,timeouts_enabled=self.timeouts_enabled)
         atomic_json(directory/'request.json',request)
         root = Path(__file__).resolve().parent.parent
