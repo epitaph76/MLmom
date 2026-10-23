@@ -26,7 +26,7 @@ from mlmom.resources import capacity, terminate_tree
 from mlmom.llm_client import LLMSettings
 
 
-def validate(run_dir, expected_rows, seconds):
+def validate(run_dir, expected_rows, seconds, *, timeouts_enabled=True):
     """Replay the final saved submission model in a supervised predict worker."""
     import numpy as np
     import pandas as pd
@@ -56,13 +56,16 @@ def validate(run_dir, expected_rows, seconds):
     metadata=json.loads(max(matching,key=lambda p:p.stat().st_mtime_ns).read_text(encoding='utf-8'))
     replay=run_dir/'verification';replay.mkdir(exist_ok=True)
     x=features(test,context).head(128);path=replay/'features.csv';x.to_csv(path,index=False)
-    config=RunConfig(timeouts_enabled=True,total_seconds=max(1,seconds),final_reserve_seconds=0,reserve_cpus=6,
-                     reserve_memory_gb=max(0,capacity(RunConfig(reserve_memory_gb=0))[1]-3),max_workers=1)
+    available_cpus,available_memory=capacity(RunConfig(reserve_cpus=0,reserve_memory_gb=0))
+    replay_cpus=min(2,available_cpus);replay_memory=min(3,available_memory)
+    config=RunConfig(timeouts_enabled=timeouts_enabled,total_seconds=max(1,seconds),final_reserve_seconds=0,
+                     reserve_cpus=max(0,available_cpus-replay_cpus),
+                     reserve_memory_gb=max(0,available_memory-replay_memory),max_workers=1)
     budget=Budget(config,time.time());manager=SandboxManager(budget=budget,max_workers=1)
     try:
         result=manager.run(dict(action='predict',code_dir=metadata['code_dir'],code_hash=metadata['code_hash'],
             model_artifact=metadata['model_artifact'],features_path=str(path),kinds=[context.submission_kind]),
-            replay/'worker',seconds=max(.1,seconds),memory_gb=3,cpus=2)
+            replay/'worker',seconds=max(.1,seconds),memory_gb=replay_memory,cpus=replay_cpus)
     finally:
         manager.close()
     if result['status']!='completed': raise ValueError('Saved model replay failed: '+str(result))
@@ -93,12 +96,17 @@ def main():
     parser.add_argument('--case',choices=['all','regression','multiclass'],default='all')
     parser.add_argument('--seconds',type=float,default=3600)
     parser.add_argument('--quiet',action='store_true',help='Skip periodic log reads and progress printing; keep resource/deadline guards.')
+    parser.add_argument('--environment-only',action='store_true',
+                        help='Use only the supplied OPENAI_* environment; do not load or overwrite .env.')
     parser.add_argument('--expected-model',default='qwen/qwen3.8-27b',
                         help='Explicit local test model; defaults to the organizer Qwen. Credentials remain in .env.')
     args=parser.parse_args();root=args.output.resolve();root.mkdir(parents=True,exist_ok=True)
-    from dotenv import load_dotenv
-    load_dotenv(ROOT/'.env',override=True)  # Explicit local diagnostics credentials.
-    settings=LLMSettings.from_env(str(ROOT/'.env'))
+    if args.environment_only:
+        settings=LLMSettings.from_platform_env()
+    else:
+        from dotenv import load_dotenv
+        load_dotenv(ROOT/'.env',override=True)  # Explicit local diagnostics credentials.
+        settings=LLMSettings.from_env(str(ROOT/'.env'))
     if settings.model!=args.expected_model: raise ValueError('Configured model differs from --expected-model; check the local environment')
     reports_path=root/'reports.json'
     reports=json.loads(reports_path.read_text(encoding='utf-8')) if reports_path.exists() else []
@@ -135,7 +143,7 @@ def main():
         package(ROOT,run_dir/'runtime-solution.zip')
         cpus,memory=capacity(RunConfig(reserve_cpus=0,reserve_memory_gb=0))
         # Leave a minute of the task allowance for independent reload verification.
-        config=RunConfig(timeouts_enabled=True,profile='dev',total_seconds=remaining-60,final_reserve_seconds=600,
+        config=RunConfig(timeouts_enabled=True,profile='platform' if args.environment_only else 'dev',total_seconds=remaining-60,final_reserve_seconds=600,
             first_submission_seconds=600,experiment_seconds=810,initial_experiment_seconds=120,
             coding_seconds=300,prediction_seconds=45,smoke_seconds=30,max_rounds=6,target_completed_rounds=3,
             fixed_outer_split=False,max_workers=1,reserve_cpus=cpus-4,reserve_memory_gb=memory-4,llm_timeout_seconds=300,

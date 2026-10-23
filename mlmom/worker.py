@@ -36,17 +36,19 @@ def failure_result(error, root):
 
 def watchdog(request):
     import psutil
+    from .process_identity import process_matches
     until = time.monotonic()+request['worker_seconds']
     while True:
         try:
-            parent = psutil.Process(request['parent_pid'])
-            alive = parent.create_time() == request['parent_created']
+            identity = request.get('parent_identity')
+            alive = (process_matches(identity) is not False if identity else
+                     os.getppid() == request['parent_pid'] and psutil.pid_exists(request['parent_pid']))
         except psutil.Error: alive = False
         reason = 'parent_exit' if not alive else 'time_limit' if request.get('timeouts_enabled',True) and time.monotonic()>until else None
         try:
             processes=[psutil.Process()]+psutil.Process().children(recursive=True)
             memory=sum(p.memory_info().rss for p in processes)/1024**3
-            if memory>request['worker_memory_gb']:reason='memory_limit'
+            if reason is None and memory>request['worker_memory_gb']:reason='memory_limit'
         except psutil.Error:pass
         if reason:
             Path('limit.json').write_text(json.dumps({'reason':reason}),encoding='utf-8')
@@ -214,8 +216,16 @@ def train(request, root):
     from .sdk import load_module
     from .evaluation import score_predictions,prediction_kind,better
     from .persistence import atomic_json,tree_hash,file_hash
+    from .feature_contracts import feature_hash
     context = TaskContext.model_validate(request['context'])
     plan = HypothesisPlan.model_validate(request['plan'])
+    feature_mode = request.get('validation_scope') == 'feature'
+    if feature_mode:
+        from .splitting import feature_context
+        if (plan.strategy != 'single' or plan.search_space or plan.max_trials != 1 or
+                plan.ensemble_components or plan.ensemble_sources or plan.stopping_policy != 'fixed'):
+            raise ValueError('Feature evaluation requires one frozen estimator without HPO or early stopping')
+        context = feature_context(context, request.get('feature_holdout_folds', 3))
     from .registry import NATIVE_VALIDATION
     if any(c.get('tool_id') in NATIVE_VALIDATION for c in plan.ensemble_components):
         raise ValueError('Native AutoML ensemble components have no verified frozen refit protocol')
@@ -288,13 +298,15 @@ def train(request, root):
             history_ref=str(artifact/'native-history.json')
             atomic_json(Path(history_ref),history)
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
+            validation_scope='feature' if feature_mode else 'model',
+            oof_score_kind='feature_inner_oof' if feature_mode else 'inner_oof',
             model_spec=report.get('model_spec'),
             intervention=plan.intervention.model_dump(mode='json'),
             best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
             study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[]),
             full_refit=True,validation_protocol_ref=protocol_ref,execution_report=report,
             execution_report_ref=str(report_path),score_kind=('not_applicable' if score is None else
-                'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),
+                'feature_inner_cv_mean' if feature_mode else 'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),
             **{key:value for key,value in best_details.items() if key != 'model_spec'}))
 
     if request.get('fixed'):
@@ -311,6 +323,11 @@ def train(request, root):
         protocol = inner_protocol(frame,context,fraction=request.get('inner_fraction',.2),
             seed=request.get('seed',42)+1,outer_split_id=request.get('outer_split_id'),
             source_indices=request.get('outer_train_indices'))
+        if feature_mode and protocol != request.get('feature_protocol'):
+            raise ValueError('Feature evaluation differs from the frozen fold protocol')
+        if feature_mode and plan.feature_set and plan.feature_set.features:
+            from .feature_engineering import screen_features
+            screen_features(plan.feature_set, X, protocol['folds'])
         protocol_ref = str(root/'validation-protocol.json')
         protocol_path = Path(protocol_ref)
         if protocol_path.exists() and json.loads(protocol_path.read_text(encoding='utf-8')) != protocol:
@@ -334,8 +351,10 @@ def train(request, root):
             t0 = time.monotonic()
             trial_number=number if number is not None else len(trials)
             trial=TrialResult(number=trial_number,params=params,status='running',duration_seconds=0,
+                validation_scope='feature' if feature_mode else 'model',
+                oof_score_kind='feature_inner_oof' if feature_mode else 'inner_oof',
                 kind='native_run' if plan.strategy=='native' else plan.strategy,validation_protocol_ref=protocol_ref,
-                score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
+                score_kind='feature_inner_cv_mean' if feature_mode else 'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
                 outer_split_id=request.get('outer_split_id'),metric_options=context.metric_options,
                 weighting='sample_weight' if weights is not None else 'unweighted')
             trials.append(trial)
@@ -375,7 +394,7 @@ def train(request, root):
                         execution_report_ref=str(trial_root/f"fold-{fold['number']}-execution.json"),
                         actual_components={name:{key:item.get(key) for key in ('backend','completed_iterations','retained_trees','stopping_reason')}
                                            for name,item in fit_report['components'].items()},
-                        score_kind='inner_fold',weighting='sample_weight' if weights is not None else 'unweighted'))
+                        score_kind='feature_inner_fold' if feature_mode else 'inner_fold',weighting='sample_weight' if weights is not None else 'unweighted'))
                     trial.duration_seconds=time.monotonic()-t0
                     atomic_json(root/'trials.json',trials)
                     predictions.append(prediction);positions.extend(b.tolist())
@@ -423,7 +442,9 @@ def train(request, root):
             search_result=run_search(objective,directory=root/'hpo',identity=dict(code=request['code_hash'],
                 train_hash=file_hash(Path(request['train_path'])),seed=request.get('seed',42),inner_fraction=request.get('inner_fraction',.2),
                 task=context.task.model_dump(mode='json'),metric_options=context.metric_options,
-                base_params=plan.model_params,tool_id=plan.tool_id,preprocessing=plan.preprocessing,validation_protocol=protocol),
+                base_params=plan.model_params,tool_id=plan.tool_id,preprocessing=plan.preprocessing,validation_protocol=protocol,
+                **({'feature_set_hash':feature_hash(plan.feature_set)}
+                   if plan.feature_set else {})),
                 space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
                 max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
                 gain_threshold=request.get('hpo_gain_threshold',.005),seconds=max(0,search_deadline-time.time()),
@@ -506,6 +527,9 @@ def main():
                           versions=runtime_versions())
         elif action in {'smoke','probe'}: result = smoke(request,root)
         elif action=='train': result = train(request,root)
+        elif action=='feature_profile':
+            from .feature_search import feature_profile
+            result = feature_profile(request)
         elif action=='predict': result = predict(request,root)
         elif action=='csv':
             from .csv_tools import csv_worker

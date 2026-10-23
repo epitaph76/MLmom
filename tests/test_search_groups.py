@@ -104,6 +104,66 @@ class FamilyPlanTests(unittest.TestCase):
         self.assertEqual(skipped[0]['tool_id'],'catboost')
         self.assertIn('not installed',skipped[0]['reason'])
 
+    def test_pipeline_plans_every_selected_family_variant_and_resumes_deferred_members(self):
+        from mlmom.pipeline import Pipeline
+        from mlmom.tools import ToolSet
+        from types import SimpleNamespace
+
+        class FamilyPlanner(Planner):
+            def generate(self, role, instruction, payload, schema, tools=None):
+                if role == 'planner':
+                    self.calls.append((role, payload))
+                    _, _, _, plan = case()
+                    plan.hypothesis = Hypothesis.model_validate(payload['hypotheses']['hypotheses'][0])
+                    plan.tool_id = payload['required_tool_id']
+                    plan.skill_ids = [plan.tool_id]
+                    return PlanBatch(plans=[plan])
+                return super().generate(role, instruction, payload, schema, tools)
+
+        # The first accepted plan may only defer work in baseline mode. Calls
+        # through Pipeline must retain all members in later rounds/alternatives.
+        for baseline in (False, True):
+            with self.subTest(baseline=baseline), tempfile.TemporaryDirectory() as tmp:
+                context, tools, budget, _ = case()
+                parent = Hypothesis(hypothesis_id='trees', kind='family', model_family='gradient_boosting',
+                    baseline=baseline, description='Boosting family', rationale='Measured evidence')
+                hypotheses = {'hypotheses': [parent.model_dump()]}
+                pipeline = object.__new__(Pipeline)
+                pipeline.config = RunConfig(coding_seconds=60, prediction_seconds=10)
+                pipeline.client = FamilyPlanner()
+                pipeline.tools, pipeline.skills, pipeline.role_tools = tools, Skills(), ToolSet()
+                pipeline.restore = lambda state: context
+                pipeline.budget = SimpleNamespace(snapshot=lambda: budget)
+                pipeline.last_submission = None if baseline else {'path': 'submission.csv'}
+                pipeline.planning_payload = lambda state: dict(round_number=state['round_number'], history={'evaluation': []})
+                # Unselected libraries must not be probed before planning.
+                pipeline.preflight_tools = lambda **kwargs: self.fail('Unexpected eager capability probe')
+                pipeline.store = ExperimentStore(Path(tmp))
+                try:
+                    if baseline:
+                        state = {'round_number': 1}
+                        first = pipeline.planning_call(state, mode='baseline', hypotheses=hypotheses)
+                        self.assertTrue(first['valid'], first)
+                        self.assertEqual([p['tool_id'] for p in first['plans']], ['lightgbm'])
+                        pipeline.last_submission = {'path': 'submission.csv'}
+                        deferred = pipeline.planning_call(state, mode='alternatives', hypotheses=first['hypotheses'])
+                        self.assertTrue(deferred['valid'], deferred)
+                        self.assertEqual([p['tool_id'] for p in deferred['plans']], ['catboost', 'xgboost'])
+                        all_plans = first['plans'] + deferred['plans']
+                        calls = len(pipeline.client.calls)
+                        self.assertEqual(pipeline.planning_call(state, mode='alternatives'), deferred)
+                        self.assertEqual(len(pipeline.client.calls), calls)
+                    else:
+                        result = pipeline.planning_call({'round_number': 2}, hypotheses=hypotheses)
+                        self.assertTrue(result['valid'], result)
+                        all_plans = result['plans']
+                    self.assertEqual([p['tool_id'] for p in all_plans], ['lightgbm', 'catboost', 'xgboost'])
+                    self.assertEqual(len({p['hypothesis']['hypothesis_id'] for p in all_plans}), 3)
+                    group = pipeline.store.get('search_group', ('r1-' if baseline else 'r2-') + 'trees')
+                    self.assertEqual(len(group['variants']), 3)
+                finally:
+                    pipeline.store.close()
+
     def test_legacy_single_group_and_internal_winner_direction(self):
         _,_,_,plan=case()
         self.assertEqual(collect_groups([plan])[0].kind,'single')

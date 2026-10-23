@@ -18,7 +18,7 @@ ROLE_DEFAULTS = {
     'training_agent': ('metrics', 'hpo'),
     'plan_validator': ('validation', 'metrics'),
     **{role: (role,) for role in ('reconnaissance_agent', 'result_validator',
-                                  'context_agent', 'hypothesis_generator', 'planner', 'ensemble_agent')},
+                                  'context_agent', 'hypothesis_generator', 'planner', 'ensemble_agent', 'feature_agent')},
 }
 LIGHTAUTOML_OBJECTIVES = {'regression':'rmse','binary_classification':'roc_auc','multiclass_classification':'log_loss'}
 # Only independently exercised generated-code protocols are admitted. The old

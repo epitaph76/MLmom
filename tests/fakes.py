@@ -42,6 +42,9 @@ class OfflineLLM:
         if role=='hypothesis_generator':
             return HypothesisBatch(hypotheses=[dict(hypothesis_id=f"h{payload['round_number']}",description='Small tree baseline',rationale='Fast CPU baseline',baseline=True)])
         if role=='planner':
+            if schema.__name__=='FeatureExperimentPlan':
+                return schema(feature_set_id=payload['feature_set']['feature_set_id'],
+                    reference_feature_set_id=payload['reference_feature_set_id'],rationale='Paired feature test')
             from mlmom.evaluation import prediction_kind
             return PlanBatch(plans=[HypothesisPlan(hypothesis=h,tool_id=self.tool_id,skill_ids=[self.tool_id],model_params=self.params,
                 search_space={'n_estimators':{'type':'int','low':4,'high':12}} if self.tool_id=='sklearn' else {},
@@ -53,6 +56,7 @@ class OfflineLLM:
         if role=='coding_agent':return CodeBundle(files={'candidate.py':MODEL_CODE})
         if role=='training_agent':return schema(action=payload['checkpoint']['default_action'],reason='Offline programmatic policy')
         if role=='ensemble_agent':return schema(skip=True,rationale='Legacy fixture does not propose ensembles')
+        if role=='feature_agent':return schema(action='stop',rationale='Offline fixture has no new feature intervention')
         if role=='reconnaissance_agent':
             if self.fail: raise RuntimeError('API unavailable')
             if payload.get('initial') and not payload.get('confirmed_task'):

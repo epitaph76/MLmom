@@ -29,7 +29,9 @@ from .planning import build_planning_graph
 from .planning_context import profile_summary,plan_summary,experiment_summary,evaluation_summary
 from .context_agent import prepare_planner_context
 from .registry import SkillRegistry,installed_tools,capability_matrix
-from .resources import Budget,SandboxManager,terminate_tree,WorkerRuntimeError,worker_runtime,runtime_versions
+from .resources import (Budget, SandboxManager, terminate_tree, WorkerRuntimeError, WorkerInfrastructureError,
+                        require_worker_infrastructure, worker_runtime, runtime_versions)
+from .process_identity import worker_record, recorded_process_matches
 from .splitting import make_split,group_keys
 from .submission import publish_submission
 from .tools import ToolSet
@@ -62,6 +64,7 @@ class DeferredTask(RuntimeError):
 
 class Pipeline:
     def __init__(self, task_path: Path, config: RunConfig, *, run_dir: Path | None=None, client=None, resume=False, started=None):
+        explicit_config_fields=set(config.model_fields_set)
         self.config = config
         self.files = resolve_inputs(task_path)
         self.run_dir = (run_dir or Path(__file__).resolve().parent.parent/'artifacts'/f'{Path(self.files.root).name}-{uuid.uuid4().hex[:10]}').resolve()
@@ -75,13 +78,20 @@ class Pipeline:
             legacy_policy = 'timeouts_enabled' not in session['config']
             if legacy_policy:
                 session['config']['timeouts_enabled'] = True
-            if 'timeouts_enabled' not in config.model_fields_set:
+            if 'timeouts_enabled' not in explicit_config_fields:
                 config = RunConfig.model_validate(dict(config.model_dump(), timeouts_enabled=session['config']['timeouts_enabled']))
+                self.config = config
+            # Old sessions must not silently gain an additional search branch.
+            legacy_features = 'feature_search_enabled' not in session['config']
+            if legacy_features:
+                session['config']['feature_search_enabled'] = False
+            if 'feature_search_enabled' not in explicit_config_fields:
+                config = config.model_copy(update={'feature_search_enabled':session['config']['feature_search_enabled']})
                 self.config = config
             if session['task'] != self.files.task or RunConfig.model_validate(session['config']).model_dump(mode='json') != config.model_dump(mode='json'):
                 raise ValueError('Resume requires the same task and configuration')
             if session['input_hashes'] != self.input_hashes(): raise ValueError('Task inputs changed since this run')
-            if legacy_policy: atomic_json(session_path, session)
+            if legacy_policy or legacy_features: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
             session = dict(runtime_contract_version=2,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
@@ -131,7 +141,8 @@ class Pipeline:
     def read_planning_evidence(self, reference: str, offset: int=0, chars: int=8000):
         from .context_views import paged_evidence
         values={'profile':json.loads(Path(self.context.profile_ref).read_text(encoding='utf-8'))} if self.context else {}
-        for key in ('initial', *[f'r{i}' for i in range(1, self.config.max_rounds+1)]):
+        if reference.startswith('reconnaissance:'):
+            key=reference.split(':',1)[1]
             report=self.store.get('reconnaissance',key)
             if report:values['reconnaissance:'+key]=report
         return paged_evidence(values).tools['read_evidence'][0](reference,offset,chars)
@@ -213,7 +224,7 @@ class Pipeline:
             report['status'] = 'passed'
             self.store.put('runtime_check', 'startup', report)
             emit('worker.runtime_checked', report)
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except Exception as error:
             report.update(status='failed', error=self.trace.scrub(str(error)))
@@ -325,6 +336,9 @@ class Pipeline:
             skills=self.skills.load([],context.task.task_type,role='context_agent'),
             seconds=max(0,self.budget.snapshot().research_seconds-self.admission_cost()))
         payload['result_reviews']=self.store.list('result_review',limit=4)
+        payload['feature_sets']=self.store.list('feature_registry')
+        payload['feature_search_history']=[dict(evidence=e,definition=self.store.get('feature_set',e['feature_set_id']),
+            validation_scope='feature') for e in self.store.list('feature_evidence')]
         payload['training_recommendations']=[d.get('recommendations',[]) for d in self.store.list('training_decision',limit=4)]
         # Never put model artifact paths or the full run archive into a prompt.
         if state.get('champion'):
@@ -346,7 +360,8 @@ class Pipeline:
         split = self.store.get('split',key)
         if not split:
             raise ValueError('Follow-up reconnaissance requires a completed round split')
-        train_path = self.run_dir/'reconnaissance'/key/'train.csv'
+        # Execute already materializes this exact training partition.
+        train_path = self.run_dir/'splits'/key/'train.csv'
         train_path.parent.mkdir(parents=True,exist_ok=True)
         training = self.frame.iloc[split['train_indices']]
         if not train_path.exists(): training.to_csv(train_path,index=False)
@@ -431,7 +446,6 @@ class Pipeline:
                 return dict(valid=False,plans=[],stop_reason='insufficient_experiment_budget',errors=[{'errors':['Insufficient complete hypothesis budget']}])
         lightweight = not advanced
         if isinstance(self.client,RoleClient):self.client.deadline=self.budget.deadline-self.budget.reserve
-        self.preflight_tools()
         payload=self.planning_payload(state)
         progress=self.store.get('planning_progress',key) or {}
         snapshot=self.budget.snapshot()
@@ -509,7 +523,7 @@ class Pipeline:
             return {'plans':[*output['plans'],*ensemble['plans']],'stop_reason':None,
                     'planning_attempt':0,
                     'deferred_hypotheses':output.get('hypotheses') if first else None}
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except (LLMUnavailable,ValueError) as error:
             self.store.event('llm_unavailable','planning',{'error':str(error)})
@@ -525,11 +539,12 @@ class Pipeline:
             return {'plans':[],'stop_reason':'planning_attempts_exhausted' if 'budget exceeded' not in str(error).lower() else 'llm_unavailable'}
 
     def can_retry_round(self,state):
-        return (self.config.target_completed_rounds>0 and state['round_number']<self.config.max_rounds and
+        return (self.config.target_completed_rounds>0 and
+                (self.config.max_rounds is None or state['round_number']<self.config.max_rounds) and
                 self.budget.snapshot().research_seconds>=self.admission_cost())
 
     def can_retry_planning(self,state):
-        return (state['round_number']<=self.config.max_rounds and
+        return ((self.config.max_rounds is None or state['round_number']<=self.config.max_rounds) and
                 state.get('planning_attempt',0)+1<self.config.max_attempts and
                 self.budget.snapshot().research_seconds>=self.admission_cost())
 
@@ -614,7 +629,13 @@ class Pipeline:
                 memory_gb=min(self.budget.memory_gb,run.resource_memory_gb),cpus=min(self.budget.cpus,run.resource_cpus))
         if result['status']!='completed':
             raise ValueError('Inference failed: '+(result.get('error') or result.get('stop_reason') or 'worker_error'))
-        return {k:read_table(v).to_numpy() for k,v in result['predictions'].items()}
+        predictions = {k:read_table(v).to_numpy() for k,v in result['predictions'].items()}
+        # Keep outputs and logs for audit; this input is only worker transport.
+        try:
+            features_path.unlink(missing_ok=True)
+        except OSError as error:
+            emit('prediction.input_cleanup_failed',{'path':str(features_path),'error':str(error)[:300]})
+        return predictions
 
     def publish(self,champion):
         if self.budget.snapshot().remaining_seconds < 1: return
@@ -643,7 +664,7 @@ class Pipeline:
                 emit('submission.first',first)
             emit('submission.published',artifact.model_dump(),experiment_id=champion.run.experiment_id,
                  candidate_id=champion.candidate.candidate_id)
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except Exception as error:
             self.store.event('submission_failed',champion.run.experiment_id,{'error':str(error)})
@@ -711,6 +732,7 @@ class Pipeline:
                                   duration_seconds=result['duration_seconds'],peak_memory_gb=result['peak_memory_gb'])
             run = ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
             try:
+                require_worker_infrastructure(result, self.run_dir/'runs'/run.experiment_id)
                 if run.status!='completed': raise ValueError(run.error or run.stop_reason or 'Training failed')
                 from .execution import require_admitted
                 require_admitted(run,candidate)
@@ -751,7 +773,7 @@ class Pipeline:
                                 seconds=min(self.config.diagnostic_seconds,max(.1,self.budget.snapshot().research_seconds)),
                                 cpus=plan.cpus,memory_gb=plan.memory_gb)
                             evaluation.diagnostics['model_inspection']=diagnosed.get('diagnostics',dict(status='unavailable',reason=diagnosed.get('stop_reason') or diagnosed.get('error')))
-                        except GlobalAPIError:
+                        except (GlobalAPIError, WorkerInfrastructureError):
                             raise
                         except Exception as error:evaluation.diagnostics['model_inspection']=dict(status='unavailable',reason=str(error)[:300])
                         evaluation.diagnostics['artifact_ref']=str(diag_dir/'report.json')
@@ -784,6 +806,10 @@ class Pipeline:
                 if self.budget.reserve!=old_reserve:
                     self.store.put('budget','current',{'final_reserve_seconds':self.budget.reserve})
                     emit('budget.reserve_updated',{'final_reserve_seconds':self.budget.reserve})
+            except WorkerInfrastructureError as error:
+                run.status='failed';run.error=str(error);run.stop_reason=error.reason
+                self.store.put('experiment',run.experiment_id,run)
+                raise
             except GlobalAPIError:
                 raise
             except Exception as error:
@@ -808,7 +834,7 @@ class Pipeline:
                                 min(self.config.coding_seconds,group_remaining(plan)))))
                             repaired=self.prepare(plan,round_id,feedback=error,prior=candidate,coding_config=repair_config)
                             if repaired:pending.append((repaired,plan,False,repairs+1))
-                        except GlobalAPIError:
+                        except (GlobalAPIError, WorkerInfrastructureError):
                             raise
                         except LLMUnavailable:pass
                     repair_queue=[]
@@ -836,8 +862,7 @@ class Pipeline:
                     if old_worker:
                         import psutil
                         try:
-                            p=psutil.Process(old_worker['pid'])
-                            if p.create_time()==old_worker['created']: terminate_tree(p.pid)
+                            if recorded_process_matches(old_worker): terminate_tree(old_worker['pid'])
                         except psutil.Error: pass
                     run_dir=self.run_dir/'runs'/experiment_id
                     # Reuse a completed worker result after an interrupted controller, before relaunching.
@@ -854,7 +879,8 @@ class Pipeline:
                     req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_gain_threshold','hpo_seconds')})
                     req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
                     initial=next((r for r in results if r['candidate']['candidate_id']==candidate.candidate_id and r['plan']['strategy']=='single'),None)
-                    if initial:req['baseline_score']=initial['run']['internal_score']
+                    if initial and initial['run'].get('validation_scope','model')=='model':
+                        req['baseline_score']=initial['run']['internal_score']
                     seconds=min(plan.time_limit_seconds,self.config.experiment_seconds,remaining)
                     if self.config.target_completed_rounds:
                         seconds=min(seconds,max(10.,self.cycle_allowance(state['round_number'])-2*self.config.prediction_seconds-self.config.diagnostic_seconds-30))
@@ -863,7 +889,7 @@ class Pipeline:
                     with bind(hypothesis_id=plan.hypothesis.hypothesis_id,candidate_id=candidate.candidate_id,experiment_id=experiment_id):
                         job=self.sandbox.start(req,run_dir,seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
                     import psutil
-                    try:self.store.put('worker',experiment_id,{'pid':job.process.pid,'created':psutil.Process(job.process.pid).create_time()})
+                    try:self.store.put('worker',experiment_id,worker_record(job.process.pid))
                     except psutil.Error:pass
                     active.append((entry,job,run));pending.remove(entry)
                 for entry,job,run in list(active):
@@ -880,6 +906,30 @@ class Pipeline:
                     impossible=[e for e in pending if e[1].cpus>self.budget.cpus or e[1].memory_gb>self.budget.memory_gb]
                     for e in impossible:
                         pending.remove(e);self.store.event('resource_skipped',e[0].candidate_id,{})
+
+        feature_handled = False
+
+        def feature_branch():
+            nonlocal feature_handled
+            if feature_handled or not self.last_submission or champion is None:
+                return
+            feature_handled = True
+            from .feature_search import (run_feature_session, complete_feature_session,
+                                         feature_session_key, select_feature_baseline)
+            # The coordinator gets a source/config snapshot, never an outer evaluation.
+            try:
+                baseline=select_feature_baseline(self,champion,trained,state['round_number'])
+                selected=run_feature_session(self,baseline,split,train_path)
+                if selected:
+                    completed_run=finished(CandidateVersion.model_validate(selected['candidate']),
+                        HypothesisPlan.model_validate(selected['plan']),ExperimentRun.model_validate(selected['run']),selected['run'])
+                    complete_feature_session(self,selected,
+                        completed_run.status=='completed' and champion is not None and
+                        champion.run.experiment_id==selected['run']['experiment_id'])
+            except (GlobalAPIError, WorkerInfrastructureError):
+                raise
+            except Exception as error:
+                self.store.event('feature_session_failed',feature_session_key(round_id),{'error':str(error)[:1500]})
 
         plans=sorted([HypothesisPlan.model_validate(p) for p in state['plans']],key=lambda p:not p.hypothesis.baseline)
         entries=[]
@@ -909,7 +959,7 @@ class Pipeline:
                 plan=plan.model_copy(update={'time_limit_seconds':fit_limit})
             coding_config=self.config.model_copy(update=dict(coding_seconds=max(.1,min(self.config.coding_seconds,group_room))))
             try: candidate=self.prepare(plan,round_id,coding_config=coding_config)
-            except GlobalAPIError:
+            except (GlobalAPIError, WorkerInfrastructureError):
                 raise
             except LLMUnavailable:
                 self.store.event('llm_unavailable','coding',{});break
@@ -917,21 +967,26 @@ class Pipeline:
                 entry=(candidate,plan,False,0)
                 if previous is None and number==0:
                     process_jobs([entry])  # obtain a first valid file before preparing alternatives
+                    feature_branch()
                     if self.last_submission and self.config.hpo_enabled and plan.strategy=='single' and plan.search_group_kind=='single':
                         space=self.search_space(plan)
                         if space and self.budget.snapshot().research_seconds>2*self.config.prediction_seconds+30:
-                            search=plan.model_copy(update={'strategy':'optuna','search_space':space,'max_trials':self.config.hpo_max_trials,
+                            from .model_spec import frozen_plan
+                            hpo_base=champion if champion is not None else None
+                            hpo_candidate=hpo_base.candidate if hpo_base else candidate
+                            hpo_plan=frozen_plan(hpo_base.plan,hpo_base.run) if hpo_base else plan
+                            search=hpo_plan.model_copy(update={'strategy':'optuna','search_space':space,'max_trials':self.config.hpo_max_trials,
                                 'time_limit_seconds':min(self.config.experiment_seconds,self.config.hpo_seconds*1.35)})
                             from .model_spec import hpo_child
-                            parent=next((r['run']['experiment_id'] for r in results if r['candidate']['candidate_id']==candidate.candidate_id),None)
+                            parent=hpo_base.run.experiment_id if hpo_base else None
                             search=hpo_child(search,parent)
-                            search.intervention.base_candidate_id=candidate.candidate_id
-                            search.hypothesis.based_on=candidate.candidate_id
+                            search.intervention.base_candidate_id=hpo_candidate.candidate_id
+                            search.hypothesis.based_on=hpo_candidate.candidate_id
                             parent_row=next((r for r in results if r['run']['experiment_id']==parent),None)
                             if parent_row:
                                 from .execution import config_hash
                                 search.base_config_hash=config_hash(parent_row['run'].get('model_spec') or parent_row['run']['best_params'])
-                            process_jobs([(candidate,search,False,0)])
+                            process_jobs([(hpo_candidate,search,False,0)])
                 else: entries.append(entry)
             elif plan.search_group_id:
                 group_skips.append(dict(group_id=plan.search_group_id,variant_id=plan.hypothesis.hypothesis_id,reason='coding_failed_or_not_admitted'))
@@ -942,11 +997,13 @@ class Pipeline:
                     alternative=self.planning_call(state,mode='alternatives',hypotheses=state['deferred_hypotheses'])
                     if alternative.get('valid'):
                         plans.extend(HypothesisPlan.model_validate(p) for p in alternative['plans'])
-                except GlobalAPIError:
+                except (GlobalAPIError, WorkerInfrastructureError):
                     raise
                 except (LLMUnavailable,ValueError) as error:
                     emit('planning.alternative_failed',{'error':str(error)})
         process_jobs(entries)
+        if previous is None:
+            feature_branch()
         from .search_groups import collect_groups, internal_winner
         group_results=[]
         for group in collect_groups(plans):
@@ -987,6 +1044,9 @@ class Pipeline:
                 (self.store.get('training_plan',r['experiment_id']) or {}).get('search_group_id')==key]
             self.store.put('search_group_result',round_id+'-'+key,outcome)
             group_results.append(outcome)
+        # Later cycles use the newly rechecked champion after model/family selection.
+        # The first cycle has already run this branch before baseline HPO.
+        feature_branch()
         ensemble_status=self.store.get('ensemble_planning',round_id)
         if state['round_number']>1 and ensemble_status and not ensemble_status.get('plans'):
             group_results.append(dict(group_id=round_id+'-ensemble',kind='ensemble',status='skipped',
@@ -1048,13 +1108,6 @@ class Pipeline:
         previous=SelectedPreviousResults(round_id=round_id,selected=selected,failures=failures,
             champion_id=champion_id,decisions=decisions,search_groups=state.get('search_groups',[]))
         self.store.put('analysis',round_id,previous,immutable=True)
-        try:
-            self.review_results(rows,context)
-            self.scout(round_id,previous.model_dump(mode='json'))
-        except GlobalAPIError:
-            raise
-        except Exception as error:
-            self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         complete=bool(state.get('incumbent_succeeded',True) and
                       [r for r in rows if not r['run']['incumbent'] and r['evaluation']['diagnostics']])
         self.store.put('cycle',round_id,dict(round_id=round_id,completed=complete,
@@ -1065,11 +1118,20 @@ class Pipeline:
             stale=0 if state.get('promoted') else stale+1
         stop=state.get('stop_reason')
         completed=sum(c['completed'] for c in self.store.list('cycle'))
-        if stale>=self.config.plateau_rounds and completed>=self.config.target_completed_rounds:stop='plateau'
+        if self.config.plateau_rounds is not None and stale>=self.config.plateau_rounds and completed>=self.config.target_completed_rounds:stop='plateau'
         if not rows and not state.get('champion') and not self.can_retry_round(state):stop='no_successful_candidates'
-        if state['round_number']>=self.config.max_rounds:stop='max_rounds'
+        if self.config.max_rounds is not None and state['round_number']>=self.config.max_rounds:stop='max_rounds'
         if self.config.target_completed_rounds and completed>=self.config.target_completed_rounds:stop='target_completed_rounds'
         if self.budget.snapshot().research_seconds<1:stop='research_deadline'
+        # Reviews advise the next round. Its planning_payload loads follow-up
+        # reconnaissance lazily; a terminal cycle needs neither advisory role.
+        if stop is None:
+            try:
+                self.review_results(rows,context)
+            except (GlobalAPIError, WorkerInfrastructureError):
+                raise
+            except Exception as error:
+                self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         return {'selected':previous.model_dump(mode='json'),'stale':stale,'stop_reason':stop,'round_number':state['round_number']+1}
 
     def review_results(self,rows,context):
@@ -1128,7 +1190,7 @@ class Pipeline:
                     require_admitted(run,champion.candidate)
                     full=champion.model_copy(update={'run':run})
                     self.publish(full)
-            except GlobalAPIError:
+            except (GlobalAPIError, WorkerInfrastructureError):
                 raise
             except Exception as error:
                 self.store.event('refit_failed',experiment_id,{'error':str(error)})
@@ -1136,6 +1198,10 @@ class Pipeline:
             submission=self.last_submission,champion=state.get('champion'),run_dir=str(self.run_dir),
             trace=str(self.run_dir/'trace.md'),first_submission=self.store.get('milestone','first_submission'))
         output['failure_causes']=self.failure_causes()
+        output['feature_search_sessions']=[{key:session.get(key) for key in
+            ('session_id','round_id','status','reason','attempts','stagnant','best_feature_set_id','outer_experiment_id')}
+            for session in self.store.list('feature_session')]
+        output['feature_search']=(output['feature_search_sessions'][-1] if output['feature_search_sessions'] else None)
         output['warnings']=self.store.list('warning')
         output['process_acceptance']=dict(target_completed_rounds=self.config.target_completed_rounds,
             completed_rounds=sum(c['completed'] for c in self.store.list('cycle')),
@@ -1163,7 +1229,10 @@ class Pipeline:
         graph.add_edge('execute','analyze')
         graph.add_conditional_edges('analyze',lambda s:'finalize' if s.get('stop_reason') else 'plan',{'plan':'plan','finalize':'finalize'})
         graph.add_edge('finalize',END)
-        return graph.compile(checkpointer=self.checkpointer)
+        # Continuous runs checkpoint after each cycle, then resume in a fresh
+        # invocation so LangGraph's per-invocation step guard is not a run limit.
+        return graph.compile(checkpointer=self.checkpointer,
+            interrupt_after=['analyze'] if self.config.max_rounds is None else None)
 
     def run(self,*,resume=False):
         with self.trace.activate():
@@ -1175,8 +1244,12 @@ class Pipeline:
                 cpus=self.budget.cpus,memory_gb=self.budget.memory_gb,config=self.config.model_dump()))
             self.preflight_runtime()
             graph=self.graph()
-            graph_config={'configurable':{'thread_id':'run'},'recursion_limit':max(100,self.config.max_rounds*5+10)}
+            graph_config={'configurable':{'thread_id':'run'},
+                'recursion_limit':max(100,self.config.max_rounds*5+10) if self.config.max_rounds is not None else 100}
             graph.invoke(None if resume and self.checkpointer.get_tuple(graph_config) else {},graph_config)
+            if self.config.max_rounds is None:
+                while graph.get_state(graph_config).next:
+                    graph.invoke(None,graph_config)
             output=json.loads((self.run_dir/'summary.json').read_text(encoding='utf-8'))
             emit('run.completed' if output['status']=='completed' else 'run.failed',output)
             return output
@@ -1184,6 +1257,18 @@ class Pipeline:
             output=dict(status='deferred',stop_reason='deferred_time_series_support',error=self.trace.scrub(str(error)),submission=None,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'))
             emit('run.deferred',output)
             atomic_json(self.run_dir/'summary.json',output)
+            return output
+        except WorkerInfrastructureError as error:
+            failure=dict(reason=error.reason,error=str(error),artifacts=error.directory)
+            self.store.event('worker_infrastructure_failed',error.directory,failure)
+            output=dict(status='failed',stop_reason='worker_infrastructure_error',error=str(error),
+                submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),
+                process_acceptance=dict(target_completed_rounds=self.config.target_completed_rounds,
+                    completed_rounds=sum(c['completed'] for c in self.store.list('cycle')),passed=False),
+                failure_causes=self.failure_causes())
+            atomic_json(self.run_dir/'worker-infrastructure-failure.json',failure)
+            atomic_json(self.run_dir/'summary.json',output)
+            emit('run.failed',output)
             return output
         except GlobalAPIError as error:
             output=dict(status='failed',stop_reason='global_api_failure',error=str(error),
@@ -1216,7 +1301,7 @@ class Pipeline:
 
     def failure_causes(self):
         rows=self.store.db.execute("SELECT kind,object_id,body FROM events WHERE kind IN "
-            "('planning_failed','coding_failed','llm_unavailable','submission_failed','refit_failed','experiment_failed','adapter_failure','worker_runtime_failed') ORDER BY seq").fetchall()
+            "('planning_failed','coding_failed','llm_unavailable','submission_failed','refit_failed','experiment_failed','adapter_failure','worker_runtime_failed','worker_infrastructure_failed') ORDER BY seq").fetchall()
         return [dict(kind=kind,object_id=key,details=json.loads(body)) for kind,key,body in rows]
 
     def index_artifacts(self):

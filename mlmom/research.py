@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .agents import GlobalAPIError
+from .resources import WorkerInfrastructureError
 
 import math
 import json
@@ -278,7 +279,7 @@ class ReconnaissanceSession:
             if self.budget.now() >= self.deadline:
                 raise ValueError('Reconnaissance deadline reached')
             answer = self.reconcile(answer)
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except Exception as exc:
             error = str(exc)[:300]
@@ -416,7 +417,7 @@ def review_result(client,payload,skills,key,seconds):
                 'explanation':result.explanation+(' No comparable reference was available.' if not comparable else
                     ' The intended intervention was not cleanly implemented.')})
         return result
-    except GlobalAPIError:
+    except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error:
         return ResultReview(implementation='unknown',effect='inconclusive',explanation='Review unavailable: '+str(error)[:300])

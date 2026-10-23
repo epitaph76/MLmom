@@ -106,6 +106,20 @@ def make_split(frame: pd.DataFrame, context: TaskContext, round_id: str, fractio
                      seed=seed, strategy=strategy, train_indices=a.tolist(), holdout_indices=b.tolist())
 
 
+def feature_context(context, holdout_folds=3):
+    """A separately scoped protocol; never mutate the confirmed task."""
+    if context.task.time_column or context.task.task_type == 'time_series_forecasting':
+        raise ValueError('deferred_time_series_support')
+    if context.task.validation_strategy != 'holdout':
+        return context
+    from .contracts import TaskDefinition
+    strategy = 'group_kfold' if context.task.group_columns else (
+        'stratified_kfold' if 'classification' in context.task.task_type else 'kfold')
+    task = TaskDefinition.model_validate(dict(context.task.model_dump(),
+        validation_strategy=strategy, validation_folds=holdout_folds))
+    return context.model_copy(update={'task': task})
+
+
 def inner_protocol(frame, context, *, fraction=.2, seed=43, outer_split_id=None, source_indices=None):
     """Indices are positional, independent of pandas labels and user ID columns."""
     strategy = str(context.task.validation_strategy)

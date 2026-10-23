@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .agents import GlobalAPIError
+from .resources import WorkerInfrastructureError
 
 from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -67,6 +68,17 @@ def ground_semantic_report(report, plan, context):
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
                   *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
+    if plan.feature_set_id:
+        if not plan.feature_set or plan.feature_set.feature_set_id != plan.feature_set_id:
+            errors.append('feature_set_id requires a registered feature definition')
+        else:
+            from .feature_engineering import validate_features
+            try: validate_features(plan.feature_set,context.feature_columns)
+            except ValueError as error: errors.append(str(error))
+        if plan.ensemble_components or plan.ensemble_sources:
+            errors.append('Shared engineered features are unsupported for ensembles; use frozen components')
+    elif plan.feature_set:
+        errors.append('feature_set requires an explicit feature_set_id')
     expected_protocol=dict(strategy=str(context.task.validation_strategy),folds=context.task.validation_folds,
                            duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
     try:
@@ -123,7 +135,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     if plan.prediction_kind != prediction_kind(context.task.primary_metric, context.task.task_type):
         errors.append('prediction_kind does not match the primary metric')
     try: skills.load(plan.skill_ids, context.task.task_type)
-    except GlobalAPIError:
+    except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error: errors.append(f'Skills: {error}')
     for name, spec in plan.search_space.items():
@@ -233,6 +245,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
 
     Pass a previous output's ``hypotheses`` in the input state to reuse the same
     batch with planning_mode='alternatives', without generating new hypotheses.
+    Only baseline mode defers variants. All and alternatives modes finish every
+    selected family member; an accepted plan must not truncate the search group.
     """
     if not 1 <= max_candidates <= 2: raise ValueError('max_candidates must be between 1 and 2')
     if planning_mode not in {'all', 'baseline', 'alternatives'}: raise ValueError('Unknown planning mode')
@@ -377,6 +391,18 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
+                    # Definitions come from runtime memory, never from a planner-written formula.
+                    registry={v['definition']['feature_set_id']:v['definition'] for v in state['payload'].get('feature_sets',[])}
+                    if item.feature_set_id:
+                        if item.feature_set_id not in registry:
+                            raise ValueError('Unknown/unaccepted feature_set_id')
+                        from .feature_contracts import FeatureSet
+                        registered=FeatureSet.model_validate(registry[item.feature_set_id])
+                        if item.feature_set is not None and item.feature_set != registered:
+                            raise ValueError('Planner changed a registered feature definition')
+                        item.feature_set=registered
+                    elif item.feature_set is not None:
+                        raise ValueError('Planner must select a registered feature_set_id')
                     if hypothesis.hypothesis_id in family_metadata:
                         parent, required_tool = family_metadata[hypothesis.hypothesis_id]
                         if item.tool_id != required_tool:
@@ -406,7 +432,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                             for key,cls in policy_types.items():
                                 if key not in item.model_fields_set:
                                     setattr(item,key,cls.model_validate(old.get(key,{})))
-                            fields=('preprocessing','target_transform','weight_policy','prediction_policy','ensemble_components','stopping_policy')
+                            fields=('preprocessing','target_transform','weight_policy','prediction_policy','ensemble_components','stopping_policy','feature_set_id')
                             current=item.model_dump(mode='json')
                             changed=[key for key in fields if current[key]!=old.get(key,current[key] if key=='stopping_policy' else
                                 {} if key in policy_types else []) and
@@ -489,6 +515,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     if item.tool_id=='lightgbm' and any(word in ' '.join(item.preprocessing).lower() for word in ('categor','unseen')):
                         try:
                             probes.append(categorical_probe())
+                        except WorkerInfrastructureError:
+                            raise
                         except Exception as error:
                             probes.append(dict(probe_id='lightgbm_native_categorical_unseen_nan',status='unavailable',error_type=type(error).__name__))
                         emit('planning.capability_probes',probes)
@@ -528,7 +556,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         continue
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
                     break
-                except GlobalAPIError:
+                except (GlobalAPIError, WorkerInfrastructureError):
                     raise
                 except LLMUnavailable as error:
                     rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})

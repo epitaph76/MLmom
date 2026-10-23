@@ -171,7 +171,12 @@ class PreparedCandidate:
                 fit_stack(X, transformed, stack_context, self.create_preprocessor)
             return self
         try:
-            self.preprocessor = self.create_preprocessor(copy.deepcopy(self.config))
+            # DSL definitions belong exclusively to this wrapper, not generated factories.
+            factory_config={k:v for k,v in self.config.items() if k not in {'feature_set','feature_set_id'}}
+            self.preprocessor = self.create_preprocessor(copy.deepcopy(factory_config))
+            if self.config.get('feature_set'):
+                from .feature_engineering import FeatureAugmentingPreprocessor
+                self.preprocessor = FeatureAugmentingPreprocessor(self.preprocessor, self.config['feature_set'])
             train_context = replace(context, validation_X=None, validation_y=None,
                                     validation_groups=None, validation_weight=None)
             values = self.preprocessor.fit_transform(X, y, train_context)
@@ -182,11 +187,17 @@ class PreparedCandidate:
                 raise ValueError('Preprocessing must preserve validation rows')
         except Exception as error:
             raise ValueError(f'preprocessing.py: {type(error).__name__}: {error}') from error
-        self.estimator = self.create_model(copy.deepcopy(self.config))
+        self.estimator = self.create_model(copy.deepcopy(factory_config))
         if self.config.get('contract_version') == 2:
             self.estimator = PolicyCandidate(self.estimator, self.config)
         self.estimator.fit(values, y, replace(context, validation_X=valid))
         return self
+
+    def feature_manifest(self):
+        from .feature_engineering import FeatureAugmentingPreprocessor
+        if isinstance(self.preprocessor, FeatureAugmentingPreprocessor):
+            return self.preprocessor.manifest()
+        return None
 
     def predict(self, X, prediction_spec):
         if self.preprocessor is None:
@@ -298,6 +309,8 @@ def load_module(code_dir: str | Path):
     else:
         create_model, load_model = module.create_candidate, module.load_candidate
         def create(config):
+            if config.get('feature_set'):
+                raise ValueError('Engineered features require separate preprocessing.py')
             if config.get('ensemble_sources'):
                 candidate = create_model(copy.deepcopy(config))
                 if type(candidate) is not FrozenEnsemble:

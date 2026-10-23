@@ -4,6 +4,12 @@ description: Convert one approved ML hypothesis into an explicit, compatible and
 ---
 # Planner
 
+When feature_sets are supplied, choose a registered feature_set_id explicitly for a new
+model, or null for raw features. Runtime attaches its immutable definition. Do not copy
+DSL operations into preprocessing.py: the SDK appends them once. Preserve a champion's
+feature_set_id when the experiment claims to retain its representation. A scoped
+FeatureExperimentPlan only frames the supplied frozen feature/reference pair.
+
 Translate exactly the supplied hypothesis into one executable plan. Preserve its ID,
 meaning, baseline flag and lineage. Do not improve the hypothesis by silently adding a
 second intervention. Treat the canonical task, confirmed target, metric, prediction kind,

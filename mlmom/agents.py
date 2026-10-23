@@ -14,6 +14,7 @@ from openai import APIConnectionError, APITimeoutError, APIStatusError, BadReque
 from .llm_client import LLMSettings
 from .json_utils import extract_json as _extract_json
 from .tracing import TraceSink, current_sink, emit, span, bind
+from .resources import WorkerInfrastructureError
 
 
 class LLMUnavailable(RuntimeError):
@@ -329,6 +330,8 @@ class RoleClient:
                     result = schema.model_validate(decoded)
                     emit('llm.structured_output', result)
                     return result
+                except WorkerInfrastructureError:
+                    raise
                 except Exception as error:
                     if role == 'plan_validator' and not format_repairs:
                         format_repairs += 1

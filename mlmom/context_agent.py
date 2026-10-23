@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .agents import GlobalAPIError
+from .resources import WorkerInfrastructureError
 
 import hashlib
 import json
@@ -117,12 +118,12 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
                 if budget.now()>=window['deadline']:raise ValueError('Context preparation deadline reached')
                 draft=_validate(answer,catalog,task_text)
                 break
-            except GlobalAPIError:
+            except (GlobalAPIError, WorkerInfrastructureError):
                 raise
             except Exception as exc:
                 error=str(exc)[:500]
                 if attempt+1>=min(2,config.max_attempts):raise
-    except GlobalAPIError:
+    except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as exc:
         error=str(exc)[:500]

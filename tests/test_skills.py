@@ -58,7 +58,7 @@ class SkillTests(unittest.TestCase):
 
     def test_backend_manifests_match_adapter_tasks_and_dependencies(self):
         registry = SkillRegistry(ROOT)
-        self.assertEqual(len(registry.list()), 31)
+        self.assertEqual(len(registry.list()), 32)
         for tool, distribution, _, _, tasks, *_ in DEFINITIONS:
             with self.subTest(tool=tool):
                 manifest = registry.manifests[tool]

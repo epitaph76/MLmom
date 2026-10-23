@@ -105,6 +105,17 @@ class PipelineIntegrationTests(unittest.TestCase):
                 self.assertNotEqual(splits[0]['holdout_indices'],splits[1]['holdout_indices'])
                 self.assertNotEqual(splits[0]['split_id'],splits[1]['split_id'])
                 self.assertEqual([s['seed'] for s in splits],[config.seed,config.seed+1])
+                # Advisors still run for a continuing cycle, and the next
+                # planning call loads its reconnaissance. Final-cycle calls stop.
+                first_experiments={r['experiment_id'] for r in runs if r['round_id']=='r1'}
+                reviews=store.list('result_review')
+                self.assertTrue(reviews)
+                self.assertTrue(any(store.get('result_review',key) for key in first_experiments))
+                self.assertTrue(all(store.get('result_review',r['experiment_id']) is None
+                                    for r in runs if r['round_id']=='r2'))
+                self.assertEqual(len(store.list('reconnaissance')),2)
+                self.assertIsNotNone(store.get('reconnaissance','r1'))
+                self.assertIsNone(store.get('reconnaissance','r2'))
                 incumbent=[r for r in runs if r['incumbent']]
                 self.assertEqual(len(incumbent),1)
                 self.assertEqual(incumbent[0]['split_id'],splits[1]['split_id'])

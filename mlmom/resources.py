@@ -13,6 +13,7 @@ import psutil
 from .persistence import atomic_json
 from .pipeline_contracts import BudgetSnapshot, RunConfig
 from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
+from .process_identity import process_identity, process_matches
 
 
 class ResourceUnavailable(ValueError):
@@ -21,6 +22,20 @@ class ResourceUnavailable(ValueError):
 
 class WorkerRuntimeError(RuntimeError):
     """The worker cannot use the controller's Python environment."""
+
+
+class WorkerInfrastructureError(WorkerRuntimeError):
+    """Terminal supervisor failure; generating another model cannot fix it."""
+    def __init__(self, result, directory):
+        self.result = result
+        self.directory = str(directory)
+        self.reason = result.get('stop_reason') or 'worker_infrastructure_error'
+        super().__init__(f'Worker infrastructure failure: {self.reason} [artifacts: {directory}]')
+
+
+def require_worker_infrastructure(result, directory):
+    if result.get('stop_reason') in {'parent_exit', 'controller_closed'}:
+        raise WorkerInfrastructureError(result, directory)
 
 
 RUNTIME_MODULES = {'pydantic': 'pydantic', 'psutil': 'psutil', 'numpy': 'numpy',
@@ -127,7 +142,9 @@ class Job:
         try:
             parent = psutil.Process(self.process.pid)
             children = parent.children(recursive=True)
-            self.descendants.update((p.pid,p.create_time()) for p in children)
+            for child in children:
+                try: self.descendants.add(process_identity(child.pid))
+                except psutil.Error: pass
             rss = sum(p.memory_info().rss for p in [parent]+children if p.is_running())/1024**3
             self.peak_memory_gb = max(self.peak_memory_gb,rss)
             if rss > self.memory_gb: self.reason = 'memory_limit'
@@ -140,10 +157,9 @@ class Job:
         if self.result is not None: return self.result
         self.process.wait()
         self.stdout.close(); self.stderr.close()
-        for pid,created in self.descendants:
+        for identity in self.descendants:
             try:
-                process = psutil.Process(pid)
-                if process.create_time() == created: terminate_tree(pid)
+                if process_matches(identity) is True: terminate_tree(identity.pid)
             except psutil.Error: pass
         result_path = self.directory/'result.json'
         limit_path = self.directory/'limit.json'
@@ -224,7 +240,7 @@ class SandboxManager:
         directory.mkdir(parents=True,exist_ok=True)
         for name in ['result.json','limit.json']:
             (directory/name).unlink(missing_ok=True)
-        request = dict(request, parent_pid=os.getpid(),parent_created=psutil.Process().create_time(),
+        request = dict(request, parent_pid=os.getpid(),parent_identity=process_identity().to_dict(),
                        worker_seconds=seconds,worker_cpus=cpus,worker_memory_gb=memory_gb,timeouts_enabled=self.timeouts_enabled)
         atomic_json(directory/'request.json',request)
         root = Path(__file__).resolve().parent.parent
@@ -284,7 +300,9 @@ class SandboxManager:
         while job.poll() is None:
             self.reap()
             time.sleep(.05)
-        return job.finish()
+        result = job.finish()
+        require_worker_infrastructure(result, directory)
+        return result
 
     def close(self):
         # Stop every process before parsing artifacts or invoking logging callbacks.

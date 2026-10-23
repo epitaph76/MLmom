@@ -215,9 +215,19 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
             method = getattr(model, 'export_model_spec', None)
             spec = method() if callable(method) else model_spec(config, exported)
             spec = ModelSpec.model_validate(spec).model_dump(mode='json')
+            from .feature_contracts import feature_hash
+            if spec.get('feature_set_hash') != feature_hash(config.get('feature_set')):
+                report['errors'].append('ModelSpec.feature_set_hash differs from the assigned definition')
             if spec['backend_params'] != exported:
                 report['errors'].append('ModelSpec.backend_params differs from exported backend parameters')
             report['model_spec'] = spec
+            if spec.get('feature_set_hash'):
+                from .feature_contracts import feature_hash
+                manifest = model.feature_manifest() if callable(getattr(model, 'feature_manifest', None)) else None
+                report['feature_manifest'] = manifest
+                if (spec['feature_set_hash'] != feature_hash(config.get('feature_set')) or not manifest or
+                        manifest['feature_set_hash'] != spec['feature_set_hash']):
+                    report['errors'].append('Missing or changed trusted feature preprocessing')
             objects = dict(_component_objects(components))
             for name, actual in _leaves(report['components']):
                 component = objects.get(name)
@@ -227,6 +237,11 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                         report['errors'].append(f'{name}: missing trusted backend fit-entry provenance')
                     continue
                 actual['fit_entry'] = trace
+                if spec.get('feature_set_hash'):
+                    if trace.get('model_spec', {}).get('feature_set_hash') != spec['feature_set_hash']:
+                        report['errors'].append(f'{name}: feature definition differs at backend fit entry')
+                    if manifest and trace.get('input_columns') != manifest['output_width']:
+                        report['errors'].append(f'{name}: backend did not consume the complete engineered input')
                 if config.get('ensemble_sources'):
                     source=next((s for s in config['ensemble_sources'] if s['name']==name.split('.')[0]),None)
                     if source:
@@ -394,4 +409,7 @@ def require_admitted(run, candidate):
         raise ValueError('Machine execution gate: saved parameters differ from verified export')
     if report.get('version') == 2 and getattr(run, 'model_spec', None) != report.get('model_spec'):
         raise ValueError('Machine execution gate: saved ModelSpec differs from verified execution')
+    if (getattr(candidate,'feature_set_hash',None) != (getattr(run,'model_spec',None) or {}).get('feature_set_hash') or
+            getattr(candidate,'feature_set_hash',None) != (smoke.get('model_spec') or {}).get('feature_set_hash')):
+        raise ValueError('Machine execution gate: feature assignment differs from smoke/refit provenance')
     if not run.full_refit: raise ValueError('Machine execution gate: full-train refit is missing')

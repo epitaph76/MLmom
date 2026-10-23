@@ -4,6 +4,9 @@ description: Fit fold-local tabular and sparse text transforms and preserve infe
 ---
 # Preprocessing
 
+An assigned feature_set is executed and appended by the SDK after this module. Implement
+only base preprocessing; do not duplicate DSL features or fit their statistics here.
+
 Fallback: numeric/bool median imputation, StandardScaler; categories imputed and dense OHE with unknown=ignore, min_frequency=2, max_categories=100. Choose and implement native categories for LightGBM/CatBoost deliberately; no hidden adapter prepares data. All vocabularies and transforms fit on current training rows only.
 
 For text or mixed tables generate a sparse ColumnTransformer with word/character TF-IDF, LogisticRegression (C) or Ridge (alpha). Implement text-column selection explicitly from the schema/hypothesis. Numeric scaling preserves sparse output and category OHE stays sparse. No pretrained models/downloads. This path supports unseen Unicode tokens, empty text and missing columns' values.

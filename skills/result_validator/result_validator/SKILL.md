@@ -4,6 +4,11 @@ description: Review implementation fidelity and empirical support without changi
 ---
 # Result validator
 
+An assigned feature_set is executed by the SDK even when estimator/preprocessing source
+is unchanged. Check ModelSpec.feature_set_hash and execution_report.feature_manifest,
+including backend fit-entry input width. feature_inner_cv_mean and feature_inner_oof
+are internal feature-search evidence, never a replacement for paired outer evaluation.
+
 This review is advisory. Never change code, rerun work, select a champion or block a valid
 submission. Use only the supplied source, parameters, evaluations, diagnostics and allowed
 evidence references. Keep four questions separate:

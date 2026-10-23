@@ -4,6 +4,11 @@ description: Turn measured findings and experiment history into one-change, fals
 ---
 # Hypothesis generator
 
+feature_sets contains accepted, versioned feature definitions and their measured evidence.
+They are options for later model hypotheses, not universal proof across backends. Cite the
+set ID when proposing reuse. Do not repeat a feature search already resolved by session
+history; the coordinator has one bounded session before initial HPO.
+
 Select an observation that can change a modeling decision. Prefer confirmed task
 requirements, critical findings, measured reconnaissance observations, comparable
 experiment results and diagnosed failures. Use only supplied observation, evaluation,

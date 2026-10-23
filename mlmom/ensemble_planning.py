@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 
 from .agents import GlobalAPIError, LLMUnavailable, role_window
+from .resources import WorkerInfrastructureError
 from .pipeline_contracts import EnsembleProposal, Hypothesis, HypothesisPlan, ExperimentRun
 from .planning import build_planning_graph
 from .search_groups import SUPERVISED, component_pool, component_brief, ensemble_recipes
@@ -87,7 +88,7 @@ def plan_ensemble(pipeline, state):
         group = ensemble_recipes(HypothesisPlan.model_validate(result['plans'][0]),context.task.task_type)
         pipeline.store.put('search_group',key+'-'+group.hypothesis.hypothesis_id,group)
         return finish(plans=[p.model_dump(mode='json') for p in group.variants],reason='planned')
-    except GlobalAPIError:
+    except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except (LLMUnavailable,ValueError) as error:
         return finish(plans=[],reason='ensemble_planning_failed',error=str(error)[:2000])

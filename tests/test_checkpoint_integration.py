@@ -1,4 +1,4 @@
-"""Actual worker/control exchange, bounded Optuna, and advisory mismatch review."""
+"""Actual worker/control exchange, bounded Optuna, and terminal advisor policy."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +28,7 @@ class ControlledLLM(OfflineLLM):
 
 
 class CheckpointIntegrationTests(unittest.TestCase):
-    def test_worker_consumes_decisions_before_next_batch_and_review_cannot_block_submission(self):
+    def test_worker_consumes_decisions_before_next_batch_and_terminal_cycle_skips_advisors(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             config=RunConfig(timeouts_enabled=True,total_seconds=240,final_reserve_seconds=30,max_rounds=1,max_candidates=1,
@@ -49,8 +49,10 @@ class CheckpointIntegrationTests(unittest.TestCase):
                 checkpoints=store.list('training_checkpoint')
                 self.assertEqual([c['stage'] for c in checkpoints],['initial_fit','initial_fit','batch'])
                 self.assertTrue(all('validation_y' not in c and 'holdout' not in c for c in checkpoints))
-                self.assertTrue(all(r['implementation']=='mismatch' for r in store.list('result_review')))
-                self.assertEqual(len(store.list('reconnaissance')),2)
+                self.assertEqual(store.list('result_review'),[])
+                self.assertFalse(any(role=='result_validator' for role,_ in client.calls))
+                self.assertEqual(len(store.list('reconnaissance')),1)
+                self.assertIsNotNone(store.get('reconnaissance','initial'))
                 self.assertTrue(store.get('milestone','first_submission'))
                 candidate=store.list('candidate')[-1]
                 self.assertTrue(candidate['preprocessing_hash'])

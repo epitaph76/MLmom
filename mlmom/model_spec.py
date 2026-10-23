@@ -36,6 +36,7 @@ class ModelSpec(StrictModel):
     prediction_policy: PredictionPolicy = Field(default_factory=PredictionPolicy)
     code_hash: str | None = None
     preprocessing_hash: str | None = None
+    feature_set_hash: str | None = None
 
 
 class Intervention(StrictModel):
@@ -53,14 +54,19 @@ POLICIES = ('target_transform', 'weight_policy', 'prediction_policy')
 
 
 def model_spec(config, params=None):
+    from .feature_contracts import feature_hash
     return ModelSpec(tool_id=config.get('tool_id', 'unknown'),
         backend_params=copy.deepcopy(config.get('model_params', {}) if params is None else params),
         code_hash=config.get('_code_hash'), preprocessing_hash=config.get('_preprocessing_hash'),
+        feature_set_hash=feature_hash(config.get('feature_set')),
         **{key: config.get(key, {}) for key in POLICIES}).model_dump(mode='json')
 
 
 def with_spec(config, spec):
+    from .feature_contracts import feature_hash
     spec = ModelSpec.model_validate(spec).model_dump(mode='json')
+    if spec['feature_set_hash'] != feature_hash(config.get('feature_set')):
+        raise ValueError('Frozen ModelSpec differs from the feature definition')
     return dict(config, model_params=spec['backend_params'], **{key: spec[key] for key in POLICIES})
 
 

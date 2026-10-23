@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .agents import GlobalAPIError
+from .resources import WorkerInfrastructureError
 
 import math
 import os
@@ -70,7 +71,7 @@ def decide(client, checkpoint, skills, *, seconds=30):
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
                 dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills), TrainingDecision, None)
         return validate_decision(answer, checkpoint)
-    except GlobalAPIError:
+    except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error:
         emit('training.fallback', {'checkpoint_id': checkpoint.checkpoint_id, 'reason': str(error)[:300]})

@@ -94,6 +94,7 @@ def _patch(cls, method='fit'):
             component_type=type(self).__module__ + '.' + type(self).__name__,
             object_id=id(self), params=serializable_params(self),
             rows=len(y) if y is not None else (X.shape[0] if hasattr(X, 'shape') else None),
+            input_columns=int(X.shape[1]) if hasattr(X, 'shape') and len(X.shape)>1 else None,
             target_fingerprint=fingerprint(y, labels=scope['classification']),
             weight_fingerprint=fingerprint(weights),
             expected_target_fingerprint=scope['target'], expected_weight_fingerprint=scope['weights'],

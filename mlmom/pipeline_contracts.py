@@ -5,9 +5,16 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
 from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy, Intervention
+from .feature_contracts import FeatureSpec, FeatureSet, FeatureEvidence, FeatureSession
 
 
 class RunConfig(StrictModel):
+    feature_search_enabled: bool = True
+    feature_max_configurations: int = Field(6, ge=1, le=6)
+    feature_plateau_limit: int = Field(3, ge=1, le=6)
+    feature_holdout_folds: int = Field(3, ge=3, le=3)
+    feature_agent_seconds: float = Field(120, gt=0)
+    feature_min_delta: float = Field(0, ge=0)
     thinking_mode: Literal['default', 'off'] = 'default'
     role_thinking: dict[str, Literal['default', 'off']] = Field(default_factory=lambda: {'context_agent':'off', 'training_agent':'off'})
     network_failure_threshold: int = Field(3, ge=1)
@@ -21,8 +28,8 @@ class RunConfig(StrictModel):
     initial_experiment_seconds: float = Field(300, gt=0)
     coding_seconds: float = Field(300, gt=0)
     prediction_seconds: float = Field(180, gt=0)
-    max_rounds: int = Field(100, ge=1)
-    plateau_rounds: int = Field(5, ge=1)
+    max_rounds: int | None = Field(100, ge=1)
+    plateau_rounds: int | None = Field(5, ge=1)
     max_candidates: int = Field(2, ge=1, le=2)
     ensemble_search_enabled: bool = True
     ensemble_agent_seconds: float = Field(120, gt=0)
@@ -158,6 +165,8 @@ class HypothesisBatch(StrictModel):
 
 
 class HypothesisPlan(StrictModel):
+    feature_set_id: str | None = None
+    feature_set: FeatureSet | None = None
     contract_version: Literal[2] = 2
     target_transform: TargetTransform = Field(default_factory=TargetTransform)
     weight_policy: WeightPolicy = Field(default_factory=WeightPolicy)
@@ -236,6 +245,7 @@ class ValidationReport(StrictModel):
 
 
 class CandidateVersion(StrictModel):
+    feature_set_hash: str | None = None
     candidate_id: str
     hypothesis_id: str
     version: int
@@ -262,6 +272,7 @@ class SplitSpec(StrictModel):
 
 
 class TrialResult(StrictModel):
+    validation_scope: Literal['model', 'feature'] = 'model'
     number: int
     params: dict[str, Any]
     status: str
@@ -283,6 +294,8 @@ class TrialResult(StrictModel):
 
 
 class ExperimentRun(StrictModel):
+    validation_scope: Literal['model', 'feature'] = 'model'
+    oof_score_kind: str = 'inner_oof'
     model_spec: dict[str, Any] | None = None
     intervention: Intervention | None = None
     experiment_id: str

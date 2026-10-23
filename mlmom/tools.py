@@ -11,6 +11,7 @@ from pydantic import create_model,ConfigDict
 from .inputs import inside
 from .pipeline_contracts import ToolResult, ValidationReport
 from .tracing import span, emit
+from .resources import WorkerInfrastructureError
 
 
 class ToolInputError(ValueError):
@@ -50,6 +51,8 @@ class ToolSet:
             args = model.model_validate(json.loads(arguments) if isinstance(arguments,str) else arguments)
             result = fn(**args.model_dump())
             return ToolResult(status='ok', data=result, duration_seconds=time.monotonic()-start)
+        except WorkerInfrastructureError:
+            raise
         except Exception as error:
             return ToolResult(status='error', error=f'{type(error).__name__}: {str(error)[:2500]}',
                               error_code=getattr(error,'code',type(error).__name__),

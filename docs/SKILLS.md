@@ -3,13 +3,14 @@
 Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
 
 <!-- skill-registry:start -->
-Всего карточек: 31; ready: 31; placeholder: 0.
+Всего карточек: 32; ready: 32; placeholder: 0.
 
 | Владелец | Карточки | Автоматический набор |
 |---|---|---|
 | coding_agent | autogluon, catboost, ensembles, flaml, imbalance, lightautoml, lightgbm, sklearn, statsmodels, torch, xgboost | candidate_sdk, metrics |
 | context_agent | context_agent | context_agent |
 | ensemble_agent | ensemble_agent | ensemble_agent |
+| feature_agent | feature_agent | feature_agent |
 | hypothesis_generator | hypothesis_generator | hypothesis_generator |
 | plan_validator | validation | validation, metrics |
 | planner | planner | planner |

@@ -234,8 +234,16 @@ class ScoutingTests(unittest.TestCase):
         try:
             pipeline.inspect({})
             pipeline.store.put('split','r1',dict(train_indices=[0,1,2,3],holdout_indices=list(range(4,180))))
-            report=pipeline.scout('r1',{})
+            train_path=pipeline.run_dir/'splits'/'r1'/'train.csv'
+            train_path.parent.mkdir(parents=True)
+            pipeline.frame.iloc[:4].to_csv(train_path,index=False)
+            saved_train=train_path.read_bytes()
+            with patch.object(pd.DataFrame,'to_csv',side_effect=AssertionError('Existing train split must be reused')):
+                report=pipeline.scout('r1',{})
             self.assertEqual(report['status'],'completed',report)
+            self.assertTrue((pipeline.run_dir/'splits'/'r1'/'train.csv').is_file())
+            self.assertEqual(train_path.read_bytes(),saved_train)
+            self.assertFalse((pipeline.run_dir/'reconnaissance'/'r1'/'train.csv').exists())
             follow=next(r for r in pipeline.store.list('csv_result') if 'rows' in r)
             self.assertEqual(follow['rows'],[{'n':4}])
         finally:

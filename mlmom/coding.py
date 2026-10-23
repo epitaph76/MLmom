@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .agents import GlobalAPIError
+from .resources import WorkerInfrastructureError
 
 import shutil
 import time
@@ -16,6 +17,7 @@ from .tools import Workspace,verify_source
 from .persistence import atomic_json,tree_hash
 from .contracts import DatasetProfile
 from .agents import LLMUnavailable
+from .feature_contracts import feature_hash
 
 
 SDK_PROMPT = MODEL_PROMPT = """Implement estimator-only candidate.py for the planner assignment.
@@ -77,6 +79,8 @@ Use only installed allowed libraries and X/y/context; no files, network or envir
 Planned train-only feature selectors may be fitted; do not train the predictive estimator or change y.
 State must be cloudpickle serializable. No import-time training. Support unseen categories,
 missing values, empty text, and stable feature order. The SDK owns fitting and persistence.
+When feature_set is assigned, implement only the base preprocessing: the SDK appends the
+trusted DSL features afterwards. Never implement, duplicate or suppress these DSL operations.
 During repair retain previous_spec unless the output interface must change.
 '''
 
@@ -215,7 +219,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             store.put('preprocessing',budget_key,saved)
             return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'],
                         preprocessing_attempts=attempts,errors=[],reuse_model=reuse,attempts=state.get('attempts',0))
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except (ValueError,SyntaxError,LLMUnavailable) as error:
             return dict(preprocessing_valid=False,preprocessing_attempts=attempts,
@@ -312,7 +316,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 from .ensemble_planning import bundle_components
                 bundle_components(plan,store,workspace.root)
             return {'attempts':attempts,'errors':[],'warnings':[]}
-        except GlobalAPIError:
+        except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except (ValueError,LLMUnavailable) as error:
             # Tool calls may have already written a complete candidate before
@@ -361,6 +365,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             plan_ref=str(plan_ref),skill_versions={s['skill_id']:{'version':s['version'],'sha256':s['sha256'],'status':s['status']} for s in [*skill_data,*(preprocessing_skills or [])]},
             dependencies={k:v.version for k,v in tools.items() if v.available and v.version},based_on=plan.hypothesis.based_on,
             verification=report,preprocessing_hash=state.get('preprocessing_hash'),
+            feature_set_hash=feature_hash(plan.feature_set),
             execution_report=smoke_report,execution_report_ref=smoke_report_ref)
         store.put('candidate',candidate.candidate_id,candidate,immutable=True)
         atomic_json(snapshot/'metadata.json',candidate)

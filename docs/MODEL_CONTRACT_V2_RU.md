@@ -8,8 +8,14 @@
 
 HypothesisPlan отдельно задаёт target_transform, weight_policy, prediction_policy
 и intervention. model_params сохраняет параметры backend. ModelSpec v2 объединяет
-фактический экспорт, все политики, code_hash и preprocessing_hash. Хеш конфигурации
+фактический экспорт, все политики, code_hash, preprocessing_hash и необязательный
+feature_set_hash. Хеш конфигурации
 считается по полному ModelSpec.
+
+DSL-наборы, отдельная область feature-CV, фиксированный baseline и перенос признаков
+через HPO/refit описаны в [FEATURE_AGENT_RU.md](FEATURE_AGENT_RU.md). Существующие
+session с runtime contract 2 без feature_search_enabled продолжаются с отключённой
+feature-веткой; сам контракт модели остаётся v2.
 
 SDK выполняет identity/log1p с обратным преобразованием, clipping/nonfinite policy
 и fold-local balanced/sqrt_balanced/tail_aware weights. Они умножаются на заданные
