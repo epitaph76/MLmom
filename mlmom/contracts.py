@@ -141,6 +141,7 @@ class TaskDefinition(StrictModel):
     metric_direction: MetricDirection
     validation_strategy: ValidationStrategy
     validation_folds: int = Field(5, ge=2)
+    duplicate_policy: Literal['allow','group_features'] = 'allow'
     result_format: ResultFormat
     requirements: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)

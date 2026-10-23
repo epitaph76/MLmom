@@ -165,6 +165,12 @@ class HypothesisPlan(StrictModel):
     prediction_kind: str = 'value'
     ensemble_components: list[dict[str, Any]] = Field(default_factory=list)
     execution_mode: Literal['custom'] = 'custom'
+    stopping_policy: Literal['fixed','early_stopping'] = 'fixed'
+    component_stopping_policies: dict[str, Literal['fixed','early_stopping']] = Field(default_factory=dict)
+    base_config_hash: str | None = None
+    change_kind: Literal['experiment','single_change_ablation'] = 'experiment'
+    validation_protocol: dict[str, Any] = Field(default_factory=dict)
+    parameter_routes: dict[str, str] = Field(default_factory=dict, description='For ensembles, map each flat HPO parameter to its fitted component name.')
 
 
 class PlanBatch(StrictModel):
@@ -189,6 +195,8 @@ class CandidateVersion(StrictModel):
     based_on: str | None = None
     verification: ValidationReport
     preprocessing_hash: str | None = None
+    execution_report: dict[str, Any] | None = None
+    execution_report_ref: str | None = None
 
 
 class SplitSpec(StrictModel):
@@ -215,6 +223,11 @@ class TrialResult(StrictModel):
     score_std: float | None = None
     oof_score: float | None = None
     oof_ref: str | None = None
+    score_kind: str = 'unknown_legacy'
+    oof_score_kind: str = 'inner_oof'
+    outer_split_id: str | None = None
+    metric_options: dict[str, Any] = Field(default_factory=dict)
+    weighting: str = 'unweighted'
 
 
 class ExperimentRun(StrictModel):
@@ -244,6 +257,9 @@ class ExperimentRun(StrictModel):
     oof_score: float | None = None
     oof_ref: str | None = None
     full_refit: bool = False
+    execution_report: dict[str, Any] | None = None
+    execution_report_ref: str | None = None
+    score_kind: str = 'unknown_legacy'
 
 
 class EvaluationResult(StrictModel):
@@ -253,6 +269,11 @@ class EvaluationResult(StrictModel):
     direction: str
     score: float
     diagnostics: dict[str, Any] = Field(default_factory=dict)
+    score_kind: str = 'outer_holdout'
+    dataset_hash: str | None = None
+    metric_options: dict[str, Any] = Field(default_factory=dict)
+    weighting: str = 'unweighted'
+    validation_protocol_ref: str | None = None
 
 
 class Champion(StrictModel):
@@ -285,13 +306,17 @@ class ToolResult(StrictModel):
     error: str | None = None
     duration_seconds: float
     artifacts: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    field_errors: list[dict[str, Any]] = Field(default_factory=list)
+    hint: str | None = None
 
 
 class Observation(StrictModel):
     observation_id: str
     topic: str
     description: str
-    rows: int = Field(ge=0)
+    rows: int | None = Field(None, ge=0, description='Measured support in source rows, not SQL result cardinality. Omit for aggregates without an explicit support count.')
+    result_rows: int | None = Field(None, ge=0)
     numbers: dict[str, float] = Field(default_factory=dict)
     source_ref: str
 
@@ -309,6 +334,25 @@ class ReconnaissanceReport(StrictModel):
     proposals: list[ResearchProposal] = Field(default_factory=list)
     reason: str | None = None
     unfinished_checks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='before')
+    @classmethod
+    def isolate_invalid_items(cls, value):
+        if not isinstance(value,dict):return value
+        value=dict(value)
+        errors=[]
+        for key,model in [('observations',Observation),('proposals',ResearchProposal)]:
+            items=value.get(key,[])
+            if not isinstance(items,list):continue
+            valid=[]
+            for index,item in enumerate(items):
+                try:valid.append(model.model_validate(item))
+                except ValueError as exc:errors.append(f'{key}[{index}] rejected: {str(exc)[:350]}')
+            value[key]=valid
+        if errors:
+            value['status']='partial'
+            value['unfinished_checks']=list(value.get('unfinished_checks',[]))+errors
+        return value
 
 
 class TaskDetail(StrictModel):
@@ -362,6 +406,11 @@ class TrainingCheckpoint(StrictModel):
     remaining_trials: int = Field(ge=0)
     default_action: Literal['continue', 'stop', 'refit']
     error: str | None = None
+    score_kind: str = 'unknown_legacy'
+    outer_split_id: str | None = None
+    validation_protocol_ref: str | None = None
+    metric_options: dict[str, Any] = Field(default_factory=dict)
+    weighting: str = 'unweighted'
 
 
 class TrainingDecision(StrictModel):

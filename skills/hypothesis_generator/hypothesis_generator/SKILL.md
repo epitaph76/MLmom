@@ -50,3 +50,6 @@ Blending and OOF stacking are allowed hypotheses when diverse errors justify
 them; account for every component and preprocessing cost. The runner owns
 validation_strategy, all internal folds and fresh full-train refit. Timeouts are
 opt-in; do not invent a hard deadline when timeouts_enabled=false.
+
+## Authoritative current evidence
+Use Champion.model_params/configuration_hash and scoped evaluation; original_hypothesis is historical prose with potentially obsolete numbers. A single-change ablation must inherit the current configuration; extra tuning makes it a bundled experiment. Never interpret mae as signed bias: mean_residual=y_true-y_pred, positive means underprediction. Scores have explicit score_kind, split and weighting; historical outer holdout is not an internal CV baseline. Failed execution provenance means the hypothesis was not tested, regardless of score. Promise duplicate-aware validation only when the immutable task duplicate_policy is group_features.

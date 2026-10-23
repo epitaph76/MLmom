@@ -1,6 +1,8 @@
 """Numerical evidence and bounded advisory roles, independent of champion selection."""
 from __future__ import annotations
 
+from .agents import GlobalAPIError
+
 import math
 import json
 import hashlib
@@ -15,7 +17,7 @@ from .csv_tools import CSVTools
 from .inputs import read_table
 from .persistence import atomic_json, file_hash
 from .task_validator import TaskValidator
-from .tools import ToolSet
+from .tools import ToolSet, ToolInputError
 
 
 RECONNAISSANCE_PROMPT = '''Read the supplied task description and deterministic profile first.
@@ -79,6 +81,9 @@ class ReconnaissanceSession:
         self.observations = {o.observation_id:o for o in observations}
         self.observations.update({o['observation_id']:Observation.model_validate(o)
             for o in (store.get('reconnaissance_progress',key) or {}).get('observations',[])})
+        progress = store.get('reconnaissance_progress',key) or {}
+        self.failed_saves = progress.get('failed_saves',{})
+        self.unfinished = progress.get('unfinished_checks',[])
         tables = {}
         for name,path,role in [('train',train_path or files.train,'training'), ('test',files.test,'test_features'),
                                *[(f'dictionary_{i+1}',p,'dictionary') for i,p in enumerate(files.dictionaries)]]:
@@ -151,17 +156,39 @@ class ReconnaissanceSession:
             validation=report.model_dump(mode='json'),model=self.client.model))
         return dict(valid=True, task=task.model_dump(mode='json'))
 
-    def save_observation(self, topic: str, description: str, rows: int, numbers: dict[str,float], source_ref: str) -> dict:
+    def save_observation(self, topic: str, description: str, rows: int | None = None,
+                         numbers: dict[str,float] | None = None, source_ref: str = '') -> dict:
         self._check_time()
+        numbers = numbers or {}
+        fingerprint = hashlib.sha256(json.dumps([topic,description,rows,numbers,source_ref],sort_keys=True).encode()).hexdigest()
+        if self.failed_saves.get(fingerprint,0) >= 2:
+            raise ToolInputError('This observation failed twice. Change the evidence/fields or leave it unfinished.',
+                                 code='repeated_observation_error',hint='Do not repeat this save; continue with another supported finding.')
+        try:
+            return self._save_observation(topic,description,rows,numbers,source_ref)
+        except ValueError:
+            self.failed_saves[fingerprint] = self.failed_saves.get(fingerprint,0)+1
+            if self.failed_saves[fingerprint] == 2:
+                self.unfinished.append(f'Observation {topic!r} could not be verified from {source_ref}.')
+            self._persist()
+            raise
+
+    def _save_observation(self, topic, description, rows, numbers, source_ref):
+        result_rows = None
         if source_ref == self.profile_ref:
             # Profile facts already exist in the deterministic report. New numbers
             # must occur in that evidence, rather than just naming its file.
             evidence = self.profile.model_dump(mode='json')
         elif source_ref.startswith('csv:'):
             evidence = self.store.get('csv_result',source_ref[4:])
-            if evidence is None: raise ValueError('Unknown CSV evidence')
+            if evidence is None:
+                raise ToolInputError('Unknown CSV evidence',fields=[dict(field='source_ref',actual=source_ref)])
+            result_rows = evidence.get('total_rows')
+            # Result cardinality, duration, offsets and other metadata are not measurements.
+            evidence = evidence.get('rows', [{k:v for k,v in table.items() if k not in {'column_offset','columns_truncated','schema_only'}}
+                                             for table in evidence.get('tables',[])])
         else:
-            raise ValueError('Use the supplied profile or CSV source_ref')
+            raise ToolInputError('Use one exact supplied profile or CSV source_ref',fields=[dict(field='source_ref',actual=source_ref)])
         values = []
         def collect(value):
             if isinstance(value,dict):
@@ -170,19 +197,56 @@ class ReconnaissanceSession:
                 for item in value: collect(item)
             elif type(value) in {int,float}: values.append(value)
         collect(evidence)
-        if rows not in values or any(not math.isfinite(v) or v not in values for v in numbers.values()):
-            raise ValueError('Measured numbers must occur in the cited evidence; calculate them with SQL first')
+        invalid = [dict(field='numbers.'+key,actual=value) for key,value in numbers.items()
+                   if not math.isfinite(value) or value not in values]
+        if rows is not None and (type(rows) is not int or rows < 0 or rows not in values):
+            invalid.append(dict(field='rows',actual=rows))
+        if invalid:
+            raise ToolInputError('Measured numbers must occur exactly in the cited evidence',code='unverified_measurement',
+                fields=invalid,hint='Copy exact measurements from this source only. Omit rows for an aggregate without an explicit support count; use SQL COUNT(*) for measured support.')
         identity = 'obs-'+hashlib.sha256(json.dumps([topic,description,rows,numbers,source_ref],sort_keys=True).encode()).hexdigest()[:20]
-        item = Observation(observation_id=identity,topic=topic,description=description,rows=rows,numbers=numbers,source_ref=source_ref)
+        item = Observation(observation_id=identity,topic=topic,description=description,rows=rows,numbers=numbers,source_ref=source_ref,result_rows=result_rows)
         self.observations[identity] = item
         self._persist()
         return item.model_dump(mode='json')
 
     def _persist(self):
-        self.store.put('reconnaissance_progress',self.key,dict(observations=[o.model_dump(mode='json') for o in self.observations.values()]))
+        self.store.put('reconnaissance_progress',self.key,dict(observations=[o.model_dump(mode='json') for o in self.observations.values()],
+            failed_saves=self.failed_saves,unfinished_checks=self.unfinished))
+
+    def reconcile(self, answer):
+        aliases = {identity:{identity} for identity in self.observations}
+        rejected = []
+        for item in answer.observations:
+            if item.observation_id in self.observations and item == self.observations[item.observation_id]:
+                aliases.setdefault(item.observation_id,set()).add(item.observation_id)
+                continue
+            try:
+                saved = self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
+                aliases.setdefault(item.observation_id,set()).add(saved['observation_id'])
+            except ValueError as exc:
+                # A bad duplicate local ID must never alias a different valid finding.
+                aliases.setdefault(item.observation_id,set()).add(None)
+                rejected.append(f'Observation {item.observation_id}: {exc}')
+        proposals = []
+        for proposal in answer.proposals:
+            ids = []
+            for identity in proposal.evidence_ids:
+                mapped = aliases.get(identity,{identity} if identity in self.observations else set())
+                if len(mapped) != 1 or None in mapped or next(iter(mapped)) not in self.observations:
+                    rejected.append(f'Proposal must cite saved observation IDs; unresolved ID: {identity}')
+                    break
+                ids.append(next(iter(mapped)))
+            else:
+                proposals.append(proposal.model_copy(update={'evidence_ids':list(dict.fromkeys(ids))}))
+        unfinished = list(dict.fromkeys(answer.unfinished_checks+self.unfinished+rejected))
+        return answer.model_copy(update=dict(observations=list(self.observations.values()),proposals=proposals,
+            status='partial' if rejected or self.unfinished else answer.status,
+            reason='; '.join(rejected)[:1000] if rejected else answer.reason,unfinished_checks=unfinished))
 
     def run(self):
         from .data_inspector import build_llm_context
+        from .metric_contracts import metric_capabilities
         text = Path(self.files.task).read_text(encoding='utf-8-sig')
         saved = self.store.get('confirmed_task','task')
         original_steps = getattr(self.client,'max_steps',None)
@@ -201,20 +265,20 @@ class ReconnaissanceSession:
                          observations=[o.model_dump(mode='json') for o in self.observations.values()],
                          history=self.history,skills=self.skills,
                          previous_reports=self.store.list('reconnaissance',limit=3),
+                         allowed_metric_options=metric_capabilities(),
                          task_schema=TaskDefinition.model_json_schema()), ReconnaissanceReport,self.tools)
             if not self.context and not self.store.get('confirmed_task','task'):
                 raise ValueError('Reconnaissance did not confirm a valid task')
             if self.budget.now() >= self.deadline:
                 raise ValueError('Reconnaissance deadline reached')
-            allowed = set(self.observations)
-            if any(not set(p.evidence_ids)<=allowed for p in answer.proposals):
-                raise ValueError('Proposals must cite saved observation IDs')
-            answer = answer.model_copy(update={'observations':list(self.observations.values())})
+            answer = self.reconcile(answer)
+        except GlobalAPIError:
+            raise
         except Exception as exc:
             error = str(exc)[:300]
             answer = ReconnaissanceReport(status='partial' if self.context or self.store.get('confirmed_task','task') else 'unavailable',
                 observations=list(self.observations.values()),reason=error,
-                unfinished_checks=['Continue unfinished investigation from saved observations and CSV results.'])
+                unfinished_checks=self.unfinished+['Continue unfinished investigation from saved observations and CSV results.'])
         finally:
             if original_steps is not None: self.client.max_steps = original_steps
             if original_deadline is not None: self.client.deadline = original_deadline
@@ -274,8 +338,9 @@ def error_slices(y, prediction, X, reference_X, reference_y, task_type):
     result=[]
     def add(topic,label,mask):
         mask=np.asarray(mask,dtype=bool);rows=int(mask.sum())
-        result.append(dict(topic=topic,slice=label,rows=rows,status='completed' if rows>=20 else 'insufficient_support',
-            mean_error=float(error[mask].mean()) if rows else None))
+        from .evaluation import error_metrics
+        metrics=error_metrics(truth[mask],pred[mask],task_type) if rows else {}
+        result.append(dict(topic=topic,slice=label,rows=rows,status='completed' if rows>=20 else 'insufficient_support',**metrics))
     if 'regression' in task_type and reference_y is not None:
         a=np.asarray(reference_y);a=a[:,None] if a.ndim==1 else a
         b=truth[:,None] if truth.ndim==1 else truth
@@ -311,6 +376,17 @@ def error_slices(y, prediction, X, reference_X, reference_y, task_type):
 
 
 def review_result(client,payload,skills,key,seconds):
+    execution=payload.get('execution_report')
+    if execution and execution.get('status') != 'passed':
+        return ResultReview(implementation='mismatch',effect='inconclusive',
+            explanation='Machine execution gate rejected the experiment: '+'; '.join(execution.get('errors',[])))
+    if not execution:
+        return ResultReview(implementation='unknown',effect='inconclusive',explanation='No machine execution provenance was supplied.')
+    from .evaluation import comparable_scores,relative_gain
+    reference=payload.get('comparable_reference')
+    comparable=comparable_scores(payload.get('evaluation',{}),reference)
+    payload=dict(payload,comparable_reference=reference if comparable else None,
+                 relative_gain=relative_gain(payload.get('evaluation',{}),reference))
     try:
         with role_window(client,'result_validator',key,seconds):
             result=client.generate('result_validator',
@@ -321,9 +397,12 @@ def review_result(client,payload,skills,key,seconds):
                 'Never change code, champion selection or submission.',dict(payload,skills=skills),ResultReview,None)
         if not set(result.evidence_refs)<=set(payload.get('evidence_refs',[])):
             raise ValueError('Unknown result evidence reference')
-        if result.effect=='supported' and not payload.get('comparable_reference'):
+        if (result.effect!='inconclusive' and not comparable) or result.implementation!='matches':
             result=result.model_copy(update={'effect':'inconclusive',
-                'explanation':result.explanation+' No comparable reference was available.'})
+                'explanation':result.explanation+(' No comparable reference was available.' if not comparable else
+                    ' The intended intervention was not cleanly implemented.')})
         return result
+    except GlobalAPIError:
+        raise
     except Exception as error:
         return ResultReview(implementation='unknown',effect='inconclusive',explanation='Review unavailable: '+str(error)[:300])

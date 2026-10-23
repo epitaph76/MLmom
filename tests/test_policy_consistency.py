@@ -15,7 +15,7 @@ class PolicyConsistencyTests(unittest.TestCase):
     def test_ensemble_plan_is_allowed_with_valid_components(self):
         context,tools,budget,plan=case()
         plan.skill_ids.append('ensembles')
-        plan.ensemble_components=[dict(tool_id='sklearn'),dict(tool_id='sklearn',model_params={'estimator':'ridge'})]
+        plan.ensemble_components=[dict(name='first',tool_id='sklearn'),dict(name='ridge',tool_id='sklearn',model_params={'estimator':'ridge'})]
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,lightweight=False).valid)
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,lightweight=True).valid)
         plan.ensemble_components[1]['tool_id']='missing'

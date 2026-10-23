@@ -11,3 +11,5 @@ Start learning_rate .03-.1, max_depth 3-8, min_child_weight 1-10, subsample/cols
 Native categories use pandas category, enable_categorical=True and identical train-derived vocabularies/codes. Native serialization needs JSON/UBJSON plus transforms/class metadata. Encode single-label y contiguously; inverse-map labels and align probabilities.
 
 Ranking needs sorted qid and joint permutation of X/y/metadata. Ranking weights are per-query: the stock adapter forwards sample_weight unchanged, so weighted ranking needs a compatible custom path or rejection. Preserve prediction row order.
+
+export_model_params returns ALL model parameters and output/target options. For permitted early stopping freeze the measured selected round count, preserving every other setting. The runner inspects get_booster().num_boosted_rounds() and backend params, then validates export/recreate.

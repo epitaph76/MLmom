@@ -73,12 +73,14 @@ RECORDING_CODE = '''from pathlib import Path
 import json
 import cloudpickle
 import numpy as np
+from sklearn.dummy import DummyRegressor
 class Candidate:
     def __init__(self,config): self.params=config.get('model_params',{})
     def fit(self,X,y,context):
         assert context.validation_X is None
         self.size=len(X)
         self.value=float(np.mean(y))+self.params.get('offset',0)
+        self.model=DummyRegressor(strategy='constant',constant=self.value).fit(X,y)
         Path(context.work_dir,'fit.json').write_text(json.dumps(dict(rows=len(X),groups=None if context.groups is None else context.groups.tolist())))
         return self
     def predict(self,X,spec): return np.full(len(X),self.value)
@@ -108,6 +110,7 @@ class InnerExecutionTests(unittest.TestCase):
     def request(self, root):
         frame,context,plan,code=execution_case(root,'regression')
         frame['x']=np.arange(len(frame),dtype=float)
+        plan.model_params={}
         frame.to_csv(root/'train.csv',index=False)
         (code/'candidate.py').write_text(RECORDING_CODE,encoding='utf-8')
         (code/'preprocessing.py').write_text(PREPROCESSOR_CODE,encoding='utf-8')
@@ -131,6 +134,20 @@ class InnerExecutionTests(unittest.TestCase):
             self.assertEqual(restored.estimator.size,len(frame))
             fitted=[json.loads(p.read_text())['rows'] for p in job.rglob('fit.json')]
             self.assertEqual(sorted(fitted),[48]*5+[60])
+
+    def test_feature_duplicate_constraints_reach_preprocessing_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frame,context,code,job,request=self.request(Path(tmp))
+            frame.loc[1,context.feature_columns]=frame.loc[0,context.feature_columns].to_numpy()
+            frame.to_csv(request['train_path'],index=False)
+            context.task.duplicate_policy='group_features'
+            request['context']=context.model_dump(mode='json')
+            result=train(request,job)
+            self.assertTrue(result['full_refit'])
+            records=[json.loads(path.read_text()) for path in job.rglob('fit.json')]
+            self.assertTrue(all(record['groups'] is not None and len(record['groups'])==record['rows'] for record in records))
+            full=next(record for record in records if record['rows']==60)
+            self.assertEqual(full['groups'][0],full['groups'][1])
 
     def test_incomplete_trial_never_creates_publishable_progress(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -36,3 +36,25 @@ Hard timeouts are disabled by default. Only when timeouts_enabled=true, initial
 reconnaissance uses initial_reconnaissance_seconds and follow-ups use
 reconnaissance_seconds; SQL workers use reconnaissance_query_seconds. Confirm requirements early and save findings frequently:
 a timeout preserves the confirmed task, observations and completed calculations.
+
+## Exact evidence and bounded recovery
+Use ONE exact source_ref per observation. numbers contains exact unrounded numerical cells from that result; response total_rows/durations/offsets are metadata, not measurements. Observation.rows is optional measured support in SOURCE rows. For SQL aggregates without an explicit count OMIT rows (or use null); SQL output cardinality is attached separately as result_rows. Never copy train size from another source into rows. Example after SELECT AVG(x) AS average FROM train: save_observation(topic='average',description='Mean x',numbers={'average':<exact returned value>},source_ref=<returned source_ref>), with no rows.
+
+Errors name field/actual/hint. Repair those fields only. After two identical failed saves, mark that check unfinished; do not repeat it. Saved IDs are authoritative. Final observations are verified independently, and proposals with unresolved IDs are rejected independently; never fabricate evidence.
+
+confirm_task context includes allowed_metric_options from the runtime registry. Use only those keys; RMSE already includes a square root. Preserve IDs and every other task requirement during a repair. duplicate_policy=group_features enables grouping equal feature tuples in both inner and outer splits; allow keeps ordinary splitting. Never promise grouping when the confirmed policy is allow.
+
+Tested Polars 1.26 patterns (substitute existing column/table names):
+```sql
+SELECT bin, COUNT(*) AS n, AVG(target) AS average
+FROM (SELECT CASE WHEN x < 0 THEN 'low' ELSE 'high' END AS bin, target FROM train) AS b
+GROUP BY bin ORDER BY bin
+```
+```sql
+SELECT SUM(CASE WHEN x IS NULL THEN 1 ELSE 0 END) AS missing, COUNT(*) AS n FROM train
+```
+```sql
+SELECT 'train' AS source, COUNT(*) AS n FROM train
+UNION ALL SELECT 'test' AS source, COUNT(*) AS n FROM test
+```
+Avoid same-SELECT alias grouping, scalar subqueries, COUNT FILTER and ROW_NUMBER. UNION branches need identical aliases/types. correlate_csv.target is an exact column name, never LN(1+target) or another SQL expression. Simplify after an error; do not probe dialect features repeatedly. Full errors are artifacts; read the short hint.

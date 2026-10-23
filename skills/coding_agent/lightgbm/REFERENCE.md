@@ -19,6 +19,7 @@ kwargs = {'sample_weight': context.sample_weight} if context.sample_weight is no
 # Macro F1: custom sklearn.metrics.f1_score callback, average='macro'. Truth is encoded:
 # map truth and prediction using TRAIN label ordering. Respect validation_weight.
 self.model.fit(X, y, **kwargs)
-# export_model_params: n_estimators=int(self.model.best_iteration_) when >0.
+# export_model_params: deep-copy ALL self.params; only for permitted early stopping
+# replace frozen['n_estimators'] with measured best_iteration_ (>0). Never return a count-only patch.
 ```
 Persist columns, category levels, model and classes. Refit without validation uses selected tree count. Align probability columns to context.classes. Row bagging requires subsample_freq>0. Multioutput wrappers are serial; ranking sorts X/y/weights/groups together and uses contiguous query sizes. Requested clipping needs explicit train-derived bounds and predict code.

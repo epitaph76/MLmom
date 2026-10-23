@@ -1,6 +1,8 @@
 """Bounded coding graph; every source revision is preserved before verification."""
 from __future__ import annotations
 
+from .agents import GlobalAPIError
+
 import shutil
 import time
 import ast
@@ -29,18 +31,35 @@ excerpts must be adapted to this separation. Implement the selected model direct
 transforms and constraints, prediction/class ordering and portable estimator persistence.
 Consume all config['model_params'], including declared search parameters. No Optuna loop inside fit:
 the runner supplies each trial. Reuse validation only for stopping/selection, never ordinary fitting.
-export_model_params() should freeze selected tree counts/epochs/thresholds for validation-free refit.
+export_model_params() MUST return the COMPLETE reproducible model_params, not a patch: retain
+every fixed parameter, nested ensemble config, blend weight, target/output option and flat HPO
+override. Only explicitly permitted stopping can replace counts with measured selected counts.
+The runner rejects incomplete exports. Smoke recreates, refits and compares effective configuration
+and predictions. Expose self.model for a single estimator; ensembles MUST implement
+fitted_components() returning every named fitted estimator (including stacking meta learners).
+The runner inspects backend parameters and actual iterations after every fit and blocks mismatches.
+stopping_policy and component_stopping_policies in the plan define whether early stopping is allowed.
+context.timeouts_enabled controls time callbacks: when false do not add deadline callbacks.
+CatBoost callback after_iteration returns True to CONTINUE, False to STOP. Never invert it.
 Prediction kinds: value, label, probability in context.classes order, cluster, ranking_score,
 anomaly_score (larger is more anomalous). SDK separately fits and persists preprocessing per fit.
 Use mlmom.sdk and installed selected libraries directly; no LibraryCandidate or hidden adapters.
 Candidate ensembles, voting and stacking are allowed when planned. Use OOF base predictions
-for stacking meta learners, with all trainable preprocessing fitted inside their base folds.
+for stacking meta learners. For model_params.method='stack', implement
+fit_stack(X,y,context,create_preprocessor): the SDK supplies RAW X and validation_X to this hook.
+Wrap every base estimator with mlmom.sdk.PreparedCandidate using create_preprocessor, fitting
+fresh wrappers on each base-fold train; slice groups and sample_weight, clear validation metadata
+for those folds. Refit fresh wrapped bases on all current train after OOF. predict receives RAW X
+and uses the saved wrapped bases. save/load must persist those bases and meta learner. The SDK
+skips its outer preprocessing only for this explicit stack hook. Ordinary fit remains estimator-only.
 Implement the candidate in its own code using installed libraries; infrastructure imports
 remain forbidden except mlmom.sdk. ExtraTrees and other single
 estimators remain allowed. In CV, validation_X is absent: fit fixed parameters without early stopping.
 CPU only; respect context resources and time. No network, pip, pretrained models, environment,
 shell, credentials or input-directory reads. Use X/y/context; save estimator files to artifact_dir.
 No training during import/load/predict. The SDK is installed; do not search for its source.
+During repair use the existing apply_patch tool to fix the specific defect in current_files.
+Worker errors include the failing source line and a full traceback artifact reference.
 Return complete {"files":{"candidate.py":"...", ...}} immediately for AST/smoke verification.
 Do not return preprocessing.py. Fix reported errors promptly using only the selected API.
 """
@@ -140,6 +159,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             store.put('preprocessing',budget_key,saved)
             return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'],
                         preprocessing_attempts=attempts,errors=[],reuse_model=reuse,attempts=state.get('attempts',0))
+        except GlobalAPIError:
+            raise
         except (ValueError,SyntaxError,LLMUnavailable) as error:
             return dict(preprocessing_valid=False,preprocessing_attempts=attempts,errors=[str(error)])
         finally:
@@ -200,7 +221,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 dict(state['payload'],feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
                      preprocessing_spec=state['preprocessing_spec'],
                      current_files={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py')}),
-                CodeBundle,None if config.coding_direct_first and attempts==1 else role_tools)
+                CodeBundle,None if config.coding_direct_first and attempts==1 and not runtime_feedback else role_tools)
             if sum(map(len,bundle.files.values())) > 200000: raise ValueError('Generated source exceeds workspace budget')
             for name,content in bundle.files.items():
                 if not name.endswith('.py'): raise ValueError('Final bundle must contain Python source only')
@@ -209,6 +230,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             if file_hash(workspace.root/'preprocessing.py')!=state['preprocessing_hash']:
                 raise ValueError('Locked transform source was modified')
             return {'attempts':attempts,'errors':[],'warnings':[]}
+        except GlobalAPIError:
+            raise
         except (ValueError,LLMUnavailable) as error:
             # Tool calls may have already written a complete candidate before
             # the final JSON, API failure or step limit. Verify that source in
@@ -223,6 +246,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             if original_steps is not None:client.max_steps=original_steps
 
     def verify(state):
+        smoke_report=None
+        smoke_report_ref=None
         report = source_report(workspace.root)
         report.warnings.extend(state.get('warnings',[]))
         report.errors.extend(state.get('errors',[])); report.valid = not report.errors
@@ -247,12 +272,14 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                     store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
                     seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
                 if result['status']!='completed': report.errors.append(result.get('error') or result.get('stop_reason','Smoke failed'))
+                smoke_report=result.get('execution_report');smoke_report_ref=result.get('execution_report_ref')
         report.valid = not report.errors
         candidate = CandidateVersion(candidate_id=f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
             hypothesis_id=plan.hypothesis.hypothesis_id,version=version,code_dir=str(snapshot),code_hash=digest,
             plan_ref=str(plan_ref),skill_versions={s['skill_id']:{'version':s['version'],'sha256':s['sha256'],'status':s['status']} for s in [*skill_data,*(preprocessing_skills or [])]},
             dependencies={k:v.version for k,v in tools.items() if v.available and v.version},based_on=plan.hypothesis.based_on,
-            verification=report,preprocessing_hash=state.get('preprocessing_hash'))
+            verification=report,preprocessing_hash=state.get('preprocessing_hash'),
+            execution_report=smoke_report,execution_report_ref=smoke_report_ref)
         store.put('candidate',candidate.candidate_id,candidate,immutable=True)
         atomic_json(snapshot/'metadata.json',candidate)
         return {'candidate':candidate.model_dump(mode='json'),'valid':report.valid,'errors':report.errors}

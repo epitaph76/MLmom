@@ -91,7 +91,7 @@ class LibraryCandidate:
                 kwargs['sample_weight'] = np.asarray(context.sample_weight)[order] if kind=='ranking' else context.sample_weight
             class TimeLimit:
                 def after_iteration(self,info):return context.remaining_seconds>1.5
-            kwargs['callbacks']=[TimeLimit()]
+            if context.timeouts_enabled:kwargs['callbacks']=[TimeLimit()]
             if context.validation_X is not None and kind in {'regression','binary_classification','multiclass_classification'}:
                 valid=self._clean(context.validation_X[self.columns])
                 for c in self.category:valid[c]=valid[c].fillna('__missing__').astype(str)
@@ -357,10 +357,12 @@ class LibraryCandidate:
         epochs = int(p.pop('epochs', 20))
         lr = float(p.pop('lr', .001))
         batch = int(p.pop('batch_size', 256))
+        self.params.update(hidden_size=hidden,epochs=epochs,lr=lr,batch_size=batch)
         if p: raise ValueError(f'Unknown torch parameters: {list(p)}')
         self.torch_shape = (values.shape[1],hidden,outputs)
         self.model = torch.nn.Sequential(torch.nn.Linear(values.shape[1],hidden), torch.nn.ReLU(),torch.nn.Linear(hidden,outputs))
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        context.track_optimizer(optimizer,batch)
         tensor = torch.tensor(values, dtype=torch.float32)
         for _ in range(epochs):
             if context.remaining_seconds < .2: break

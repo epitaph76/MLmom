@@ -1,52 +1,52 @@
 {
-  "status": "not_verified",
+  "status": "failed",
   "checks": {
     "source_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 191,
+        "count": 228,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 541.2026197360001,
+        "duration_seconds": 627.5424500700001,
         "python": "3.12.15",
         "os": "Linux",
         "source": "checkout",
         "runtime": "/repo",
-        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64"
       }
     },
     "packaged_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 191,
+        "count": 228,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 592.2382601950003,
-        "runtime": "/repo/artifacts/release-unbounded-ensembles-final-20261022171642/packaged/platform/.mlmom-runtime-ecd6e32a3907328c",
+        "duration_seconds": 673.193470921,
+        "runtime": "/output/platform/.mlmom-runtime-47f90c4b024888eb",
         "python": "3.12.15",
         "os": "Linux",
         "source": "extracted ZIP",
-        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64"
       }
     },
     "linux_tests": {
       "status": "passed",
       "report": {
         "status": "passed",
-        "count": 191,
+        "count": 228,
         "failures": 0,
         "errors": 0,
         "skipped": 0,
-        "duration_seconds": 592.2382601950003,
-        "runtime": "/repo/artifacts/release-unbounded-ensembles-final-20261022171642/packaged/platform/.mlmom-runtime-ecd6e32a3907328c",
+        "duration_seconds": 627.5424500700001,
         "python": "3.12.15",
         "os": "Linux",
-        "source": "extracted ZIP",
-        "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245"
+        "source": "checkout",
+        "runtime": "/repo",
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64"
       }
     },
     "offline": {
@@ -57,7 +57,7 @@
           "report": {
             "case": "regression",
             "attempt": 1,
-            "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
+            "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -65,7 +65,7 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-unbounded-ensembles-final-20261022171642\\offline\\regression\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\audit-contract-fixes-20261022\\accepted\\offline\\regression\\attempt-1\\task\\run",
             "status": "passed",
             "fit_time_multiplier": 1,
             "timeouts_enabled": false,
@@ -79,9 +79,17 @@
               "incumbent_rechecks": 2,
               "generated_path": true,
               "relocated_model_equal": true,
-              "submission_sha256": "dc02cc8938c0978531686b053e7b17bfe36050fa23e80f08f99b598f33a616b4"
+              "submission_sha256": "55e71a9d30ad1f9e06076cf3303c948988f6b7c295a4bf88718c21b1c8ea9272",
+              "execution_fidelity_verified": true,
+              "verified_fits": 7,
+              "final_full_refit": true,
+              "observation_handoff": {
+                "verified": false,
+                "reason": "Offline fixture; real request handoff checked separately"
+              },
+              "observation_handoff_verified": false
             },
-            "duration_seconds": 493.8909999999996,
+            "duration_seconds": 561.4539999999979,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
@@ -96,7 +104,7 @@
           "report": {
             "case": "multiclass",
             "attempt": 1,
-            "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
+            "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
             "mode": "offline",
             "environment": "linux/docker",
             "command": [
@@ -104,7 +112,7 @@
               "solution.py",
               "task.md"
             ],
-            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\release-unbounded-ensembles-final-20261022171642\\offline\\multiclass\\attempt-1\\task\\run",
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\audit-contract-fixes-20261022\\accepted\\offline\\multiclass\\attempt-1\\task\\run",
             "status": "passed",
             "fit_time_multiplier": 1,
             "timeouts_enabled": false,
@@ -118,9 +126,17 @@
               "incumbent_rechecks": 2,
               "generated_path": true,
               "relocated_model_equal": true,
-              "submission_sha256": "b8d6d74f5575c02a06615d0ba066a9d10084cca9f8f6e41cda397a83f07fb639"
+              "submission_sha256": "b8d6d74f5575c02a06615d0ba066a9d10084cca9f8f6e41cda397a83f07fb639",
+              "execution_fidelity_verified": true,
+              "verified_fits": 7,
+              "final_full_refit": true,
+              "observation_handoff": {
+                "verified": false,
+                "reason": "Offline fixture; real request handoff checked separately"
+              },
+              "observation_handoff_verified": false
             },
-            "duration_seconds": 197.95299999999952,
+            "duration_seconds": 223.51600000000326,
             "pipeline_stop_reason": "target_completed_rounds",
             "process_acceptance": {
               "target_completed_rounds": 3,
@@ -133,15 +149,107 @@
       }
     },
     "real_api": {
-      "status": "not_verified",
+      "status": "failed",
       "cases": {
         "regression": {
-          "status": "not_verified",
-          "reason": "No report supplied"
+          "status": "passed",
+          "report": {
+            "case": "regression",
+            "attempt": 1,
+            "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+            "mode": "real",
+            "environment": "linux/docker",
+            "command": [
+              "python3",
+              "solution.py",
+              "task.md",
+              "--resume"
+            ],
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\regression\\attempt-1\\task\\run",
+            "status": "passed",
+            "exit_code": 0,
+            "verification_exit_code": 0,
+            "model": "qwen/qwen3.8-27b",
+            "diagnostic_api": false,
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": false,
+            "duration_seconds": 4372.952999999994,
+            "duration_scope": "resumed_segment_only",
+            "pipeline_stop_reason": "target_completed_rounds",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 3,
+              "completed_optuna_trials": 5,
+              "passed": true
+            },
+            "recovery_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\controller-recovery.json",
+            "verification": {
+              "status": "passed",
+              "rows": 22449,
+              "primary_metric": "rmse",
+              "completed_cycles": 3,
+              "outer_splits": 3,
+              "incumbent_rechecks": 2,
+              "generated_path": true,
+              "relocated_model_equal": true,
+              "submission_sha256": "c062c25cec105a26824deec423a068eec28b2b6bd69f07e0072c7bd62c426aab",
+              "execution_fidelity_verified": true,
+              "verified_fits": 7,
+              "final_full_refit": true,
+              "observation_handoff": {
+                "verified": true,
+                "saved_observations": 33,
+                "shared_ids": [
+                  "obs-08a0eaaba0c86a504a4f",
+                  "obs-17d19cb8d0012265661a",
+                  "obs-1895d80f96383842eb66",
+                  "obs-1d848bd53f21b910c19c",
+                  "obs-2d7449833971d578c990",
+                  "obs-581c16526d8fd644d058",
+                  "obs-6d2112e858a0a80089ba",
+                  "obs-71218b542c383b8d1e56",
+                  "obs-8c62ded5b078a9d3c4b1",
+                  "obs-8d70d6115969560d8930",
+                  "obs-8eaa63aa81d76279b411",
+                  "obs-9c769c74a2f3562f05c4",
+                  "obs-b87b12c1af41a901b793",
+                  "obs-c12a85811961178d39ed",
+                  "obs-c62d33bf3e3c109fccd6"
+                ]
+              },
+              "observation_handoff_verified": true
+            }
+          }
         },
         "multiclass": {
-          "status": "not_verified",
-          "reason": "No report supplied"
+          "status": "failed",
+          "report": {
+            "case": "multiclass",
+            "attempt": 1,
+            "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+            "mode": "real",
+            "environment": "linux/docker",
+            "command": [
+              "python3",
+              "solution.py",
+              "task.md"
+            ],
+            "run_dir": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\multiclass\\attempt-1\\task\\run",
+            "status": "failed",
+            "model": "qwen/qwen3.8-27b",
+            "diagnostic_api": false,
+            "fit_time_multiplier": 1,
+            "timeouts_enabled": false,
+            "exit_code": 2,
+            "reason": "Independent acceptance failed; see run.log",
+            "duration_seconds": 9218.608999999997,
+            "pipeline_stop_reason": "global_api_failure",
+            "process_acceptance": {
+              "target_completed_rounds": 3,
+              "completed_rounds": 2,
+              "passed": false
+            }
+          }
         }
       }
     },
@@ -346,23 +454,249 @@
         "limitations": [
           "CPU-only Torch may carry +cpu; Python patch release may differ from organizer.",
           "Matching dependencies does not establish organizer-platform equivalence."
+        ],
+        "docker_image": "mlmom-ml:test",
+        "docker_image_id": "sha256:5fd881afe667ea808755c6c40356d685072c0ef39903aaaf81fe15b01c0acc7f"
+      }
+    },
+    "observed_contracts": {
+      "status": "failed",
+      "reason": "Residual defects confirmed by real lifecycle and offline counterexamples",
+      "findings": {
+        "schema_version": 1,
+        "runtime_archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "scope": "Observed residual defects in the frozen runtime; no runtime repairs applied during this lifecycle audit.",
+        "acceptance_limit": "Passing process acceptance does not resolve these defects or verify a hidden platform score.",
+        "findings": [
+          {
+            "id": "protocol-dict-equality",
+            "priority": "high",
+            "status": "observed_unfixed",
+            "cases": [
+              "regression",
+              "multiclass"
+            ],
+            "source": "mlmom/planning.py:21",
+            "problem": "Free-form validation_protocol is compared by full dict equality against three required fields. Correct split settings plus explanatory metadata trigger a generic mismatch and repeated paid repairs.",
+            "evidence": [
+              "reports/regression/plans.json",
+              "reports/multiclass/plans.json",
+              "reports/regression/feedback.json",
+              "reports/multiclass/feedback.json"
+            ]
+          },
+          {
+            "id": "undeclared-target-transform-export",
+            "priority": "high",
+            "status": "observed_unfixed",
+            "cases": [
+              "regression"
+            ],
+            "source": "mlmom/execution.py:30",
+            "problem": "Completeness is checked against requested params only. The initial candidate hardcodes log1p/expm1 without exporting it; later planning loses the transform despite an admitted fit.",
+            "evidence": [
+              "runs/regression/attempt-1/task/run/candidates/r1/h1_lgbm_log1p_baseline/v2/candidate.py",
+              "reports/regression/champion-handoffs.json",
+              "reports/regression/feedback.json"
+            ]
+          },
+          {
+            "id": "custom-weight-policy-native-name-collision",
+            "priority": "high",
+            "status": "counterexample_confirmed_unfixed",
+            "cases": [
+              "multiclass"
+            ],
+            "source": "mlmom/execution.py:251",
+            "problem": "A wrapper policy exported as class_weight=sqrt_balanced is compared to native class_weight=None although exact sqrt-balanced weights are supplied through fit(sample_weight). Original/recreated predictions match in the controlled counterexample, but recreation is rejected.",
+            "evidence": [
+              "reports/multiclass/weight-policy-contract/report.json",
+              "runs/multiclass/attempt-1/task/run/checks/r2-h2_lgbm_sqrt_balanced_weights-v2/recreated-report.json"
+            ]
+          },
+          {
+            "id": "post-fit-mutable-parameter-provenance",
+            "priority": "high",
+            "status": "counterexample_confirmed_unfixed",
+            "cases": [
+              "multiclass"
+            ],
+            "source": "mlmom/execution.py:105",
+            "problem": "Candidate v3 changes model.class_weight after fit. Inspection trusts the mutated sklearn get_params attribute; the backend entered fit with None. The controlled sample weights are correct, but this parameter report does not establish training-time provenance.",
+            "evidence": [
+              "reports/multiclass/weight-policy-contract/report.json",
+              "reports/multiclass/weight-policy-contract/v3-metadata-report.json",
+              "runs/multiclass/attempt-1/task/run/candidates/r2/h2_lgbm_sqrt_balanced_weights/v3/candidate.py"
+            ]
+          },
+          {
+            "id": "implicit-hpo-intervention",
+            "priority": "high",
+            "status": "observed_unfixed",
+            "cases": [
+              "regression",
+              "multiclass"
+            ],
+            "problem": "Automatic HPO retains the original fixed baseline hypothesis without declaring a separate intervention; result validation then reports partial/inconclusive. Constant one-choice search spaces are also labelled HPO.",
+            "evidence": [
+              "reports/regression/plans.json",
+              "reports/regression/trial_metrics.csv",
+              "reports/multiclass/plans.json",
+              "reports/multiclass/trial_metrics.csv"
+            ]
+          },
+          {
+            "id": "missing-inner-metrics-in-reviewer-context",
+            "priority": "medium",
+            "status": "observed_unfixed",
+            "cases": [
+              "regression",
+              "multiclass"
+            ],
+            "source": "mlmom/pipeline.py:933",
+            "problem": "Stored fold_results, score_std and OOF scores are omitted from the result_validator payload. Reviewer complaints about absent CV do not mean CV was never computed; one review also confuses synthetic smoke iterations with full fit.",
+            "evidence": [
+              "reports/regression/calls.json",
+              "reports/regression/trial_metrics.csv",
+              "reports/multiclass/calls.json",
+              "reports/multiclass/trial_metrics.csv"
+            ]
+          },
+          {
+            "id": "false-semantic-plan-rejection",
+            "priority": "medium",
+            "status": "counterexample_confirmed_unfixed",
+            "cases": [
+              "regression"
+            ],
+            "problem": "The semantic validator rejects safe LightGBM native categorical unseen-to-NaN handling and claims target-transform ownership is absent despite an explicit coding_agent instruction.",
+            "evidence": [
+              "reports/regression/validator-counterexample.json"
+            ]
+          },
+          {
+            "id": "regression-weighting-skill-conflict",
+            "priority": "medium",
+            "status": "counterexample_confirmed_unfixed",
+            "cases": [
+              "regression"
+            ],
+            "problem": "Planner requires imbalance skill for weighting, but its manifest excludes regression. A valid regression sample-weight intervention incurs an avoidable planning rejection.",
+            "evidence": [
+              "reports/regression/weighting-skill-counterexample.json",
+              "reports/regression/feedback.json"
+            ]
+          },
+          {
+            "id": "repair-patch-policy-not-enforced",
+            "priority": "medium",
+            "status": "observed_unfixed",
+            "cases": [
+              "regression"
+            ],
+            "problem": "Repair instructions request apply_patch, but coder can rewrite the full file with write_file and a final CodeBundle. Preprocessor ownership remained protected in the observed repair.",
+            "evidence": [
+              "reports/regression/calls.json",
+              "reports/regression/sources.json",
+              "reports/regression/code_diffs"
+            ]
+          },
+          {
+            "id": "watchdog-clock-baseline-parent-exit",
+            "priority": "high",
+            "status": "observed_unfixed_external_resume",
+            "cases": [
+              "regression"
+            ],
+            "problem": "After a Docker clock baseline change, exact psutil parent create_time equality rejects a still-running parent. Recovery required an external restart/resume of the identical frozen runtime.",
+            "evidence": [
+              "controller-recovery.json",
+              "before-resume",
+              "reports/regression/resume-verification.json",
+              "reports/regression/timing-analysis.json"
+            ]
+          },
+          {
+            "id": "evidence-reference-copy-diagnostics",
+            "priority": "medium",
+            "status": "observed_unfixed",
+            "cases": [
+              "multiclass"
+            ],
+            "problem": "The model repeatedly copies a long evidence hash incorrectly, then calls it a registration failure. Unknown CSV evidence identifies source_ref but provides no hint. Partial progress and two-identical-failure stopping work; usable exact-reference recovery remains weak.",
+            "evidence": [
+              "reports/multiclass/repeated-save-and-handoff.json",
+              "reports/multiclass/failures.json",
+              "reports/multiclass/cycle-observation-handoffs.json"
+            ]
+          }
         ]
       }
     }
   },
-  "supplemental_tests": [],
-  "created_utc": "2026-10-22T17:29:36.674483+00:00",
-  "base_commit": "dc6262f06b121394ee31aad2dfbf15065a174e44",
+  "supplemental_tests": [
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "rows": 128,
+        "predictions_equal": true,
+        "original_artifacts_accessible": false,
+        "network": "disabled"
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "rows": 128,
+        "predictions_equal": true,
+        "original_artifacts_accessible": false,
+        "network": "disabled"
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "rows": 128,
+        "predictions_equal": true,
+        "original_artifacts_accessible": false,
+        "network": "disabled"
+      }
+    },
+    {
+      "status": "passed",
+      "report": {
+        "status": "passed",
+        "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+        "rows": 128,
+        "predictions_equal": true,
+        "original_artifacts_accessible": false,
+        "network": "disabled",
+        "api_calls": 0,
+        "experiment_id": "r3-h4_lgbm_rare_categorical_indicators-v1",
+        "model_role": "evaluation",
+        "final_full_refit_verified": false,
+        "limitation": "This proves portability of the saved outer-train evaluation model only. Multiclass final full-data refit and three-cycle acceptance were interrupted by a terminal API budget failure."
+      }
+    }
+  ],
+  "created_utc": "2026-10-23T11:34:45.294959+00:00",
+  "base_commit": "62fff23c202bba1ef209d6e055918da7427b376b",
   "package": {
     "path": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\submission\\mlmom-solution.zip",
-    "sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
-    "bytes": 152274,
+    "sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+    "bytes": 169836,
     "root_files": [
       "mlmom_bundle.py",
       "requirements.txt",
       "solution.py"
     ],
-    "source_bundle_digest": "ecd6e32a3907328c17684e139fcfb91bab738ddf2a91c3910d420419a3cc3269",
+    "source_bundle_digest": "47f90c4b024888eb9d6f7f6691f339cafb1f1825dc3e32e10b9e116acd851089",
     "bundled_source_matches_checkout": true,
     "secret_scan": "passed",
     "requirements_sha256": "9173b0388532fbd2a709e4f4b3029e3b9ccab685fce43a85261ffa1ba95efbe6"
@@ -370,65 +704,218 @@
   "environment_limits": [
     "Docker image approximates provided dependencies; organizer infrastructure is not verified.",
     "Offline LLM is an external test fixture; production runtime has no offline fallback.",
-    "Timeouts are opt-in. The bounded Qwen acceptance procedure explicitly enables a 1800-second limit per task, including attempts and verification."
+    "Timeout policy is recorded per case; timeouts_enabled=false has no wall-clock acceptance deadline."
   ],
-  "historical_diagnostic": {
-    "same_build": false,
-    "counts_towards_current_acceptance": false,
-    "report_path": "artifacts/release-abc-deepseek-extended-20261022160643/real/reports.json",
-    "archive_sha256": "bd2c0483a139318b45e05d2dee36f0f13f0bbb1ad96a34af4e56da95a943293c",
-    "diagnostic_only": true,
-    "model": "deepseek/deepseek-v4.1-flash-1017",
-    "cases": [
-      {
-        "case": "regression",
-        "metric": "rmse",
-        "score": 44.068342800555904,
-        "split_id": "r3-dd4b103688ce25e4",
-        "candidate_id": "r3-h6-lgbm-drop-near-noise-weather-v1",
-        "cycles": 3,
-        "outer_splits": 3,
-        "incumbent_rechecks": 2,
-        "rows": 22449,
-        "relocated_model_equal": true,
-        "duration_seconds": 3122.4840000000004
-      },
-      {
-        "case": "multiclass",
-        "metric": "f1_macro",
-        "score": 0.5884877038165967,
-        "split_id": "r4-845e49df44f50ebb",
-        "candidate_id": "r4-h4_proto_freq_tail-v1",
-        "cycles": 3,
-        "outer_splits": 4,
-        "incumbent_rechecks": 3,
-        "rows": 41166,
-        "relocated_model_equal": true,
-        "duration_seconds": 3733.405999999999
-      }
-    ]
-  },
-  "execution_policy": {
-    "timeouts_enabled_by_default": false,
-    "ensembles_allowed": true,
-    "cpu_memory_trial_round_limits_retained": true,
-    "sdk_unchanged_from": "e7eb233"
-  },
-  "decision_skill_source": {
-    "commit": "7235080535e6161cbf8494a7436abfa0a23fb479",
-    "cards": [
-      "hypothesis_generator",
-      "planner",
-      "result_validator"
-    ],
-    "version": "1.2.0",
-    "adapted": true
-  },
-  "diagnostic_secret_scan": {
+  "gateway_diagnostic": {
     "status": "passed",
-    "archive_sha256": "5cdff3f9c639e918f1b5520440cf8025196de590b21eaf4d3a51047744404245",
-    "artifact_text_files_checked": 26678,
-    "matches": [],
-    "temporary_api_files": []
-  }
+    "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+    "base_url": "https://changellenge.up.railway.app/v1",
+    "model": "qwen/qwen3.8-27b",
+    "saved_coding_request_replayed": true,
+    "duration_seconds": 17.453,
+    "code_bundle_json_valid": true,
+    "python_syntax_valid": true,
+    "experiment_resumed": false,
+    "artifact": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\audit-contract-fixes-20261022\\accepted\\old-gateway-probe-20261023\\coding-replay-20261022T232012Z\\report.json"
+  },
+  "previous_real_run_pause": {
+    "status": "paused",
+    "artifact": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\audit-contract-fixes-20261022\\accepted\\qwen-real\\paused.json",
+    "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64"
+  },
+  "active_real_lifecycle": {
+    "status": "finished_with_failures",
+    "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+    "manifest": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\manifest.json",
+    "report": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\LIFECYCLE_RU.md",
+    "acceptance": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\acceptance-summary.json",
+    "paid_requests_stopped": true
+  },
+  "partial_real_evidence": {
+    "status": "incomplete",
+    "api_calls_during_finalization": 0,
+    "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+    "recorded_utc": "2026-10-23T11:34:44.538549+00:00",
+    "cases": {
+      "regression": {
+        "completed_cycles": 3,
+        "completed_experiments": 7,
+        "machine_report_record_consistency": "passed",
+        "unique_observations": 92,
+        "canonical_observations": 33,
+        "successful_save_ids_preserved": true,
+        "http_attempts": 160,
+        "stop_reason": "target_completed_rounds",
+        "submission": {
+          "path": "/case/submission.csv",
+          "experiment_id": "final-refit",
+          "candidate_id": "r4-h4_tail_aware_sample_weights-v1",
+          "model_role": "submission_refit",
+          "rows": 22449,
+          "sha256": "c062c25cec105a26824deec423a068eec28b2b6bd69f07e0072c7bd62c426aab"
+        },
+        "split_audit_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\regression\\attempt-1\\actual-split-audit.json",
+        "metrics_recheck_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\reports\\regression\\independent-metric-recheck.json",
+        "final_full_refit": {
+          "status": "passed",
+          "case": "regression",
+          "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+          "api_calls": 0,
+          "original_training_rows": 53308,
+          "actual_refit_input_rows": 53308,
+          "all_rows_columns_and_order_equal": true,
+          "original_train_sha256": "096dac951cf44fade5417ddd0465c41beee3009663dbea34e8d464a4d3c7f775",
+          "refit_input_sha256": "096dac951cf44fade5417ddd0465c41beee3009663dbea34e8d464a4d3c7f775",
+          "request_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\regression\\attempt-1\\task\\run\\runs\\final-refit\\request.json",
+          "execution_report_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\regression\\attempt-1\\task\\run\\runs\\final-refit\\execution-report.json",
+          "phase": "final",
+          "fixed": true,
+          "components": {
+            "lightgbm": {
+              "backend": "lightgbm",
+              "actual_params": {
+                "boosting_type": "gbdt",
+                "class_weight": null,
+                "colsample_bytree": 0.75,
+                "importance_type": "split",
+                "learning_rate": 0.05,
+                "max_depth": -1,
+                "min_child_samples": 60,
+                "min_child_weight": 0.001,
+                "min_split_gain": 0.0,
+                "n_estimators": 600,
+                "n_jobs": 4,
+                "num_leaves": 47,
+                "objective": "regression",
+                "random_state": 42,
+                "reg_alpha": 0.0,
+                "reg_lambda": 0.0,
+                "subsample": 0.85,
+                "subsample_for_bin": 200000,
+                "subsample_freq": 1,
+                "categorical_feature": [
+                  "State_Factor",
+                  "building_class",
+                  "facility_type"
+                ],
+                "verbosity": -1,
+                "metric": [
+                  "regression"
+                ],
+                "num_threads": 4,
+                "num_iterations": 600,
+                "categorical_column": [
+                  1,
+                  2,
+                  3
+                ]
+              },
+              "completed_iterations": 600,
+              "retained_iterations": 600,
+              "retained_trees": 600,
+              "best_iteration": null,
+              "stopping_patience": null,
+              "backend_exhausted": false,
+              "inspection": "verified",
+              "requested_params": {
+                "objective": "regression",
+                "boosting_type": "gbdt",
+                "n_estimators": 600,
+                "learning_rate": 0.05,
+                "num_leaves": 47,
+                "min_child_samples": 60,
+                "subsample": 0.85,
+                "subsample_freq": 1,
+                "colsample_bytree": 0.75,
+                "random_state": 42,
+                "categorical_feature": [
+                  "State_Factor",
+                  "building_class",
+                  "facility_type"
+                ],
+                "target_transform": "log1p",
+                "target_clip_min": 0.0,
+                "target_nonfinite_policy": "train_median",
+                "prediction_clip_min": 0.0,
+                "prediction_nonfinite_policy": "train_median",
+                "sample_weight_policy": "tail_q99_linear",
+                "sample_weight_q99": 0.99,
+                "sample_weight_base": 1.0,
+                "sample_weight_scale": 1.0,
+                "sample_weight_min": 1.0,
+                "sample_weight_nonfinite_policy": "one"
+              },
+              "stopping_policy": "fixed",
+              "requested_iterations": 600,
+              "stopping_reason": "iteration_limit"
+            }
+          },
+          "limitation": "Confirms every source row in the actual input of the frozen final worker and backend counters; it is not an independent instrument inside arbitrary candidate fitting logic."
+        },
+        "portable_final_model": {
+          "status": "passed",
+          "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+          "rows": 128,
+          "predictions_equal": true,
+          "original_artifacts_accessible": false,
+          "network": "disabled"
+        }
+      },
+      "multiclass": {
+        "completed_cycles": 2,
+        "completed_experiments": 6,
+        "machine_report_record_consistency": "passed",
+        "unique_observations": 87,
+        "canonical_observations": 14,
+        "successful_save_ids_preserved": true,
+        "http_attempts": 100,
+        "stop_reason": "global_api_failure",
+        "submission": {
+          "path": "/case/submission.csv",
+          "experiment_id": "r3-h4_lgbm_rare_categorical_indicators-v1",
+          "candidate_id": "r3-h4_lgbm_rare_categorical_indicators-v1",
+          "model_role": "evaluation",
+          "rows": 41166,
+          "sha256": "954610afadd7afd2d3a07bd39d212c2a530d27a06ac697d0b8fbcc405875eac4"
+        },
+        "split_audit_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\runs\\multiclass\\attempt-1\\actual-split-audit.json",
+        "metrics_recheck_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\reports\\multiclass\\independent-metric-recheck.json",
+        "terminal_budget_stop": {
+          "verified": true,
+          "event_seq": 1433,
+          "timestamp": "2026-10-23T11:28:05.075266+00:00",
+          "http_status": 422,
+          "requests_after_failure": 0,
+          "current_cost_from_gateway": 602.0488979117156,
+          "max_budget_from_gateway": 600.0,
+          "currency": "not_verified"
+        },
+        "final_full_refit": {
+          "status": "not_verified",
+          "reason": "Not executed after global API budget failure"
+        },
+        "portable_evaluation_model": {
+          "status": "passed",
+          "archive_sha256": "cf471a24ce2ca6a6adb60992faa56bbcda9030029ed9a6f2df145e395bc1fe64",
+          "rows": 128,
+          "predictions_equal": true,
+          "original_artifacts_accessible": false,
+          "network": "disabled",
+          "api_calls": 0,
+          "experiment_id": "r3-h4_lgbm_rare_categorical_indicators-v1",
+          "model_role": "evaluation",
+          "final_full_refit_verified": false,
+          "limitation": "This proves portability of the saved outer-train evaluation model only. Multiclass final full-data refit and three-cycle acceptance were interrupted by a terminal API budget failure."
+        },
+        "cycles_detail": "Two cycles committed. Third cycle fit and result review completed; post-recon interrupted before cycle commit."
+      }
+    },
+    "original_implementation_plan_status": "incomplete_known_contract_gaps",
+    "contract_findings_ref": "C:\\Users\\epitaph\\Documents\\ChatGPT\\MLmom 2\\mlmom-project\\artifacts\\qwen-old-gateway-lifecycle-20261023\\contract-findings.json",
+    "platform_score": "not_verified",
+    "runtime_changed_during_lifecycle": false,
+    "env_unchanged": true,
+    "temporary_credentials_removed": true
+  },
+  "original_implementation_plan_status": "incomplete_known_contract_gaps"
 }

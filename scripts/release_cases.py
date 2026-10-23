@@ -29,11 +29,33 @@ def write(path, value):
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_run(run_dir, expected_rows, expected_metric):
+def verify_observation_handoff(run_dir, reports):
+    """Inspect actual provider request payloads, not a role's claim that it saw evidence."""
+    ids={o['observation_id'] for report in reports for o in report.get('observations',[]) if o['observation_id'].startswith('obs-')}
+    seen={'context_agent':set(),'hypothesis_generator':set()}
+    for line in (run_dir/'trace.jsonl').read_text(encoding='utf-8').splitlines():
+        event=json.loads(line);role=event.get('role')
+        if role not in seen or event.get('kind')!='llm.attempt.started':continue
+        payload=json.loads((run_dir/event['payload']['path']).read_text(encoding='utf-8'))
+        for message in payload.get('messages',[]):
+            if message.get('role')!='user':continue
+            try:content=json.loads(message['content'])
+            except (ValueError,TypeError):continue
+            if role=='context_agent':
+                observed=[f.get('evidence',{}).get('observation_id') for f in content.get('dataset_facts',[]) if f.get('kind')=='observation']
+            else:observed=[o.get('observation_id') for o in content.get('reconnaissance',{}).get('observations',[])]
+            seen[role].update(ids & set(observed))
+    shared=seen['context_agent'] & seen['hypothesis_generator']
+    if not shared:raise ValueError('No saved measured observation reached both context_agent and hypothesis_generator')
+    return dict(verified=True,saved_observations=len(ids),shared_ids=sorted(shared))
+
+
+def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_handoff=False):
     """Runs in a new interpreter bound to the package, with relocated source/model."""
     import numpy as np
     import pandas as pd
-    from mlmom.pipeline_contracts import TaskContext
+    from mlmom.pipeline_contracts import TaskContext,ExperimentRun,CandidateVersion
+    from mlmom.execution import require_admitted
     from mlmom.inputs import read_table,features
     from mlmom.resources import SandboxManager,Budget
     from mlmom.pipeline_contracts import RunConfig
@@ -46,6 +68,11 @@ def verify_run(run_dir, expected_rows, expected_metric):
         context=TaskContext.model_validate(json.loads(db.execute("SELECT body FROM objects WHERE kind='context' AND id='task'").fetchone()[0]))
         cycles=[json.loads(r[0]) for r in db.execute("SELECT body FROM objects WHERE kind='cycle'")]
         experiments=[json.loads(r[0]) for r in db.execute("SELECT body FROM objects WHERE kind='experiment'")]
+        candidates={r[0]:json.loads(r[1]) for r in db.execute("SELECT id,body FROM objects WHERE kind='candidate'")}
+        reconnaissance=[json.loads(r[0]) for r in db.execute("SELECT body FROM objects WHERE kind='reconnaissance'")]
+    admitted=[run for run in experiments if run['status']=='completed']
+    for run in admitted:
+        require_admitted(ExperimentRun.model_validate(run),CandidateVersion.model_validate(candidates[run['candidate_id']]))
     if metric_name(context.task.primary_metric)!=metric_name(expected_metric):raise ValueError('Wrong primary metric')
     output=read_table(summary['submission']['path']);test=read_table(context.files.test)
     fmt=context.task.result_format
@@ -61,18 +88,19 @@ def verify_run(run_dir, expected_rows, expected_metric):
              if json.loads(p.read_text(encoding='utf-8'))['artifact']['sha256']==summary['submission']['sha256']]
     if not matches:raise ValueError('Missing saved submission metadata')
     metadata=matches[-1]
+    if metadata['artifact']['model_role']!='submission_refit':raise ValueError('Final full-data refit has not been published')
     replay=run_dir/'relocation-check';replay.mkdir(exist_ok=True)
     code=replay/'code';model=replay/'model'
     if not code.exists():shutil.copytree(metadata['code_dir'],code)
     if not model.exists():shutil.copytree(metadata['model_artifact'],model)
     x=features(test,context).head(128);path=replay/'features.csv';x.to_csv(path,index=False)
-    replay_config=RunConfig(total_seconds=40,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
+    replay_config=RunConfig(timeouts_enabled=True,total_seconds=40,final_reserve_seconds=0,reserve_cpus=0,reserve_memory_gb=0,max_workers=1)
     with SandboxManager(budget=Budget(replay_config,time.time()),max_workers=1) as manager:
         result=manager.run(dict(action='predict',code_dir=str(code),code_hash=tree_hash(code),
             model_artifact=str(model),features_path=str(path),kinds=[context.submission_kind]),
             replay/'worker',seconds=30,memory_gb=3,cpus=2)
     if result['status']!='completed':raise ValueError('Relocated model failed: '+str(result))
-    prediction=pd.read_csv(result['predictions'][context.submission_kind]).to_numpy()
+    prediction=read_table(result['predictions'][context.submission_kind]).to_numpy()
     reference=values[:len(x)]
     equal=np.array_equal(prediction,reference) if 'classification' in context.task.task_type else np.allclose(prediction.astype(float),reference.astype(float),rtol=1e-9,atol=1e-9)
     if not equal:raise ValueError('Relocated predictions differ')
@@ -82,9 +110,12 @@ def verify_run(run_dir, expected_rows, expected_metric):
     generated=all((Path(metadata['code_dir'])/name).is_file() for name in ['preprocessing.py','candidate.py'])
     if completed<3 or len(split_ids)<3 or len(incumbent_rounds)<2:raise ValueError('Three rotating cycles with refitted incumbents not completed')
     if not generated:raise ValueError('Separate generated preprocessing/model path missing')
+    handoff=verify_observation_handoff(run_dir,reconnaissance) if require_observation_handoff else dict(verified=False,reason='Offline fixture; real request handoff checked separately')
     report=dict(status='passed',rows=len(output),primary_metric=expected_metric,completed_cycles=completed,
         outer_splits=len(split_ids),incumbent_rechecks=len(incumbent_rounds),generated_path=True,
-        relocated_model_equal=True,submission_sha256=digest(Path(summary['submission']['path'])))
+        relocated_model_equal=True,submission_sha256=digest(Path(summary['submission']['path'])),
+        execution_fidelity_verified=True,verified_fits=len(admitted),final_full_refit=True,
+        observation_handoff=handoff,observation_handoff_verified=handoff['verified'])
     write(replay/'report.json',report)
     return report
 
@@ -129,11 +160,12 @@ def main():
     parser.add_argument('--verify-run',type=Path)
     parser.add_argument('--expected-rows',type=int)
     parser.add_argument('--expected-metric')
+    parser.add_argument('--require-observation-handoff',action='store_true')
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if args.verify_run:
         sys.path.insert(0,str(Path.cwd()))
         import solution
-        report=verify_run(args.verify_run,args.expected_rows,args.expected_metric)
+        report=verify_run(args.verify_run,args.expected_rows,args.expected_metric,require_observation_handoff=args.require_observation_handoff)
         write(out/'verification.json',report);print(json.dumps(report));return 0
     if not args.archive:parser.error('--archive is required')
     if args.diagnostic_api and args.mode!='real':parser.error('--diagnostic-api requires --mode real')
@@ -203,6 +235,7 @@ def main():
         report=dict(case=name,attempt=ledger['attempts'],archive_sha256=sha,mode=args.mode,
             environment='linux/docker' if args.image else sys.platform,command=['python3' if args.image else sys.executable,'solution.py','task.md'],
             run_dir=str(platform_dir/'run'),status='failed')
+        if args.mode=='real':verify.append('--require-observation-handoff')
         if args.mode=='real':report.update(model=settings.model,diagnostic_api=args.diagnostic_api)
         report['fit_time_multiplier']=args.fit_time_multiplier
         report['timeouts_enabled']=timed
@@ -232,6 +265,9 @@ def main():
             report.update(pipeline_stop_reason=summary.get('stop_reason'),process_acceptance=summary.get('process_acceptance'))
         reports.append(report);write(reports_path,reports);write(attempt/'report.json',report)
         print(json.dumps(report,ensure_ascii=False),flush=True)
+        if report.get('pipeline_stop_reason')=='global_api_failure':
+            write(out/'provider-failure.json',dict(case=name,reason='Global billing/API budget failure; remaining cases not started'))
+            break
     latest={r['case']:r for r in reports}
     required=['regression','multiclass'] if args.case=='all' else [args.case]
     return 0 if all(latest.get(n,{}).get('status')=='passed' for n in required) else 2

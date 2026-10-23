@@ -18,6 +18,9 @@ if context.sample_weight is not None:
 # Macro F1: TotalF1:average=Macro;use_weights=false for unweighted validation.
 # Weighted validation: Pool(valid, validation_y, cat_features=..., weight=validation_weight).
 self.model.fit(X, y, **kwargs)
-# export_model_params: iterations=int(self.model.tree_count_).
+# export_model_params MUST retain every parameter. Example:
+# frozen = copy.deepcopy(self.params)
+# if permitted_early_stopping: frozen['iterations'] = int(self.model.tree_count_)
+# return frozen
 ```
-Use identical predict cleaning and class-order alignment. Persist inference state only. Set boosting_type='Ordered' explicitly if promised. Multioutput uses MultiRMSE, multilabel MultiLogloss; ranking uses sorted group_id and aligned rows/weights. Use a time callback checking context.remaining_seconds. Validation-free refit uses fixed iterations; no HPO inside fit.
+Use identical predict cleaning and class-order alignment. Persist inference state only. Set boosting_type='Ordered' explicitly if promised. Multioutput uses MultiRMSE, multilabel MultiLogloss; ranking uses sorted group_id and aligned rows/weights. Only when context.timeouts_enabled, use a callback returning context.remaining_seconds > 0 (True continues). Validation-free refit uses fixed iterations; no HPO inside fit.

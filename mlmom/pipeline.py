@@ -1,6 +1,8 @@
 """End-to-end LangGraph orchestration with process-isolated experiment workers."""
 from __future__ import annotations
 
+from .agents import GlobalAPIError
+
 import hashlib
 import json
 import os
@@ -17,7 +19,7 @@ from .checkpoint import SQLiteCheckpointer
 from .coding import build_coding_graph
 from .contracts import DatasetProfile,TaskDefinition
 from .data_inspector import build_llm_context
-from .evaluation import evaluate,better,prediction_kind,compact_diagnostics
+from .evaluation import evaluate,better,prediction_kind,compact_diagnostics,relative_gain
 from .inputs import resolve_inputs,read_table,features,targets,validate_tables
 from .llm_client import LLMSettings
 from .persistence import ExperimentStore,atomic_json,file_hash,tree_hash
@@ -60,11 +62,6 @@ class DeferredTask(RuntimeError):
 class Pipeline:
     def __init__(self, task_path: Path, config: RunConfig, *, run_dir: Path | None=None, client=None, resume=False, started=None):
         self.config = config
-        settings=None
-        if client is None:
-            from dataclasses import replace
-            settings=LLMSettings.from_platform_env() if config.profile=='platform' else LLMSettings.from_env()
-            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds if config.timeouts_enabled else None)
         self.files = resolve_inputs(task_path)
         self.run_dir = (run_dir or Path(__file__).resolve().parent.parent/'artifacts'/f'{Path(self.files.root).name}-{uuid.uuid4().hex[:10]}').resolve()
         self.run_dir.mkdir(parents=True,exist_ok=True)
@@ -72,9 +69,16 @@ class Pipeline:
         if session_path.exists():
             if not resume: raise ValueError('Run already exists; use --resume')
             session = json.loads(session_path.read_text(encoding='utf-8'))
+            legacy_policy = 'timeouts_enabled' not in session['config']
+            if legacy_policy:
+                session['config']['timeouts_enabled'] = True
+            if 'timeouts_enabled' not in config.model_fields_set:
+                config = RunConfig.model_validate(dict(config.model_dump(), timeouts_enabled=session['config']['timeouts_enabled']))
+                self.config = config
             if session['task'] != self.files.task or RunConfig.model_validate(session['config']).model_dump(mode='json') != config.model_dump(mode='json'):
                 raise ValueError('Resume requires the same task and configuration')
             if session['input_hashes'] != self.input_hashes(): raise ValueError('Task inputs changed since this run')
+            if legacy_policy: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
             session = dict(run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
@@ -82,6 +86,11 @@ class Pipeline:
         if 'run_id' not in session:
             session['run_id']=uuid.uuid4().hex
             atomic_json(session_path,session)
+        settings=None
+        if client is None:
+            from dataclasses import replace
+            settings=LLMSettings.from_platform_env() if config.profile=='platform' else LLMSettings.from_env()
+            settings=replace(settings,timeout_seconds=config.llm_timeout_seconds if config.timeouts_enabled else None)
         self.trace = TraceSink(self.run_dir,session['run_id'],
             task_id=hashlib.sha256(self.files.task.encode()).hexdigest()[:16],
             secrets=[settings.api_key] if settings else [])
@@ -190,6 +199,8 @@ class Pipeline:
             report['status'] = 'passed'
             self.store.put('runtime_check', 'startup', report)
             emit('worker.runtime_checked', report)
+        except GlobalAPIError:
+            raise
         except Exception as error:
             report.update(status='failed', error=self.trace.scrub(str(error)))
             self.store.put('runtime_check', 'startup', report)
@@ -303,13 +314,10 @@ class Pipeline:
         # Never put model artifact paths or the full run archive into a prompt.
         if state.get('champion'):
             champ = Champion.model_validate(state['champion'])
-            plan=plan_summary(champ.plan.model_dump(mode='json'))
-            plan['model_params']=champ.run.best_params or plan.get('model_params',{})
+            from .planning_context import champion_snapshot
             search=experiment_summary(champ.run.model_dump(mode='json'))
             search={k:v for k,v in search.items() if k not in {'candidate_id','best_params'}}
-            payload['champion'] = dict(candidate_id=champ.candidate.candidate_id,
-                code_hash=champ.candidate.code_hash,plan=plan,
-                evaluation=evaluation_summary(champ.evaluation.model_dump()),search=search)
+            payload['champion'] = dict(champion_snapshot(champ),search=search)
         return payload
 
     def scout(self,key,history):
@@ -471,6 +479,8 @@ class Pipeline:
             return {'plans':output['plans'],'stop_reason':None,
                     'planning_attempt':0,
                     'deferred_hypotheses':output.get('hypotheses') if first else None}
+        except GlobalAPIError:
+            raise
         except (LLMUnavailable,ValueError) as error:
             self.store.event('llm_unavailable','planning',{'error':str(error)})
             self.store.event('planning_failed',f"r{state['round_number']}",dict(attempt=state.get('planning_attempt',0)+1,error=str(error)))
@@ -563,6 +573,8 @@ class Pipeline:
         if self.budget.snapshot().remaining_seconds < 1: return
         if self.test is None: self.test=read_table(self.files.test,table_format=self.context.table_formats.get(self.files.test))
         try:
+            from .execution import require_admitted
+            require_admitted(champion.run,champion.candidate)
             p = self._prediction(champion.candidate,champion.run,features(self.test,self.context),[self.context.submission_kind])
             artifact = publish_submission(self.context,self.test,p[self.context.submission_kind],champion.run,champion.candidate)
             saved=self.run_dir/'submissions'/f'{artifact.experiment_id}-{artifact.sha256}.csv'
@@ -584,6 +596,8 @@ class Pipeline:
                 emit('submission.first',first)
             emit('submission.published',artifact.model_dump(),experiment_id=champion.run.experiment_id,
                  candidate_id=champion.candidate.candidate_id)
+        except GlobalAPIError:
+            raise
         except Exception as error:
             self.store.event('submission_failed',champion.run.experiment_id,{'error':str(error)})
             emit('submission.failed',{'error':str(error)},experiment_id=champion.run.experiment_id)
@@ -634,6 +648,8 @@ class Pipeline:
             run = ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
             try:
                 if run.status!='completed': raise ValueError(run.error or run.stop_reason or 'Training failed')
+                from .execution import require_admitted
+                require_admitted(run,candidate)
                 if run.role!='evaluation' or run.split_id!=split.split_id: raise ValueError('Incomparable evaluation artifact')
                 saved_eval = self.store.get('evaluation',run.experiment_id)
                 if saved_eval: evaluation = EvaluationResult.model_validate(saved_eval)
@@ -646,6 +662,7 @@ class Pipeline:
                         X=features(holdout,context),groups=group_keys(holdout,context.task.group_columns),label_prediction=unbox(p[label_kind]),
                         weights=holdout[context.task.weight_column].to_numpy() if context.task.weight_column else None,
                         reference_X=features(self.frame.iloc[split.train_indices],context),reference_y=targets(self.frame.iloc[split.train_indices],context))
+                    evaluation.validation_protocol_ref=str(directory/'split.json')
                     if not run.incumbent and self.config.diagnostic_seconds>0:
                         diag_dir=self.run_dir/'diagnostics'/run.experiment_id
                         try:
@@ -655,6 +672,8 @@ class Pipeline:
                                 seconds=min(self.config.diagnostic_seconds,max(.1,self.budget.snapshot().research_seconds)),
                                 cpus=plan.cpus,memory_gb=plan.memory_gb)
                             evaluation.diagnostics['model_inspection']=diagnosed.get('diagnostics',dict(status='unavailable',reason=diagnosed.get('stop_reason') or diagnosed.get('error')))
+                        except GlobalAPIError:
+                            raise
                         except Exception as error:evaluation.diagnostics['model_inspection']=dict(status='unavailable',reason=str(error)[:300])
                         evaluation.diagnostics['artifact_ref']=str(diag_dir/'report.json')
                         atomic_json(diag_dir/'report.json',evaluation.diagnostics)
@@ -685,8 +704,15 @@ class Pipeline:
                 if self.budget.reserve!=old_reserve:
                     self.store.put('budget','current',{'final_reserve_seconds':self.budget.reserve})
                     emit('budget.reserve_updated',{'final_reserve_seconds':self.budget.reserve})
+            except GlobalAPIError:
+                raise
             except Exception as error:
                 run.status='failed';run.error=str(error)
+                if (run.execution_report and run.execution_report.get('status') != 'passed') or 'Machine execution gate' in str(error):
+                    from .pipeline_contracts import ResultReview
+                    review=ResultReview(implementation='mismatch',effect='inconclusive',explanation=run.error[:4000])
+                    self.store.put('result_review',run.experiment_id,review,immutable=True)
+                    atomic_json(self.run_dir/'reviews'/f'{run.experiment_id}.json',review)
                 self.store.event('experiment_failed',run.experiment_id,{'error':str(error)})
             self.store.put('experiment',run.experiment_id,run)
             return run
@@ -700,6 +726,8 @@ class Pipeline:
                         try:
                             repaired=self.prepare(plan,round_id,feedback=error,prior=candidate)
                             if repaired:pending.append((repaired,plan,False,repairs+1))
+                        except GlobalAPIError:
+                            raise
                         except LLMUnavailable:pass
                     repair_queue=[]
                 available=self.budget.snapshot().research_seconds
@@ -777,7 +805,7 @@ class Pipeline:
             if self.budget.snapshot().research_seconds<.5: break
             if number and self.config.target_completed_rounds and self.cycle_allowance(state['round_number'])<self.admission_cost():
                 self.store.event('alternative_deferred',round_id,dict(reason='protect_required_cycles'));break
-            if self.config.hpo_enabled and state['round_number']>1 and plan.strategy=='single' and not self.tools[plan.tool_id].native_hpo:
+            if self.config.hpo_enabled and plan.change_kind!='single_change_ablation' and state['round_number']>1 and plan.strategy=='single' and not self.tools[plan.tool_id].native_hpo:
                 space=plan.search_space or self.search_space(plan)
                 if space:
                     plan=plan.model_copy(update={'strategy':'optuna','search_space':space,'max_trials':self.config.hpo_max_trials,
@@ -788,6 +816,8 @@ class Pipeline:
                     requested_seconds=plan.time_limit_seconds,allocated_seconds=fit_limit))
                 plan=plan.model_copy(update={'time_limit_seconds':fit_limit})
             try: candidate=self.prepare(plan,round_id)
+            except GlobalAPIError:
+                raise
             except LLMUnavailable:
                 self.store.event('llm_unavailable','coding',{});break
             if candidate:
@@ -808,6 +838,8 @@ class Pipeline:
                     alternative=self.planning_call(state,mode='alternatives',hypotheses=state['deferred_hypotheses'])
                     if alternative.get('valid'):
                         plans.extend(HypothesisPlan.model_validate(p) for p in alternative['plans'])
+                except GlobalAPIError:
+                    raise
                 except (LLMUnavailable,ValueError) as error:
                     emit('planning.alternative_failed',{'error':str(error)})
         process_jobs(entries)
@@ -860,6 +892,8 @@ class Pipeline:
         try:
             self.review_results(rows,context)
             self.scout(round_id,previous.model_dump(mode='json'))
+        except GlobalAPIError:
+            raise
         except Exception as error:
             self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
         complete=bool(state.get('incumbent_succeeded',True) and
@@ -896,7 +930,10 @@ class Pipeline:
                     r['evaluation']['split_id']==row['evaluation']['split_id']),None)
             review=review_result(self.client,dict(hypothesis=row['plan']['hypothesis'],plan=row['plan'],
                 source=sources,code_hash=row['candidate']['code_hash'],parameters=row['run']['best_params'],
+                execution_report=row['run'].get('execution_report'),
+                smoke_execution_report=row['candidate'].get('execution_report'),
                 evaluation=row['evaluation'],comparable_reference=reference,
+                relative_gain=relative_gain(row['evaluation'],reference),
                 evidence_refs=[f'evaluation:{key}',f'candidate:{row["candidate"]["candidate_id"]}']),
                 self.skills.load([],context.task.task_type,role='result_validator'),key,seconds)
             self.store.put('result_review',key,review,immutable=True)
@@ -922,8 +959,12 @@ class Pipeline:
                     run=ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
                 self.store.put('experiment',experiment_id,run)
                 if run.status=='completed':
+                    from .execution import require_admitted
+                    require_admitted(run,champion.candidate)
                     full=champion.model_copy(update={'run':run})
                     self.publish(full)
+            except GlobalAPIError:
+                raise
             except Exception as error:
                 self.store.event('refit_failed',experiment_id,{'error':str(error)})
         output=dict(status='completed' if self.last_submission else 'failed',stop_reason=state.get('stop_reason') or 'finished',
@@ -978,6 +1019,16 @@ class Pipeline:
             output=dict(status='deferred',stop_reason='deferred_time_series_support',error=self.trace.scrub(str(error)),submission=None,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'))
             emit('run.deferred',output)
             atomic_json(self.run_dir/'summary.json',output)
+            return output
+        except GlobalAPIError as error:
+            output=dict(status='failed',stop_reason='global_api_failure',error=str(error),
+                submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),
+                process_acceptance=dict(target_completed_rounds=self.config.target_completed_rounds,
+                    completed_rounds=sum(c['completed'] for c in self.store.list('cycle')),
+                    passed=False),failure_causes=self.failure_causes())
+            atomic_json(self.run_dir/'provider-failure.json',dict(reason=str(error)))
+            atomic_json(self.run_dir/'summary.json',output)
+            emit('run.failed',output)
             return output
         except Exception as error:
             output=dict(status='completed' if self.last_submission else 'failed',stop_reason='worker_runtime_error' if isinstance(error,WorkerRuntimeError) else 'error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())

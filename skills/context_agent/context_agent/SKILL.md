@@ -22,3 +22,6 @@ Canonical target, metric/options/direction, IDs, exclusions, output schema and
 prediction kind are attached without summarization. The Planner can read the
 original task with read_task if a nuance is unclear. Hard timeouts are off by default. When explicitly enabled, context_seconds limits
 this role and retries/resume share the original deadline.
+
+## Evidence integrity
+Preserve saved observation IDs and exact numbers; result_rows is SQL output cardinality, rows is optional measured source support. Do not invent missing support. Carry partial-report findings forward individually. Distinguish mae/rmse from signed mean_residual=y_true-y_pred, and retain score_kind/split/weighting. Treat original_hypothesis as historical; current Champion snapshot is authoritative. A machine fidelity failure is not a negative scientific result.
