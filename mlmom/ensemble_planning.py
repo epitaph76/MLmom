@@ -2,7 +2,7 @@
 from pathlib import Path
 import shutil
 
-from .agents import GlobalAPIError, LLMUnavailable, role_window
+from .agents import GlobalAPIError, LLMUnavailable, StructuredOutputError, role_window
 from .resources import WorkerInfrastructureError
 from .pipeline_contracts import EnsembleProposal, Hypothesis, HypothesisPlan, ExperimentRun
 from .planning import build_planning_graph
@@ -49,15 +49,26 @@ def plan_ensemble(pipeline, state):
             anchor=next((row for row in pool if row['experiment_id']==champion_id),None)
             if anchor and anchor not in preview:preview=[anchor,*preview[:11]]
             with role_window(pipeline.client, 'ensemble_agent', key, pipeline.config.ensemble_agent_seconds):
-                proposal = pipeline.client.generate('ensemble_agent',
-                    'Select two or three complementary verified SINGLE model experiments for one ensemble hypothesis. '
-                    'Use only supplied experiment IDs. No recursive ensembles. Consider diversity, evidence and cost; '
-                    'historical scores with different split IDs are not comparable. Return skip=true with a reason '
-                    'when no defensible composition exists. Do not train, write code or select on current holdout labels.',
-                    dict(task=context.task.model_dump(mode='json'), budget=snapshot.model_dump(),
-                         components=[component_brief(row) for row in preview],total_components=len(pool),
-                         skill_instructions=pipeline.skills.load([],context.task.task_type,role='ensemble_agent')),
-                    EnsembleProposal, role_tools)
+                feedback = None
+                for attempt in range(pipeline.config.max_attempts):
+                    try:
+                        proposal = pipeline.client.generate('ensemble_agent',
+                            'Select two or three complementary verified SINGLE model experiments for one ensemble hypothesis. '
+                            'Use only supplied experiment IDs. No recursive ensembles. Consider diversity, evidence and cost; '
+                            'historical scores with different split IDs are not comparable. Return skip=true with a reason '
+                            'when no defensible composition exists. Return only component_experiment_ids, rationale and skip; '
+                            'put any skip explanation in rationale. Do not train, write code or select on current holdout labels.',
+                            dict(task=context.task.model_dump(mode='json'), budget=snapshot.model_dump(),
+                                 components=[component_brief(row) for row in preview],total_components=len(pool),
+                                 validation_feedback=feedback,
+                                 skill_instructions=pipeline.skills.load([],context.task.task_type,role='ensemble_agent')),
+                            EnsembleProposal, role_tools)
+                        proposal = EnsembleProposal.model_validate(proposal.model_dump() if hasattr(proposal,'model_dump') else proposal)
+                        break
+                    except (StructuredOutputError, ValueError) as error:
+                        if attempt + 1 == pipeline.config.max_attempts:
+                            raise
+                        feedback = str(error)[:2000]
             pipeline.store.put('ensemble_proposal',key,proposal)
         proposal = EnsembleProposal.model_validate(proposal.model_dump() if hasattr(proposal,'model_dump') else proposal)
         if proposal.skip:

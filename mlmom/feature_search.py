@@ -574,6 +574,12 @@ FEATURE_PROMPT = '''Coordinate one feature-only experiment on the frozen baselin
 FeatureProposal: add one related group, remove one related group, or stop with a reason.
 Use only train_profile (computed from outer train and inner OOF), task semantics and supplied history.
 dictionary_metadata contains declared column meanings and units, not measured effects.
+Investigate hidden entities and repeated observations across time or conditions using stable
+eligible attributes in the supplied train-only evidence, following the discovery skill guidance.
+Validate candidate matches and prediction-time availability before proposing within-entity
+aggregates or historical/temporal features. If the evidence, leakage-safe validation, or required
+DSL operation is unavailable, explain the limitation in rationale; do not invent matches or
+claim unsupported historical joins. Keep the frozen model and fold protocol unchanged.
 Never request external holdout, test, files, arbitrary Python, target-dependent features, IDs or excluded
 columns. The trusted DSL executes operations; you do not implement Python or change model parameters.
 missing/log/frequency/date_part take one column; ratio/difference/product take two. date_part also

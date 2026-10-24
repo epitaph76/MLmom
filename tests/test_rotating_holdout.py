@@ -14,7 +14,8 @@ class RotatingHoldoutTests(unittest.TestCase):
     def test_failed_incumbent_recheck_does_not_complete_cycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             pipeline=object.__new__(Pipeline)
-            pipeline.config=RunConfig(timeouts_enabled=True,max_rounds=6,target_completed_rounds=3)
+            pipeline.last_submission=None
+            pipeline.config=RunConfig(timeouts_enabled=True,max_rounds=6,target_completed_rounds=3,cycle_full_refit=False)
             pipeline.store=ExperimentStore(Path(tmp))
             pipeline.review_results=Mock()
             pipeline.scout=Mock()
@@ -47,7 +48,8 @@ class RotatingHoldoutTests(unittest.TestCase):
         for reason,config,state_changes,seconds in cases:
             with self.subTest(reason=reason),tempfile.TemporaryDirectory() as tmp:
                 pipeline=object.__new__(Pipeline)
-                pipeline.config=RunConfig(timeouts_enabled=True,**dict({'max_rounds':6},**config))
+                pipeline.last_submission=None
+                pipeline.config=RunConfig(timeouts_enabled=True,cycle_full_refit=False,**dict({'max_rounds':6},**config))
                 pipeline.store=ExperimentStore(Path(tmp))
                 pipeline.review_results=Mock()
                 pipeline.scout=Mock()

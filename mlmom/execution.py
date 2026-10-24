@@ -255,6 +255,15 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                             report['errors'].append(f'{name}: component did not refit on every current training row')
                 # Constructor state at fit entry takes precedence over post-fit mutable attributes.
                 actual['actual_params'].update(trace['params'])
+                actual['actual_params'].update(trace.get('fit_arguments', {}))
+                updates = trace.get('boosting_updates')
+                if actual['backend'] == 'lightgbm' and updates:
+                    if (updates['invalid_sequence'] or
+                            updates['booster_id'] != id(getattr(component, 'booster_', None))):
+                        report['errors'].append(f'{name}: inconsistent trusted LightGBM update sequence')
+                    else:
+                        actual['boosting_updates'] = updates
+                        actual['completed_iterations'] = updates['initial_iteration'] + updates['calls']
                 if not trace['completed']:
                     report['errors'].append(f'{name}: backend fit did not complete')
                 input_trace=trace.get('native_parent_entry') or trace
@@ -339,6 +348,12 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                 report['errors'].append(f'{name}: requested at most {count} iterations, completed {completed}; iteration limit exceeded')
             elif completed == count and (retained is None or retained >= count):
                 actual['stopping_reason'] = 'iteration_limit'
+            elif (actual['backend'] == 'lightgbm' and completed == count and retained is not None and
+                  retained < count and actual.get('boosting_updates', {}).get('initial_iteration') == 0 and
+                  actual['boosting_updates']['final_iteration'] == retained and
+                  actual['boosting_updates']['noop_updates'] > 0 and
+                  actual['boosting_updates']['advanced_iterations'] + actual['boosting_updates']['noop_updates'] == count):
+                actual['stopping_reason'] = 'iteration_limit_with_noop_updates'
             elif (policy == 'early_stopping' and context.validation_y is not None and selected is not None and
                   (completed >= count or (actual['backend']=='catboost' and actual.get('stopping_patience') is not None and
                                          completed-selected >= actual['stopping_patience']) or

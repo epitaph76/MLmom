@@ -41,7 +41,7 @@ class ContinuousRunTests(unittest.TestCase):
                         graph = pipeline.graph()
                         config = {'configurable': {'thread_id': 'run'}}
                         graph.invoke({}, config)
-                        self.assertEqual(graph.get_state(config).next, ('plan',))
+                        self.assertEqual(graph.get_state(config).next, ('execute',))
                     result = pipeline.run(resume=resume)
                 self.assertEqual(result['status'], 'completed', result)
                 self.assertEqual(rounds, list(range(1, 121)))
@@ -52,7 +52,8 @@ class ContinuousRunTests(unittest.TestCase):
         from mlmom.persistence import ExperimentStore
         with tempfile.TemporaryDirectory() as temp:
             pipeline = object.__new__(Pipeline)
-            pipeline.config = RunConfig(max_rounds=None, plateau_rounds=None)
+            pipeline.last_submission = None
+            pipeline.config = RunConfig(max_rounds=None, plateau_rounds=None, cycle_full_refit=False)
             pipeline.store = ExperimentStore(Path(temp))
             pipeline.review_results = Mock()
             pipeline.restore = lambda state: SimpleNamespace(task=SimpleNamespace(metric_direction='minimize'))
@@ -63,9 +64,42 @@ class ContinuousRunTests(unittest.TestCase):
             try:
                 self.assertIsNone(pipeline.analyze(state)['stop_reason'])
                 self.assertTrue(pipeline.can_retry_planning(state))
+                self.assertTrue(pipeline.can_retry_planning(dict(state, planning_attempt=1000)))
+                self.assertTrue(pipeline.can_retry_round(state))
                 pipeline.store.put('reconnaissance', 'r1000', {'status':'completed', 'observations':[]})
                 pipeline.context = None
                 evidence = pipeline.read_planning_evidence('reconnaissance:r1000')
                 self.assertIn('completed', json.dumps(evidence))
             finally:
                 pipeline.store.close()
+
+    def test_default_profile_has_no_outer_time_round_or_plateau_cutoff(self):
+        config = RunConfig()
+        self.assertTrue(config.continuous)
+        self.assertTrue(config.cycle_full_refit)
+        self.assertFalse(config.timeouts_enabled)
+        self.assertIsNone(config.max_rounds)
+        self.assertIsNone(config.plateau_rounds)
+
+    def test_many_planning_retries_do_not_hit_the_graph_step_limit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch('mlmom.pipeline.installed_tools', only_sklearn):
+                pipeline = Pipeline(dataset(root/'input'), RunConfig(), run_dir=root/'run', client=OfflineLLM())
+            calls = []
+            pipeline.preflight_runtime = lambda: None
+            pipeline.inspect = lambda state: dict(round_number=1)
+            def plan(state):
+                calls.append(1)
+                return dict(plans=[{}] if len(calls) == 150 else [], stop_reason='planning_retry')
+            pipeline.plan = plan
+            pipeline.execute = lambda state: {}
+            pipeline.analyze = lambda state: dict(stop_reason='test_manual_stop')
+            def finalize(state):
+                (root/'run/summary.json').write_text(json.dumps(dict(status='completed', submission=None)))
+                return {}
+            pipeline.finalize = finalize
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = pipeline.run()
+            self.assertEqual(result['status'], 'completed', result)
+            self.assertEqual(len(calls), 150)

@@ -33,7 +33,7 @@ from .resources import (Budget, SandboxManager, terminate_tree, WorkerRuntimeErr
                         require_worker_infrastructure, worker_runtime, runtime_versions)
 from .process_identity import worker_record, recorded_process_matches
 from .splitting import make_split,group_keys
-from .submission import publish_submission
+from .submission import publish_submission, snapshot_cycle_submission
 from .tools import ToolSet
 from .tracing import TraceSink, bind, emit, span
 from .pipeline_contracts import TrainingCheckpoint,TrainingDecision,Observation
@@ -56,6 +56,7 @@ class RunState(TypedDict, total=False):
     deferred_hypotheses: dict | None
     planning_attempt: int
     search_groups: list[dict]
+    initial_boosting_sweep: bool
 
 
 class DeferredTask(RuntimeError):
@@ -88,10 +89,21 @@ class Pipeline:
             if 'feature_search_enabled' not in explicit_config_fields:
                 config = config.model_copy(update={'feature_search_enabled':session['config']['feature_search_enabled']})
                 self.config = config
+            legacy_boosting = 'initial_boosting_sweep' not in session['config']
+            session['config'].setdefault('initial_boosting_sweep', False)
+            if 'initial_boosting_sweep' not in explicit_config_fields:
+                config = config.model_copy(update={'initial_boosting_sweep':session['config']['initial_boosting_sweep']})
+                self.config = config
+            legacy_cycle_refit = 'cycle_full_refit' not in session['config']
+            session['config'].setdefault('cycle_full_refit', False)
+            preserved = {key: session['config'][key] for key in ('cycle_full_refit', 'max_rounds', 'plateau_rounds')
+                         if key not in explicit_config_fields and key in session['config']}
+            config = config.model_copy(update=preserved)
+            self.config = config
             if session['task'] != self.files.task or RunConfig.model_validate(session['config']).model_dump(mode='json') != config.model_dump(mode='json'):
                 raise ValueError('Resume requires the same task and configuration')
             if session['input_hashes'] != self.input_hashes(): raise ValueError('Task inputs changed since this run')
-            if legacy_policy or legacy_features: atomic_json(session_path, session)
+            if legacy_policy or legacy_features or legacy_boosting or legacy_cycle_refit: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
             session = dict(runtime_contract_version=2,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
@@ -170,6 +182,8 @@ class Pipeline:
     def read_history(self, kind: str='evaluation', limit: int=10) -> list[dict]:
         if kind not in {'evaluation','experiment','plan','candidate'}: raise ValueError('History kind is not exposed')
         records = self.store.list(kind,limit=min(max(limit,1),5))
+        if kind == 'experiment':
+            records = [r for r in records if r.get('role', 'evaluation') == 'evaluation']
         if kind=='evaluation':
             records=[evaluation_summary(r) for r in records]
         if kind=='experiment':records=[experiment_summary(r) for r in records]
@@ -459,7 +473,7 @@ class Pipeline:
         if not any(payload['history'].values()):
             role_tools.tools.pop('read_history',None)
         emit('planning.policy',dict(lightweight=lightweight,mode=mode,budget=payload['budget']))
-        candidate_limit=self.config.max_candidates
+        candidate_limit=1 if mode == 'initial' else self.config.max_candidates
         if self.config.target_completed_rounds and self.cycle_allowance(state['round_number'])<2*self.admission_cost(advanced=advanced):
             candidate_limit=1
             emit('planning.single_candidate_budget',dict(reason='protect_required_cycles'))
@@ -471,7 +485,8 @@ class Pipeline:
             probe_tool=self.probe_ml_tool,evaluation_reserve_seconds=2*self.config.prediction_seconds,
             hypothesis_seconds=self.config.hypothesis_seconds,planner_seconds=self.config.planner_seconds,
             validator_seconds=self.config.validator_seconds,saved_progress=progress,
-            save_progress=lambda value:self.store.put('planning_progress',key,value))
+            save_progress=lambda value:self.store.put('planning_progress',key,value),
+            initial_max_workers=self.config.max_workers)
         initial={'payload':payload}
         if hypotheses is not None: initial['hypotheses']=hypotheses
         elif progress.get('hypotheses'):initial['hypotheses']=progress['hypotheses']
@@ -506,7 +521,11 @@ class Pipeline:
         if self.budget.snapshot().research_seconds <= .5: return {'plans':[],'stop_reason':'research_deadline'}
         try:
             first=not bool(self.last_submission)
-            output=self.planning_call(state,mode='baseline' if first else 'all')
+            from .search_groups import SUPERVISED, compatible_boosters
+            initial_sweep = bool(first and state['round_number'] == 1 and self.config.initial_boosting_sweep and
+                (context := self.restore(state)).task.task_type in SUPERVISED and
+                compatible_boosters(self.tools, context.task.task_type))
+            output=self.planning_call(state,mode='initial' if initial_sweep else 'baseline' if first else 'all')
             from .ensemble_planning import plan_ensemble
             ensemble=plan_ensemble(self,state)
             if not output['valid']:
@@ -522,7 +541,8 @@ class Pipeline:
                 return {'plans':[],'stop_reason':output.get('stop_reason') or 'planning_attempts_exhausted'}
             return {'plans':[*output['plans'],*ensemble['plans']],'stop_reason':None,
                     'planning_attempt':0,
-                    'deferred_hypotheses':output.get('hypotheses') if first else None}
+                    'initial_boosting_sweep':initial_sweep,
+                    'deferred_hypotheses':output.get('hypotheses') if first and not initial_sweep else None}
         except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except (LLMUnavailable,ValueError) as error:
@@ -539,13 +559,13 @@ class Pipeline:
             return {'plans':[],'stop_reason':'planning_attempts_exhausted' if 'budget exceeded' not in str(error).lower() else 'llm_unavailable'}
 
     def can_retry_round(self,state):
-        return (self.config.target_completed_rounds>0 and
+        return ((self.config.continuous or self.config.target_completed_rounds>0) and
                 (self.config.max_rounds is None or state['round_number']<self.config.max_rounds) and
                 self.budget.snapshot().research_seconds>=self.admission_cost())
 
     def can_retry_planning(self,state):
         return ((self.config.max_rounds is None or state['round_number']<=self.config.max_rounds) and
-                state.get('planning_attempt',0)+1<self.config.max_attempts and
+                (self.config.continuous or state.get('planning_attempt',0)+1<self.config.max_attempts) and
                 self.budget.snapshot().research_seconds>=self.admission_cost())
 
     def prepare(self,plan,round_id,*,feedback=None, prior=None, coding_config=None):
@@ -638,20 +658,26 @@ class Pipeline:
         return predictions
 
     def publish(self,champion):
+        if (self.config.cycle_full_refit and champion.run.role == 'evaluation' and self.last_submission and
+                self.last_submission.get('model_role') == 'submission_refit'):
+            return None  # Keep the latest full-data answer safe while the next cycle runs.
+        return self.publish_model(champion.candidate, champion.plan, champion.run)
+
+    def publish_model(self,candidate,plan,run):
         if self.budget.snapshot().remaining_seconds < 1: return
         if self.test is None: self.test=read_table(self.files.test,table_format=self.context.table_formats.get(self.files.test))
         try:
             from .execution import require_admitted
-            require_admitted(champion.run,champion.candidate)
-            p = self._prediction(champion.candidate,champion.run,features(self.test,self.context),[self.context.submission_kind])
-            artifact = publish_submission(self.context,self.test,p[self.context.submission_kind],champion.run,champion.candidate)
+            require_admitted(run,candidate)
+            p = self._prediction(candidate,run,features(self.test,self.context),[self.context.submission_kind])
+            artifact = publish_submission(self.context,self.test,p[self.context.submission_kind],run,candidate)
             saved=self.run_dir/'submissions'/f'{artifact.experiment_id}-{artifact.sha256}.csv'
             saved.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(artifact.path,saved)
             atomic_json(saved.with_suffix('.json'),dict(artifact=artifact.model_dump(mode='json'),
-                saved_path=str(saved),model_artifact=champion.run.model_artifact,
-                code_dir=champion.candidate.code_dir,code_hash=champion.candidate.code_hash,
-                plan=champion.plan.model_dump(mode='json'),best_params=champion.run.best_params))
+                saved_path=str(saved),model_artifact=run.model_artifact,
+                code_dir=candidate.code_dir,code_hash=candidate.code_hash,
+                plan=plan.model_dump(mode='json'),best_params=run.best_params))
             self.store.put('submission','current',artifact)
             self.store.put('submission',f'{artifact.experiment_id}-{artifact.sha256[:8]}',artifact,immutable=True)
             self.last_submission=artifact.model_dump()
@@ -662,13 +688,79 @@ class Pipeline:
                            target_met=elapsed<=self.config.first_submission_seconds)
                 self.store.put('milestone','first_submission',first,immutable=True)
                 emit('submission.first',first)
-            emit('submission.published',artifact.model_dump(),experiment_id=champion.run.experiment_id,
-                 candidate_id=champion.candidate.candidate_id)
+            emit('submission.published',artifact.model_dump(),experiment_id=run.experiment_id,
+                 candidate_id=candidate.candidate_id)
+            return artifact
         except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except Exception as error:
-            self.store.event('submission_failed',champion.run.experiment_id,{'error':str(error)})
-            emit('submission.failed',{'error':str(error)},experiment_id=champion.run.experiment_id)
+            self.store.event('submission_failed',run.experiment_id,{'error':str(error)})
+            emit('submission.failed',{'error':str(error)},experiment_id=run.experiment_id)
+
+    def refit_submission(self,champion,*,round_id,experiment_id,final=False):
+        """Fit the frozen winner on all labeled rows, outside the comparison ledger."""
+        from .execution import require_admitted, config_hash
+        from .model_spec import frozen_plan
+        require_admitted(champion.run, champion.candidate)
+        source = dict(champion_experiment_id=champion.run.experiment_id,
+            candidate_id=champion.candidate.candidate_id, code_hash=champion.candidate.code_hash,
+            configuration_hash=config_hash(champion.run.model_spec or champion.run.best_params),
+            dataset_hash=self.context.dataset_hash, train_path=self.files.train, train_rows=len(self.frame),
+            model_role='submission_refit', split_id='all-train', used_for_comparison=False)
+        self.store.put('submission_refit_source', experiment_id, source, immutable=True)
+        self.store.put('submission_champion', experiment_id, champion, immutable=True)
+        kind = 'experiment' if final else 'submission_refit'
+        saved = self.store.get(kind, experiment_id)
+        plan = frozen_plan(champion.plan, champion.run)
+        run = ExperimentRun(experiment_id=experiment_id, round_id=round_id,
+            candidate_id=champion.candidate.candidate_id, split_id='all-train', role='submission_refit',
+            status='running', resource_cpus=self.budget.cpus, resource_memory_gb=self.budget.memory_gb)
+        report = dict(source, experiment_id=experiment_id, round_id=round_id, status='failed')
+        directory = self.run_dir/'runs'/experiment_id
+        try:
+            if saved and saved['status'] == 'completed':
+                run = ExperimentRun.model_validate(saved)
+            else:
+                available = self.budget.snapshot().remaining_seconds if final else self.budget.snapshot().research_seconds
+                seconds = available - self.config.prediction_seconds - 2
+                if seconds <= .1:
+                    report.update(status='budget_skipped', reason='Insufficient full-data fit and prediction budget')
+                    self.store.put('submission_refit_status', experiment_id, report)
+                    emit('submission.refit_skipped', report)
+                    return report
+                self.store.put(kind, experiment_id, run)
+                emit('submission.refit_started', dict(source, experiment_id=experiment_id), round_id=round_id)
+                result_path = directory/'result.json'
+                result = json.loads(result_path.read_text(encoding='utf-8')) if result_path.exists() else None
+                if not result or result.get('status') != 'completed':
+                    result = self.sandbox.run(dict(action='train', phase='final' if final else 'submission',
+                        code_dir=champion.candidate.code_dir, code_hash=champion.candidate.code_hash,
+                        context=self.sanitized_context(self.files.train), plan=plan.model_dump(mode='json'),
+                        train_path=self.files.train, seed=self.config.seed, fixed=True), directory,
+                        seconds=max(.1, seconds), memory_gb=self.budget.memory_gb, cpus=self.budget.cpus)
+                require_worker_infrastructure(result, directory)
+                run = ExperimentRun.model_validate(dict(run.model_dump(), **{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
+            if run.status != 'completed':
+                raise ValueError(run.error or run.stop_reason or 'Full-data refit failed')
+            require_admitted(run, champion.candidate)
+            if run.role != 'submission_refit' or run.split_id != 'all-train' or run.internal_score is not None or run.trials:
+                raise ValueError('Full-data refit must have no comparison scores or search trials')
+            self.store.put(kind, experiment_id, run)
+            artifact = self.publish_model(champion.candidate, plan, run)
+            if artifact is None:
+                raise ValueError('Full-data submission publication failed')
+            report.update(status='passed', model_artifact=run.model_artifact, artifact=artifact.model_dump(mode='json'))
+            emit('submission.refit_completed', report, round_id=round_id)
+        except (GlobalAPIError, WorkerInfrastructureError):
+            raise
+        except Exception as error:
+            if run.status != 'completed':
+                run.status, run.error = 'failed', str(error)
+            self.store.put(kind, experiment_id, run)
+            report['error'] = str(error)
+            self.store.event('refit_failed', experiment_id, {'error':str(error)})
+        self.store.put('submission_refit_status', experiment_id, report)
+        return report
 
     def execute(self,state):
         context = self.restore(state)
@@ -676,6 +768,7 @@ class Pipeline:
         cached = self.store.get('round_result',round_id)
         if cached: return cached
         previous = Champion.model_validate(state['champion']) if state.get('champion') else None
+        initial_sweep = bool(state.get('initial_boosting_sweep'))
         saved_split = self.store.get('split',round_id)
         anchor=(self.store.get('outer_split','shared') or self.store.get('split','r1')) if self.config.fixed_outer_split else None
         split = (SplitSpec.model_validate(saved_split) if saved_split else
@@ -962,10 +1055,15 @@ class Pipeline:
             except (GlobalAPIError, WorkerInfrastructureError):
                 raise
             except LLMUnavailable:
-                self.store.event('llm_unavailable','coding',{});break
+                self.store.event('llm_unavailable','coding',dict(tool_id=plan.tool_id))
+                if initial_sweep:
+                    group_skips.append(dict(group_id=plan.search_group_id,variant_id=plan.hypothesis.hypothesis_id,
+                                            reason='coding_llm_unavailable'))
+                    continue
+                break
             if candidate:
                 entry=(candidate,plan,False,0)
-                if previous is None and number==0:
+                if previous is None and number==0 and not initial_sweep:
                     process_jobs([entry])  # obtain a first valid file before preparing alternatives
                     feature_branch()
                     if self.last_submission and self.config.hpo_enabled and plan.strategy=='single' and plan.search_group_kind=='single':
@@ -1002,7 +1100,7 @@ class Pipeline:
                 except (LLMUnavailable,ValueError) as error:
                     emit('planning.alternative_failed',{'error':str(error)})
         process_jobs(entries)
-        if previous is None:
+        if previous is None and not initial_sweep:
             feature_branch()
         from .search_groups import collect_groups, internal_winner
         group_results=[]
@@ -1045,7 +1143,8 @@ class Pipeline:
             self.store.put('search_group_result',round_id+'-'+key,outcome)
             group_results.append(outcome)
         # Later cycles use the newly rechecked champion after model/family selection.
-        # The first cycle has already run this branch before baseline HPO.
+        # The initial boosting sweep reaches this branch after all family fits/HPO.
+        # Legacy single baselines already ran it before their HPO.
         feature_branch()
         ensemble_status=self.store.get('ensemble_planning',round_id)
         if state['round_number']>1 and ensemble_status and not ensemble_status.get('plans'):
@@ -1072,7 +1171,7 @@ class Pipeline:
         """Retain admitted single fits even when their search group did not win."""
         plan=row['plan'];run=row['run']
         tool=self.tools.get(plan['tool_id'])
-        if plan.get('ensemble_components') or plan.get('ensemble_sources') or not tool or tool.native_hpo:
+        if run.get('role', 'evaluation') != 'evaluation' or plan.get('ensemble_components') or plan.get('ensemble_sources') or not tool or tool.native_hpo:
             return
         if run.get('internal_score') is None:return
         from .execution import config_hash
@@ -1110,9 +1209,26 @@ class Pipeline:
         self.store.put('analysis',round_id,previous,immutable=True)
         complete=bool(state.get('incumbent_succeeded',True) and
                       [r for r in rows if not r['run']['incumbent'] and r['evaluation']['diagnostics']])
+        evaluation_complete = complete
+        cycle_submission = None
+        refit = None
+        if self.config.cycle_full_refit and state.get('champion'):
+            refit = self.refit_submission(Champion.model_validate(state['champion']), round_id=round_id,
+                experiment_id=round_id+'-submission-refit')
+            atomic_json(self.run_dir/'cycles'/round_id/'refit.json', refit)
+            complete = complete and refit['status'] == 'passed'
+        if self.last_submission:
+            if self.test is None:
+                self.test = read_table(self.files.test, table_format=context.table_formats.get(self.files.test))
+            cycle_submission = snapshot_cycle_submission(context, self.test,
+                SubmissionArtifact.model_validate(self.last_submission), self.run_dir, round_id)
+            self.store.put('cycle_submission', round_id, cycle_submission, immutable=True)
+            emit('submission.cycle_saved', cycle_submission, round_id=round_id)
         self.store.put('cycle',round_id,dict(round_id=round_id,completed=complete,
+            evaluation_completed=evaluation_complete,
             candidate_ids=[r['candidate']['candidate_id'] for r in rows if not r['run']['incumbent']],
-            analysis_ref=f'analysis:{round_id}',champion_id=previous.champion_id))
+            analysis_ref=f'analysis:{round_id}',champion_id=previous.champion_id,submission=cycle_submission,
+            submission_refit=refit))
         stale=state.get('stale',0)
         if state['round_number']>1 and state.get('incumbent_succeeded'):
             stale=0 if state.get('promoted') else stale+1
@@ -1132,7 +1248,8 @@ class Pipeline:
                 raise
             except Exception as error:
                 self.store.event('advisory_failed',round_id,{'error':str(error)[:300]})
-        return {'selected':previous.model_dump(mode='json'),'stale':stale,'stop_reason':stop,'round_number':state['round_number']+1}
+        return {'selected':previous.model_dump(mode='json'),'stale':stale,'stop_reason':stop,
+                'submission':self.last_submission,'round_number':state['round_number']+1}
 
     def review_results(self,rows,context):
         for row in rows:
@@ -1169,31 +1286,11 @@ class Pipeline:
     def finalize(self,state):
         self.restore(state)
         champion=Champion.model_validate(state['champion']) if state.get('champion') else None
-        if champion and self.budget.snapshot().remaining_seconds>self.config.prediction_seconds+2:
-            experiment_id='final-refit'
-            saved=self.store.get('experiment',experiment_id)
-            from .model_spec import frozen_plan
-            plan=frozen_plan(champion.plan,champion.run)
-            run=ExperimentRun(experiment_id=experiment_id,round_id='final',candidate_id=champion.candidate.candidate_id,
-                split_id='all-train',role='submission_refit',status='running',resource_cpus=self.budget.cpus,resource_memory_gb=self.budget.memory_gb)
-            try:
-                if saved and saved['status']=='completed': run=ExperimentRun.model_validate(saved)
-                else:
-                    seconds=max(.1,self.budget.snapshot().remaining_seconds-self.config.prediction_seconds-2)
-                    result=self.sandbox.run(dict(action='train',phase='final',code_dir=champion.candidate.code_dir,code_hash=champion.candidate.code_hash,
-                        context=self.sanitized_context(self.files.train),plan=plan.model_dump(mode='json'),train_path=self.files.train,
-                        seed=self.config.seed,fixed=True),self.run_dir/'runs'/experiment_id,seconds=seconds,memory_gb=self.budget.memory_gb,cpus=self.budget.cpus)
-                    run=ExperimentRun.model_validate(dict(run.model_dump(),**{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
-                self.store.put('experiment',experiment_id,run)
-                if run.status=='completed':
-                    from .execution import require_admitted
-                    require_admitted(run,champion.candidate)
-                    full=champion.model_copy(update={'run':run})
-                    self.publish(full)
-            except (GlobalAPIError, WorkerInfrastructureError):
-                raise
-            except Exception as error:
-                self.store.event('refit_failed',experiment_id,{'error':str(error)})
+        latest_source = self.store.get('submission_refit_source', self.last_submission['experiment_id']) if self.last_submission else None
+        current_full = bool(champion and self.last_submission and self.last_submission.get('model_role') == 'submission_refit' and
+            latest_source and latest_source['champion_experiment_id'] == champion.run.experiment_id)
+        if champion and not current_full and self.budget.snapshot().remaining_seconds>self.config.prediction_seconds+2:
+            self.refit_submission(champion, round_id='final', experiment_id='final-refit', final=True)
         output=dict(status='completed' if self.last_submission else 'failed',stop_reason=state.get('stop_reason') or 'finished',
             submission=self.last_submission,champion=state.get('champion'),run_dir=str(self.run_dir),
             trace=str(self.run_dir/'trace.md'),first_submission=self.store.get('milestone','first_submission'))
@@ -1210,6 +1307,10 @@ class Pipeline:
         acceptance=output['process_acceptance']
         acceptance['passed']=(acceptance['completed_rounds']>=self.config.target_completed_rounds and
             (not self.config.target_completed_rounds or acceptance['completed_optuna_trials']>=self.config.hpo_batch_size))
+        if self.config.cycle_full_refit:
+            acceptance['full_data_submission'] = bool(self.last_submission and
+                self.last_submission.get('model_role') == 'submission_refit')
+            acceptance['passed'] = acceptance['passed'] and acceptance['full_data_submission']
         atomic_json(self.run_dir/'capabilities.json',capability_matrix(self.tools,
             [self.context.task.task_type] if acceptance['completed_rounds'] else []))
         atomic_json(self.run_dir/'summary.json',output)
@@ -1232,7 +1333,7 @@ class Pipeline:
         # Continuous runs checkpoint after each cycle, then resume in a fresh
         # invocation so LangGraph's per-invocation step guard is not a run limit.
         return graph.compile(checkpointer=self.checkpointer,
-            interrupt_after=['analyze'] if self.config.max_rounds is None else None)
+            interrupt_after=['plan', 'analyze'] if self.config.max_rounds is None else None)
 
     def run(self,*,resume=False):
         with self.trace.activate():
@@ -1279,6 +1380,16 @@ class Pipeline:
             atomic_json(self.run_dir/'provider-failure.json',dict(reason=str(error)))
             atomic_json(self.run_dir/'summary.json',output)
             emit('run.failed',output)
+            return output
+        except KeyboardInterrupt:
+            submission_champion = (self.store.get('submission_champion', self.last_submission['experiment_id'])
+                                   if self.last_submission else None)
+            output = dict(status='completed' if self.last_submission else 'interrupted', stop_reason='external_stop',
+                submission=self.last_submission, champion=submission_champion or self.store.get('champion','current'),
+                first_submission=self.store.get('milestone','first_submission'), failure_causes=self.failure_causes(),
+                run_dir=str(self.run_dir), trace=str(self.run_dir/'trace.md'))
+            atomic_json(self.run_dir/'summary.json', output)
+            emit('run.stopped', output)
             return output
         except Exception as error:
             output=dict(status='completed' if self.last_submission else 'failed',stop_reason='worker_runtime_error' if isinstance(error,WorkerRuntimeError) else 'error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())

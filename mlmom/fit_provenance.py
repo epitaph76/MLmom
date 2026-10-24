@@ -11,6 +11,7 @@ import threading
 from contextlib import contextmanager
 
 _active = contextvars.ContextVar('mlmom_fit_capture', default=None)
+_lightgbm_entry = contextvars.ContextVar('mlmom_lightgbm_fit_entry', default=None)
 _lock = threading.RLock()
 _installed = False
 _records = {}
@@ -51,6 +52,35 @@ def serializable_params(model):
         except (ValueError, TypeError):
             pass
     return clean
+
+
+def _patch_lightgbm_updates(booster_class):
+    """Count real backend calls, including rounds which produce no new split."""
+    original = booster_class.update
+    if getattr(original, '_mlmom_capture', False):
+        return
+
+    @functools.wraps(original)
+    def captured(self, *args, **kwargs):
+        entry = _lightgbm_entry.get()
+        if entry is None:
+            return original(self, *args, **kwargs)
+        before = int(self.current_iteration())
+        finished = original(self, *args, **kwargs)
+        after = int(self.current_iteration())
+        trace = entry.setdefault('boosting_updates', dict(booster_id=id(self), calls=0,
+            initial_iteration=before, final_iteration=before, advanced_iterations=0,
+            noop_updates=0, invalid_sequence=False))
+        if trace['booster_id'] != id(self) or before != trace['final_iteration'] or after < before:
+            trace['invalid_sequence'] = True
+        trace['calls'] += 1
+        trace['advanced_iterations'] += after - before
+        trace['noop_updates'] += int(after == before and bool(finished))
+        trace['final_iteration'] = after
+        return finished
+
+    captured._mlmom_capture = True
+    booster_class.update = captured
 
 
 def _patch(cls, method='fit'):
@@ -106,6 +136,12 @@ def _patch(cls, method='fit'):
             record['native_parent_entry']=scope['native_parent']
         # Keep the first (outermost) entry: super().fit must not overwrite it.
         scope['records'].setdefault(id(self), record)
+        entry = scope['records'][id(self)]
+        lightgbm_token = None
+        if record['backend'] == 'lightgbm':
+            fit_arguments = {key:bound[key] for key in ('categorical_feature',) if key in bound}
+            entry.setdefault('fit_arguments', {}).update(json.loads(json.dumps(fit_arguments)))
+            lightgbm_token = _lightgbm_entry.set(entry)
         previous_parent=scope.get('native_parent')
         is_native=type(self).__module__.split('.')[0] in {'flaml','autogluon','lightautoml'}
         if is_native:
@@ -114,6 +150,7 @@ def _patch(cls, method='fit'):
             result = original(self, *args, **kwargs)
         finally:
             if is_native:scope['native_parent']=previous_parent
+            if lightgbm_token is not None:_lightgbm_entry.reset(lightgbm_token)
         scope['records'][id(self)]['completed'] = True
         if result is not None and result is not self:
             scope['records'][id(result)] = copy.deepcopy(scope['records'][id(self)])
@@ -147,6 +184,8 @@ def install():
                                ('catboost', ['CatBoost', 'CatBoostRegressor', 'CatBoostClassifier', 'CatBoostRanker'])]:
             try:
                 module = __import__(package)
+                if package == 'lightgbm':
+                    _patch_lightgbm_updates(module.Booster)
                 for name in names:
                     _patch(getattr(module, name))
             except ImportError:

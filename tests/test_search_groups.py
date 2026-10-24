@@ -374,7 +374,7 @@ class GroupPipelineTests(unittest.TestCase):
             return {k:v for k,v in installed_tools().items() if k in {'sklearn','lightgbm'}}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input');client=FamilyClient(params={'n_estimators':3})
-            config=RunConfig(timeouts_enabled=False,max_rounds=2,hpo_enabled=True,hpo_max_trials=2,hpo_batch_size=2,
+            config=RunConfig(timeouts_enabled=False,initial_boosting_sweep=False,max_rounds=2,hpo_enabled=True,hpo_max_trials=2,hpo_batch_size=2,
                 diagnostic_seconds=0,max_workers=2,reserve_cpus=0,reserve_memory_gb=0)
             with patch('mlmom.pipeline.installed_tools',tools):
                 pipeline=Pipeline(task,config,run_dir=root/'run',client=client)

@@ -13,3 +13,8 @@ Start learning_rate .03-.08, num_leaves 31-63, min_child_samples 20-50, colsampl
 Ranking sorts X/y/weights together, uses contiguous queries and group sizes summing to n_rows, and retains prediction row order. Multioutput/multilabel wrappers are serial. CPU settings come from context, never model_params overrides.
 
 export_model_params returns ALL model parameters and output/target options, not only n_estimators. Replace the count with measured best_iteration_ only for permitted early stopping. The runner inspects fitted booster parameters/current_iteration and validates export/recreate. Expose the fitted backend model.
+
+A backend update may produce no valid split, so current_iteration() and retained tree counts
+can be smaller than the requested boosting rounds after a successful fit. Keep the declared
+fixed count unchanged; the runtime records actual Booster.update calls and fit-time categorical
+arguments. Do not raise diagnostic exceptions or edit fitted counters to force exact tree counts.

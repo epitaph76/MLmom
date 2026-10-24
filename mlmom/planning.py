@@ -240,7 +240,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                          initial_experiment_seconds=300, hypothesis_ids=None, planning_mode='all',
                          probe_tool=None, evaluation_reserve_seconds=0, candidate_hypotheses=None,
                          hypothesis_seconds=210, planner_seconds=210, validator_seconds=210,
-                         saved_progress=None,save_progress=None):
+                         saved_progress=None,save_progress=None,initial_max_workers=3):
     """Plan hypotheses independently; callers can publish a baseline before alternatives.
 
     Pass a previous output's ``hypotheses`` in the input state to reuse the same
@@ -249,7 +249,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
     selected family member; an accepted plan must not truncate the search group.
     """
     if not 1 <= max_candidates <= 2: raise ValueError('max_candidates must be between 1 and 2')
-    if planning_mode not in {'all', 'baseline', 'alternatives'}: raise ValueError('Unknown planning mode')
+    if planning_mode not in {'all', 'baseline', 'alternatives', 'initial'}: raise ValueError('Unknown planning mode')
+    from .search_groups import compatible_boosters, initial_boosting_resources
+    initial_resources = (initial_boosting_resources(budget,
+        len(compatible_boosters(tools, context.task.task_type)), initial_max_workers)
+        if planning_mode == 'initial' else None)
+    worker_budget = budget.model_copy(update=dict(available_cpus=initial_resources['cpus'],
+        available_memory_gb=initial_resources['memory_gb'])) if initial_resources else budget
     progress=dict(saved_progress or {})
     progress.setdefault('proposed',{})
     progress.setdefault('accepted',{})
@@ -264,6 +270,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             return function(*args, **kwargs)
 
     def generate(role, instruction, payload, schema, role_tools=None):
+        if initial_resources:
+            instruction += (' This is the required first-cycle boosting comparison. Plan one fixed '
+                'fit for each required_tool_id with backend-specific parameters and preprocessing. '
+                'All members use the same confirmed folds, metric and seed. CPU/RAM are assigned '
+                'by the runtime; use budget.available_cpus and budget.available_memory_gb per worker. '
+                'Feature search and HPO start only after the initial family fits finish. ')
+            payload = dict(payload, budget=worker_budget.model_dump(), initial_boosting_sweep=initial_resources)
         instruction += (' Hard timeouts apply only when budget.timeouts_enabled=true. Otherwise time fields '
             'are estimates, not cutoffs; CPU, memory and trial-count limits still apply. ')
         instruction += (' Read planning_brief for task purpose, quoted domain details and prioritized dataset evidence. '
@@ -328,6 +341,18 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 if len(ids)!=len(set(ids)): raise ValueError('Duplicate hypothesis ID')
                 if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and not any(h.baseline for h in batch.hypotheses):
                     raise ValueError('Round 1 requires a baseline')
+                if planning_mode == 'initial':
+                    parent = next(h for h in batch.hypotheses if h.baseline).model_copy(deep=True)
+                    parent.kind, parent.model_family = 'family', 'gradient_boosting'
+                    parent.family_tools = ['lightgbm', 'catboost', 'xgboost']
+                    parent.description = ('Compare fixed-configuration LightGBM, CatBoost and XGBoost '
+                        'as the initial tabular baseline. Implement exactly required_tool_id with its own '
+                        'native parameters and cheap fold-local preprocessing; preserve the canonical '
+                        'task, feature availability, metric, folds and seed. No HPO in these initial fits.')
+                    diversity = ' The first cycle must retain diverse verified boosting models for later ensembles.'
+                    if not parent.rationale.endswith(diversity):
+                        parent.rationale += diversity
+                    batch = HypothesisBatch(hypotheses=[parent])
                 progress['hypotheses']=batch.model_dump(mode='json');persist()
                 return {'hypotheses':batch.model_dump(mode='json'), 'attempts':0, 'errors':[]}
             except ValueError as error:
@@ -339,13 +364,14 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         accepted=[]; rejected=[]; attempts=0; warnings=[]
         source=HypothesisBatch.model_validate(state['hypotheses']).hypotheses
         chosen=[h for h in source if hypothesis_ids is None or h.hypothesis_id in hypothesis_ids]
-        if planning_mode=='baseline': chosen=[h for h in chosen if h.baseline][:1]
+        if planning_mode in {'baseline', 'initial'}: chosen=[h for h in chosen if h.baseline][:1]
         elif planning_mode=='alternatives':
             baseline=next((h.hypothesis_id for h in source if h.baseline),None)
             chosen=[h for h in chosen if h.hypothesis_id!=baseline or h.kind=='family']
         chosen.sort(key=lambda h:not h.baseline)
         from .search_groups import expand_families, collect_groups, configure_composite
-        chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,planning_mode)
+        chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,
+            'all' if planning_mode == 'initial' else planning_mode)
         for hypothesis in chosen:
             feedback=[]
             for _ in range(max_attempts):
@@ -391,6 +417,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
+                    requested_cpus = item.cpus
+                    if initial_resources:
+                        item.cpus = initial_resources['cpus']
+                        item.memory_gb = initial_resources['memory_gb']
                     # Definitions come from runtime memory, never from a planner-written formula.
                     registry={v['definition']['feature_set_id']:v['definition'] for v in state['payload'].get('feature_sets',[])}
                     if item.feature_set_id:
@@ -473,7 +503,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.intervention.rejection_conditions=['Violation of the declared intervention or its subgroup constraints']
                     normalized=[]
                     for name in ('n_jobs','num_threads','thread_count','num_cpus'):
-                        if item.model_params.get(name)==item.cpus:
+                        if item.model_params.get(name)==item.cpus or (initial_resources and item.model_params.get(name)==requested_cpus):
                             item.model_params.pop(name);normalized.append(name)
                     if normalized:
                         emit('planning.normalized_resources',{'parameters':normalized,'cpus':item.cpus})
@@ -501,7 +531,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                 selected_tool=tools.get(key)
                                 if selected_tool and not selected_tool.available and selected_tool.reason=='adapter probe required':
                                     for_hypothesis(hypothesis,probe_tool,key)
-                    report=for_hypothesis(hypothesis,validate_plan,item,context,tools,skills,budget,lightweight=is_light(state),
+                    report=for_hypothesis(hypothesis,validate_plan,item,context,tools,skills,worker_budget,lightweight=is_light(state),
                                          initial_experiment_seconds=initial_experiment_seconds,
                                          evaluation_reserve_seconds=evaluation_reserve_seconds)
                     if not report.valid: raise ValueError('; '.join(report.errors))
@@ -567,6 +597,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     progress['accepted'].pop(hypothesis.hypothesis_id,None);persist()
             else: rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':feedback})
         # A rejected alternative never discards an already accepted baseline.
+        if planning_mode == 'initial' and accepted and not any(p['hypothesis']['baseline'] for p in accepted):
+            # A failed first backend must not discard the other valid starters.
+            accepted[0]['hypothesis']['baseline'] = True
         valid=bool(accepted)
         if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and planning_mode!='alternatives':
             valid=valid and any(p['hypothesis']['baseline'] for p in accepted)

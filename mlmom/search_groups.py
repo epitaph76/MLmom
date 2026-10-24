@@ -9,6 +9,22 @@ SUPERVISED = {'regression', 'multioutput_regression', 'binary_classification',
 BOOSTERS = ('lightgbm', 'catboost', 'xgboost')
 
 
+def compatible_boosters(tools, task_type):
+    return [key for key in BOOSTERS if (tool := tools.get(key)) and
+            task_type in tool.task_types and not tool.native_hpo and
+            (tool.available or tool.reason == 'adapter probe required')]
+
+
+def initial_boosting_resources(budget, variants, max_workers):
+    """Share capacity across initial fits; small machines retain the same queue."""
+    slots = max(1, min(variants, max_workers, budget.available_cpus,
+                       max(1, int(budget.available_memory_gb))))
+    # Round down so simultaneous leases cannot exceed the memory ledger.
+    memory = int(budget.available_memory_gb / slots * 1024) / 1024
+    return dict(workers=slots, cpus=max(1, budget.available_cpus // slots),
+                memory_gb=max(1 / 1024, memory))
+
+
 def variant_id(parent, variant):
     digest = hashlib.sha256((parent + ':' + variant).encode()).hexdigest()[:6]
     return f'{parent[:40]}-{variant[:15]}-{digest}'[:64]
@@ -55,7 +71,8 @@ def collect_groups(plans, skipped=()):
         plan = value if isinstance(value, HypothesisPlan) else HypothesisPlan.model_validate(value)
         key = plan.search_group_id or plan.hypothesis.hypothesis_id
         if key not in groups:
-            groups[key] = SearchGroupPlan(hypothesis=plan.parent_hypothesis or plan.hypothesis,
+            groups[key] = SearchGroupPlan(hypothesis=(plan.parent_hypothesis or plan.hypothesis)
+                if plan.search_group_kind != 'single' else plan.hypothesis,
                 kind=plan.search_group_kind, variants=[plan],
                 skipped=[s for s in skipped if s.get('group_id') == key])
         else:
@@ -65,7 +82,7 @@ def collect_groups(plans, skipped=()):
 
 def internal_winner(rows, direction):
     import math
-    eligible = [r for r in rows if r['run']['status'] == 'completed' and
+    eligible = [r for r in rows if r['run'].get('role', 'evaluation') == 'evaluation' and r['run']['status'] == 'completed' and
                 r['run'].get('internal_score') is not None and math.isfinite(r['run']['internal_score'])]
     if not eligible:
         return None
@@ -88,7 +105,7 @@ def limit_parent_groups(plans, limit):
 
 def component_pool(store, round_number):
     """Only completed earlier cycles; deduplicate frozen configurations, not backend names."""
-    completed = {r['round_id'] for r in store.list('cycle') if r.get('completed')}
+    completed = {r['round_id'] for r in store.list('cycle') if r.get('evaluation_completed', r.get('completed'))}
     records=store.list('component')
     # Existing contract-v2 runs may predate the dedicated component index.
     indexed={row['experiment_id'] for row in records}
@@ -98,7 +115,7 @@ def component_pool(store, round_number):
     import json
     from pathlib import Path
     for run in store.list('experiment'):
-        if (run['experiment_id'] in indexed or run.get('round_id') not in completed or
+        if (run.get('role', 'evaluation') != 'evaluation' or run['experiment_id'] in indexed or run.get('round_id') not in completed or
             run.get('status')!='completed' or run.get('internal_score') is None or run.get('incumbent')):
             continue
         candidate=store.get('candidate',run['candidate_id'])
@@ -114,6 +131,8 @@ def component_pool(store, round_number):
             continue
     seen, pool = set(), []
     for row in reversed(records):
+        if row.get('run', {}).get('role', 'evaluation') != 'evaluation':
+            continue
         if row['round_id'] not in completed or int(row['round_id'][1:]) >= round_number:
             continue
         identity = (row['candidate']['code_hash'], row['configuration_hash'])

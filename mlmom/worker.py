@@ -287,7 +287,7 @@ def train(request, root):
         from .execution import audit_fit
         report_path=root/'execution-report.json'
         report=audit_fit(model,params,dict(config,stopping_policy='fixed',component_stopping_policies={}),
-                         c_final,report_path,stage='final_full_data_refit' if request.get('phase')=='final' else 'full_refit',protocol_ref=protocol_ref)
+                         c_final,report_path,stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else 'full_refit',protocol_ref=protocol_ref)
         params=report['exported_params']
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
         artifact.mkdir(parents=True)
@@ -314,7 +314,7 @@ def train(request, root):
         model = module.create_candidate(copy.deepcopy(config))
         c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
         c.fit_rows=len(X)
-        c.stage='final_full_data_refit' if request.get('phase')=='final' else 'full_refit'
+        c.stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else 'full_refit'
         model.fit(X,None if unsupervised else y,c)
         c_final=c
         if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')

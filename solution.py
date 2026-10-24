@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+import signal
 from pathlib import Path
 
 STARTED = time.time()
@@ -12,6 +13,10 @@ STARTED = time.time()
 if Path(__file__).with_name('mlmom_bundle.py').is_file():
     from mlmom_bundle import bootstrap
     bootstrap(Path(__file__).resolve().parent)
+
+
+def external_stop(signum, frame):
+    raise KeyboardInterrupt
 
 
 def main():
@@ -30,6 +35,7 @@ def main():
     raw=json.loads(config_path.read_text(encoding='utf-8')) if config_path else {}
     if args.profile:raw['profile']=args.profile
     config=RunConfig.model_validate(raw)
+    signal.signal(signal.SIGTERM, external_stop)
     try:
         run_dir=args.run_dir or (Path(os.environ['MLMOM_RUN_DIR']) if os.getenv('MLMOM_RUN_DIR') else None)
         pipeline=Pipeline(args.task,config,run_dir=run_dir,resume=args.resume,started=STARTED)

@@ -150,6 +150,8 @@ class InvariantTests(unittest.TestCase):
             with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=RepairLLM(refit_failure=True)).run()
             self.assertEqual(result['status'],'completed',result)
             self.assertEqual(result['submission']['model_role'],'evaluation')
+            self.assertFalse(result['process_acceptance']['passed'])
+            self.assertFalse(result['process_acceptance']['full_data_submission'])
             self.assertEqual(file_hash(Path(result['submission']['path'])),result['submission']['sha256'])
             store=ExperimentStore(root/'run');self.assertEqual(store.get('experiment','final-refit')['status'],'failed');store.close()
 
