@@ -200,7 +200,7 @@ class ScoutingTests(unittest.TestCase):
         self.assertEqual(resumed.deadline,session.deadline)
         self.assertEqual(resumed.run().status,'completed')
 
-    def test_completed_report_cannot_invent_evidence_or_numbers(self):
+    def test_measured_numbers_are_checked_but_proposal_references_are_not(self):
         session=self.session()
         result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
         with self.assertRaisesRegex(ValueError,'Measured numbers'):
@@ -210,7 +210,10 @@ class ScoutingTests(unittest.TestCase):
                 super().generate(*args)
                 return args[3](proposals=[dict(description='invented',evidence_ids=['missing'],expected_effect='gain',verification='metric')])
         report=self.session(Client()).run()
-        self.assertEqual(report.status,'partial');self.assertIn('saved observation',report.reason)
+        self.assertEqual(report.status,'completed')
+        self.assertEqual(len(report.proposals),1)
+        self.assertEqual(report.proposals[0].evidence_ids,['missing'])
+        self.assertIsNone(report.reason)
 
     def test_test_target_is_hidden_and_template_is_metadata_only(self):
         test=pd.read_csv(self.task.parent/'test.csv');test['target']=123

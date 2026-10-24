@@ -546,8 +546,10 @@ class Pipeline:
         except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except (LLMUnavailable,ValueError) as error:
-            self.store.event('llm_unavailable','planning',{'error':str(error)})
-            self.store.event('planning_failed',f"r{state['round_number']}",dict(attempt=state.get('planning_attempt',0)+1,error=str(error)))
+            if isinstance(error,LLMUnavailable):
+                self.store.event('llm_unavailable','planning',{'error':str(error)})
+            self.store.event('planning_failed',f"r{state['round_number']}",dict(
+                attempt=state.get('planning_attempt',0)+1,error=str(error),error_type=type(error).__name__))
             from .ensemble_planning import plan_ensemble
             ensemble=plan_ensemble(self,state)
             if ensemble['plans']:
@@ -556,7 +558,8 @@ class Pipeline:
                 previous=dict(state.get('selected',{}))
                 previous['failures']=(previous.get('failures',[])+[dict(stage='planning',error=str(error))])[-10:]
                 return dict(plans=[],stop_reason='planning_retry',planning_attempt=state.get('planning_attempt',0)+1,selected=previous)
-            return {'plans':[],'stop_reason':'planning_attempts_exhausted' if 'budget exceeded' not in str(error).lower() else 'llm_unavailable'}
+            return {'plans':[],'stop_reason':'llm_unavailable' if isinstance(error,LLMUnavailable)
+                    and 'budget exceeded' in str(error).lower() else 'planning_attempts_exhausted'}
 
     def can_retry_round(self,state):
         return ((self.config.continuous or self.config.target_completed_rounds>0) and

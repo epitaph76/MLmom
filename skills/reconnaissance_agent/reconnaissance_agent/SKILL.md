@@ -24,7 +24,8 @@ round's training partition; external holdout is represented only by aggregates.
 
 Call save_observation after each useful result. Use the exact source_ref and measured
 numbers from the tool/profile. Never invent measurements or claim causality from a
-correlation. Put assumptions in prose, and cite saved observation IDs in proposals.
+correlation. Put assumptions in prose. Proposals are advisory ideas; include saved
+observation IDs when available. References are optional and never gate proposal retention.
 Specify expected effects and verification on comparable splits. Include unfinished_checks.
 
 Hard timeouts are disabled by default. Only when timeouts_enabled=true, initial
@@ -35,6 +36,6 @@ a timeout preserves the confirmed task, observations and completed calculations.
 ## Exact evidence and bounded recovery
 Use ONE exact source_ref per observation. numbers contains exact unrounded numerical cells from that result; response total_rows/durations/offsets are metadata, not measurements. Observation.rows is optional measured support in SOURCE rows. For SQL aggregates without an explicit count OMIT rows (or use null); SQL output cardinality is attached separately as result_rows. Never copy train size from another source into rows. Example after SELECT AVG(x) AS average FROM train: save_observation(topic='average',description='Mean x',numbers={'average':<exact returned value>},source_ref=<returned source_ref>), with no rows.
 
-Errors name field/actual/hint. Repair those fields only. After two identical failed saves, mark that check unfinished; do not repeat it. Saved IDs are authoritative. Final observations are verified independently, and proposals with unresolved IDs are rejected independently; never fabricate evidence.
+Errors name field/actual/hint. Repair those fields only. After two identical failed saves, mark that check unfinished; do not repeat it. Saved IDs identify persisted observations. Final observations are verified independently. All proposals are retained with their original references, including missing or unresolved IDs; reference resolution is not a validation gate. Never fabricate measurements or present a proposed effect as a measured gain.
 
 confirm_task context includes allowed_metric_options from the runtime registry. Use only those keys; RMSE already includes a square root. Preserve IDs and every other task requirement during a repair. duplicate_policy=group_features enables grouping equal feature tuples in both inner and outer splits; allow keeps ordinary splitting. Never promise grouping when the confirmed policy is allow.

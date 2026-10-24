@@ -8,6 +8,7 @@ preprocessing.py: create_preprocessor(config) returns a fresh object with fit_tr
 transform(X). Keep rows/order; train-only statistics; target encoding needs group-safe OOF.
 SDK hides validation labels and saves state. candidate.py exports create_candidate(config),
 load_candidate(dir); objects implement fit(X,y,context)->self, predict(X,prediction_spec), save(dir).
+load_candidate: omit nominal Candidate type checks.
 X follows preprocessing_spec; never preprocess twice. Runtime owns target/weight/prediction
 policies; pass context.sample_weight unchanged; preserve class order.
 

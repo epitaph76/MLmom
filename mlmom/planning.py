@@ -136,7 +136,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
         errors.append('Experiment exceeds research deadline including evaluation reserve')
     if plan.prediction_kind != prediction_kind(context.task.primary_metric, context.task.task_type):
         errors.append('prediction_kind does not match the primary metric')
-    try: skills.load(plan.skill_ids, context.task.task_type)
+    try: skills.validate_selection(plan.skill_ids, context.task.task_type)
     except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error: errors.append(f'Skills: {error}')
@@ -270,11 +270,19 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
 
     def generate(role, instruction, payload, schema, role_tools=None):
         if initial_resources:
-            instruction += (' This is the required first-cycle boosting comparison. Plan one fixed '
-                'fit for each required_tool_id with backend-specific parameters and preprocessing. '
+            instruction += (' This is the required first-cycle boosting comparison. '
                 'All members use the same confirmed folds, metric and seed. CPU/RAM are assigned '
                 'by the runtime; use budget.available_cpus and budget.available_memory_gb per worker. '
                 'Feature search and HPO start only after the initial family fits finish. ')
+            if role == 'hypothesis_generator':
+                instruction += (' Propose one cheap boosting-family baseline. The runtime expands it '
+                    'into separate backend-specific planning and review calls. ')
+            elif role == 'planner':
+                instruction += (' This call plans only required_tool_id: return exactly one fixed-fit '
+                    'plan for that member. The runtime plans the other family members separately. ')
+            elif role == 'plan_validator':
+                instruction += (' Review only the supplied single family member. The runtime plans '
+                    'and checks sibling coverage separately; absent sibling plans are expected here. ')
             payload = dict(payload, budget=worker_budget.model_dump(), initial_boosting_sweep=initial_resources)
         instruction += (' Hard timeouts apply only when budget.timeouts_enabled=true. Otherwise time fields '
             'are estimates, not cutoffs; CPU, memory and trial-count limits still apply. ')
@@ -282,12 +290,17 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             'Canonical task and planning_brief.requirements are authoritative; never replace them with narrative '
             'assumptions. Account for mandatory_findings even when not selected in ranked_findings. '
             'Proposed experiments are not measured benefits. ')
-        instruction += (' technique_skills lists compatible preprocessing/modeling techniques as metadata. '
-            'Choose only techniques justified by the profile, findings or hypothesis. Planner must describe '
-            'the intended operations in preprocessing/model assignment and include their skill_id in '
-            'plan.skill_ids alongside the backend skill. Runtime sends implementation instructions to '
-            'the owning role; preprocessing.py preserves rows. Runtime owns declared target/weight/output policies; '
-            'custom estimator operations belong to coding_agent. Catalog availability alone is not evidence of benefit. ')
+        if role == 'plan_validator':
+            instruction += (' technique_skills is reference metadata for checking declared assignments. '
+                'Review the existing plan; do not select extra techniques or redesign the baseline. '
+                'Distinguish a concrete contract violation from an optional modeling experiment. ')
+        else:
+            instruction += (' technique_skills lists compatible preprocessing/modeling techniques as metadata. '
+                'Choose only techniques justified by the profile, findings or hypothesis. Planner must describe '
+                'the intended operations in preprocessing/model assignment and include their skill_id in '
+                'plan.skill_ids alongside the backend skill. Runtime sends implementation instructions to '
+                'the owning role; preprocessing.py preserves rows. Runtime owns declared target/weight/output policies; '
+                'custom estimator operations belong to coding_agent. Catalog availability alone is not evidence of benefit. ')
         if role_tools is not None:
             instruction += 'Use read_task if a task nuance needs clarification. '
         payload=dict(payload,technique_skills=skills.technique_catalog(context.task.task_type),
@@ -374,7 +387,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             baseline=next((h.hypothesis_id for h in source if h.baseline),None)
             chosen=[h for h in chosen if h.hypothesis_id!=baseline or h.kind=='family']
         chosen.sort(key=lambda h:not h.baseline)
-        from .search_groups import expand_families, collect_groups, configure_composite
+        from .search_groups import expand_families, collect_groups, configure_composite, normalize_single_group
         chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,
             'all' if planning_mode == 'initial' else planning_mode)
         rejections.variants = {key: tool_id for key, (_, tool_id) in family_metadata.items()}
@@ -455,6 +468,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     if state['payload'].get('ensemble_sources'):
                         item=configure_composite(item,state['payload']['ensemble_sources'],
                                                  state['payload'].get('ensemble_weight_trials',15))
+                    group_id = item.search_group_id
+                    item = normalize_single_group(item)
+                    if item.search_group_id != group_id:
+                        emit('planning.normalized_group',dict(hypothesis_id=item.hypothesis.hypothesis_id,
+                            requested_group_id=group_id,search_group_id=item.search_group_id))
                     warnings.extend(normalize_champion_assignment(item, state['payload'].get('champion')))
                     actual_protocol=dict(strategy=str(context.task.validation_strategy),
                         folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
@@ -515,6 +533,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                          initial_experiment_seconds=initial_experiment_seconds,
                                          evaluation_reserve_seconds=evaluation_reserve_seconds)
                     if not report.valid: raise ValueError('; '.join(report.errors))
+                    approved = progress['accepted'].get(hypothesis.hypothesis_id)
+                    if approved:
+                        progress['accepted'][hypothesis.hypothesis_id] = normalize_single_group(
+                            HypothesisPlan.model_validate(approved)).model_dump(mode='json')
                     progress['proposed'][hypothesis.hypothesis_id]=item.model_dump(mode='json');persist()
                     if progress['accepted'].get(hypothesis.hypothesis_id)==item.model_dump(mode='json'):
                         accepted.append(item.model_dump(mode='json'))
@@ -536,6 +558,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'min_delta=0 is correct: the runner separately enforces hpo_gain_threshold=0.005 and keeps tiny gains. '
                         'Review feasibility, leakage and methodological validity against the supplied skill '
                         'instructions. Return a concise validation JSON; never rewrite plans. '
+                        'review_scope describes this single-plan call; sibling plans are intentionally absent. '
+                        'Use execution_contract for ownership: CPU/thread controls come from runtime FitContext, '
+                        'so their absence from model_params is expected and is not a warning. '
+                        'Machine checks own family coverage, resource admission and execution fidelity. '
+                        'Prioritize concrete plan-field contradictions and leakage. Optional improvements such '
+                        'as circular encoding or rare-category pooling are not baseline defects without evidence. '
+                        'Keep at most three distinct actionable warnings; do not limit real blocking issues. '
                         'Separate preprocessing and model coders implement the candidate. Check that transforms and parameters can '
                         'implement every claim, with no implicit adapter behavior. The runner owns splits and HPO. '
                         'Require explicit operations and columns for changes such as treating numeric years as '
@@ -550,6 +579,19 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                   dict(task_type=context.task.task_type,primary_metric=context.task.primary_metric),
                              features=getattr(context,'feature_columns',[]),budget=budget.model_dump(),
                              plans=[item.model_dump(mode='json')],
+                             required_tool_id=family_metadata.get(hypothesis.hypothesis_id,(None,None))[1],
+                             review_scope=dict(kind='single_plan',tool_id=item.tool_id,
+                                 family_id=item.search_group_id if item.search_group_kind=='family' else None,
+                                 scheduled_family_tools=[tool for parent,tool in family_metadata.values()
+                                     if parent.hypothesis_id==item.search_group_id],
+                                 accepted_family_tools=[plan['tool_id'] for plan in progress['accepted'].values()
+                                     if item.search_group_kind=='family' and plan.get('search_group_id')==item.search_group_id],
+                                 family_coverage_owner='runtime',sibling_plans_in_payload=False),
+                             execution_contract=dict(resource_owner='runtime',cpus=item.cpus,memory_gb=item.memory_gb,
+                                 thread_source='FitContext.cpus',thread_params_required_in_model_params=False,
+                                 resource_enforcement='worker_admission_and_machine_execution_gate',
+                                 preprocessing_owner='preprocessing_agent',estimator_owner='coding_agent',
+                                 policy_owner='runtime',validation_owner='runtime',refit_owner='runtime'),
                              capability_probes=probes,
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)

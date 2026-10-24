@@ -427,7 +427,7 @@ class Observation(StrictModel):
 
 class ResearchProposal(StrictModel):
     description: str
-    evidence_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
     expected_effect: str
     verification: str
 

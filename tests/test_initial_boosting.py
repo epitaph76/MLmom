@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from mlmom.agents import StructuredOutputError
 from mlmom.persistence import ExperimentStore
-from mlmom.pipeline_contracts import Hypothesis, HypothesisBatch, PlanBatch, RunConfig
+from mlmom.pipeline_contracts import Hypothesis, HypothesisBatch, PlanBatch, RunConfig, ValidationReport
 from mlmom.planning import build_planning_graph
 from mlmom.search_groups import BOOSTERS, component_pool, initial_boosting_resources, collect_groups
 from tests.fakes import OfflineLLM
@@ -32,7 +32,96 @@ class StarterPlanner(Planner):
         return super().generate(role, instruction, payload, schema, tools)
 
 
+class ReviewPromptPlanner(StarterPlanner):
+    def __init__(self):
+        super().__init__()
+        self.reviews = []
+
+    def generate(self, role, instruction, payload, schema, tools=None):
+        if role == 'plan_validator':
+            self.reviews.append((instruction, payload))
+        return super().generate(role, instruction, payload, schema, tools)
+
+
 class InitialPlanningTests(unittest.TestCase):
+    def test_each_initial_review_knows_its_siblings_and_runtime_thread_ownership(self):
+        context, tools, budget, _ = case()
+        client = ReviewPromptPlanner()
+        result = build_planning_graph(client, context, tools, Skills(), budget,
+            planning_mode='initial').invoke({'payload': {'round_number': 1}})
+        self.assertTrue(result['valid'], result)
+        self.assertEqual(len(client.reviews), 3)
+        for index, (instruction, payload) in enumerate(client.reviews):
+            self.assertEqual(len(payload['plans']), 1)
+            plan = payload['plans'][0]
+            scope, execution = payload['review_scope'], payload['execution_contract']
+            self.assertEqual(scope['kind'], 'single_plan')
+            self.assertEqual(scope['tool_id'], BOOSTERS[index])
+            self.assertEqual(payload['required_tool_id'], plan['tool_id'])
+            self.assertEqual(scope['family_id'], plan['search_group_id'])
+            self.assertEqual(scope['scheduled_family_tools'], list(BOOSTERS))
+            self.assertEqual(scope['accepted_family_tools'], list(BOOSTERS[:index]))
+            self.assertFalse(scope['sibling_plans_in_payload'])
+            self.assertEqual(scope['family_coverage_owner'], 'runtime')
+            self.assertEqual(execution['cpus'], plan['cpus'])
+            self.assertEqual(execution['memory_gb'], plan['memory_gb'])
+            self.assertEqual(execution['thread_source'], 'FitContext.cpus')
+            self.assertFalse(execution['thread_params_required_in_model_params'])
+            self.assertNotIn('Plan one fixed fit for each required_tool_id', instruction)
+            self.assertNotIn('Choose only techniques', instruction)
+
+    def test_later_family_review_also_exposes_only_one_member_and_sibling_progress(self):
+        context, tools, budget, _ = case()
+        client = ReviewPromptPlanner()
+        parent = Hypothesis(hypothesis_id='later-family', kind='family', model_family='gradient_boosting',
+                            description='Compare family', rationale='Measured evidence')
+        result = build_planning_graph(client, context, tools, Skills(), budget).invoke(dict(
+            payload={'round_number': 2}, hypotheses={'hypotheses': [parent.model_dump()]}))
+        self.assertTrue(result['valid'], result)
+        self.assertEqual(len(client.reviews), 3)
+        for index, (_, payload) in enumerate(client.reviews):
+            self.assertNotIn('initial_boosting_sweep', payload)
+            self.assertEqual(payload['review_scope']['family_id'], 'later-family')
+            self.assertEqual(payload['review_scope']['accepted_family_tools'], list(BOOSTERS[:index]))
+            self.assertEqual(payload['required_tool_id'], BOOSTERS[index])
+
+    def test_review_of_single_models_does_not_invent_required_family_members(self):
+        class RecordingPlanner(Planner):
+            reviews = []
+            def generate(self, role, instruction, payload, schema, tools=None):
+                if role == 'plan_validator':
+                    self.reviews.append(payload)
+                return super().generate(role, instruction, payload, schema, tools)
+        context, tools, budget, _ = case()
+        client = RecordingPlanner()
+        result = build_planning_graph(client, context, tools, Skills(), budget).invoke(
+            {'payload': {'round_number': 2}})
+        self.assertTrue(result['valid'], result)
+        self.assertEqual(len(client.reviews), 2)
+        for payload in client.reviews:
+            self.assertIsNone(payload['required_tool_id'])
+            self.assertIsNone(payload['review_scope']['family_id'])
+            self.assertEqual(payload['review_scope']['scheduled_family_tools'], [])
+            self.assertEqual(payload['review_scope']['accepted_family_tools'], [])
+
+    def test_explicit_holdout_training_still_blocks_every_scoped_member(self):
+        class UnsafePlanner(StarterPlanner):
+            def generate(self, role, instruction, payload, schema, tools=None):
+                if role == 'plan_validator':
+                    return ValidationReport(valid=False, errors=['Uses external labels'], issues=[dict(
+                        rule_id='holdout_training', field='preprocessing.0', reason='Uses external labels',
+                        source_quote='train on external holdout labels')])
+                answer = super().generate(role, instruction, payload, schema, tools)
+                if role == 'planner':
+                    answer.plans[0].preprocessing = ['train on external holdout labels']
+                return answer
+        context, tools, budget, _ = case()
+        result = build_planning_graph(UnsafePlanner(), context, tools, Skills(), budget,
+            planning_mode='initial', max_attempts=1).invoke({'payload': {'round_number': 1}})
+        self.assertFalse(result['valid'], result)
+        self.assertEqual(result['plans'], [])
+        self.assertEqual(len(result['errors']), 3)
+
     def test_single_baseline_becomes_three_fixed_resource_sharing_starters(self):
         context, tools, budget, _ = case()
         client = StarterPlanner()

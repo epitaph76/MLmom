@@ -39,8 +39,9 @@ Inspect missingness, duplicates, rare classes/categories, tails, suspicious valu
 relationships and train/test distribution shifts where relevant. Never use sample submission
 prediction values as labels: they are placeholders. Holdout is available only through aggregates.
 Persist each useful finding with save_observation using its supplied profile/CSV evidence reference
-and exact measured numbers. Distinguish observations from assumptions. Proposals must cite saved
-observation IDs, describe an expected effect and a check on comparable splits. Do not invent numbers.
+and exact measured numbers. Distinguish observations from assumptions. Proposals are advisory ideas:
+describe an expected effect and a check on comparable splits. Include saved observation IDs when
+available; references are optional and do not gate proposal retention. Do not invent numbers.
 Return ReconnaissanceReport, including unfinished_checks for work to continue next round.
 Budget covers all requests, tools and repairs. Confirm requirements early and save findings often.'''
 
@@ -220,32 +221,17 @@ class ReconnaissanceSession:
             failed_saves=self.failed_saves,unfinished_checks=self.unfinished))
 
     def reconcile(self, answer):
-        aliases = {identity:{identity} for identity in self.observations}
         rejected = []
         for item in answer.observations:
             if item.observation_id in self.observations and item == self.observations[item.observation_id]:
-                aliases.setdefault(item.observation_id,set()).add(item.observation_id)
                 continue
             try:
-                saved = self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
-                aliases.setdefault(item.observation_id,set()).add(saved['observation_id'])
+                self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
             except ValueError as exc:
-                # A bad duplicate local ID must never alias a different valid finding.
-                aliases.setdefault(item.observation_id,set()).add(None)
                 rejected.append(f'Observation {item.observation_id}: {exc}')
-        proposals = []
-        for proposal in answer.proposals:
-            ids = []
-            for identity in proposal.evidence_ids:
-                mapped = aliases.get(identity,{identity} if identity in self.observations else set())
-                if len(mapped) != 1 or None in mapped or next(iter(mapped)) not in self.observations:
-                    rejected.append(f'Proposal must cite saved observation IDs; unresolved ID: {identity}')
-                    break
-                ids.append(next(iter(mapped)))
-            else:
-                proposals.append(proposal.model_copy(update={'evidence_ids':list(dict.fromkeys(ids))}))
         unfinished = list(dict.fromkeys(answer.unfinished_checks+self.unfinished+rejected))
-        return answer.model_copy(update=dict(observations=list(self.observations.values()),proposals=proposals,
+        # Proposals remain advisory, with their original optional references intact.
+        return answer.model_copy(update=dict(observations=list(self.observations.values()),
             status='partial' if rejected or self.unfinished else answer.status,
             reason='; '.join(rejected)[:1000] if rejected else answer.reason,unfinished_checks=unfinished))
 

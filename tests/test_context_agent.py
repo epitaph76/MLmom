@@ -84,15 +84,93 @@ class ContextAgentTests(unittest.TestCase):
         self.assertIn('supplied finding IDs',client.calls[-1][1]['validation_feedback'])
         self.assertEqual(len(self.store.list('context_budget')),1)
 
-    def test_fabricated_quotes_or_rewritten_task_fail_closed_to_original_text(self):
+    def test_formatting_differences_keep_context_without_retry(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8')+
+            '\nPredict `site_eui` using **RMSE** and _known weather_.',encoding='utf-8')
         class Client(OfflineLLM):
             def generate(self,role,instruction,payload,schema,tools=None):
-                return dict(task_summary='Changed metric',task_details=[dict(meaning='False',source_quote='Invented condition')])
-        result=self.prepare(Client())
-        self.assertEqual(result['status'],'fallback')
+                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+                answer.update(task_summary='Keep the task-specific context.',task_details=[dict(
+                    meaning='Predict the target with known weather.',
+                    source_quote='Predict site_eui using RMSE and known weather.')])
+                return answer
+        client=Client();result=self.prepare(client)
+        self.assertEqual(result['status'],'completed',result)
+        self.assertEqual(len(client.calls),1)
+        self.assertEqual(len(result['task_details']),1)
+        self.assertEqual(result['task_summary'],'Keep the task-specific context.')
+        self.assertEqual(result['quote_warnings'],[])
+
+    def test_bad_quote_omits_only_that_detail_and_preserves_agent_ranking(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8')+
+            '\nWeather is known. В данных 62 входных признака.',encoding='utf-8')
+        class Client(OfflineLLM):
+            def generate(self,role,instruction,payload,schema,tools=None):
+                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+                answer.update(task_summary='Useful context',task_details=[
+                    dict(meaning='Use contemporaneous weather.',source_quote='Weather is known.'),
+                    dict(meaning='Input shape.',source_quote='В данных 62 входных признаков.')])
+                answer['ranked_findings'][0]['rationale']='Keep the agent ranking'
+                return answer
+        client=Client();result=self.prepare(client)
+        self.assertEqual(result['status'],'completed',result)
+        self.assertEqual(len(client.calls),1)
+        self.assertEqual(len(result['task_details']),1)
+        self.assertEqual(result['task_summary'],'Useful context')
+        self.assertEqual(result['ranked_findings'][0]['rationale'],'Keep the agent ranking')
+        self.assertEqual(result['quote_warnings'],[dict(detail_index=1,reason='source_quote_not_found')])
+        self.assertEqual(result['original_task_description'],self.path.read_text(encoding='utf-8'))
+        saved=json.loads(next((self.store.root/'planning_context').glob('*/brief.json')).read_text(encoding='utf-8'))
+        self.assertEqual(saved['quote_warnings'],result['quote_warnings'])
+
+    def test_all_fabricated_quotes_use_original_summary_and_keep_valid_ranking(self):
+        class Client(OfflineLLM):
+            def generate(self,role,instruction,payload,schema,tools=None):
+                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+                answer.update(task_summary='Changed metric',task_details=[dict(
+                    meaning='False',source_quote='Invented condition')])
+                return answer
+        client=Client();result=self.prepare(client)
+        self.assertEqual(result['status'],'completed',result)
+        self.assertEqual(len(client.calls),1)
+        self.assertEqual(result['task_details'],[])
+        self.assertEqual(result['task_summary'],self.context.task.objective)
         self.assertEqual(result['original_task_description'],self.path.read_text(encoding='utf-8'))
         self.assertEqual(result['requirements']['task']['primary_metric'],'rmse')
-        self.assertIn('quote',result['reason'])
+        self.assertTrue(result['ranked_findings'])
+        self.assertEqual(len(result['quote_warnings']),1)
+
+    def test_changed_numbers_negation_operators_and_identifiers_are_not_fuzzy_matched(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8')+
+            '\nUse 62 features. Do not train on test labels. '
+            'Score squared errors as x**2 + y**2. Feature is `Year_Factor`. '
+            'Compute `x *y* z`.',encoding='utf-8')
+        quotes=['Use 63 features.','Do train on test labels.',
+                'Score squared errors as x2 + y2.','Feature is YearFactor.','Compute x y z.']
+        class Client(OfflineLLM):
+            def generate(self,role,instruction,payload,schema,tools=None):
+                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+                answer['task_details']=[dict(meaning='Unsupported detail',source_quote=q) for q in quotes]
+                return answer
+        result=self.prepare(Client())
+        self.assertEqual(result['status'],'completed',result)
+        self.assertEqual(result['task_details'],[])
+        self.assertEqual(len(result['quote_warnings']),5)
+
+    def test_soft_quote_handling_does_not_allow_downgrading_critical_findings(self):
+        self.profile.issues=[DataIssue(code='leakage',severity='error',message='Possible target leakage')]
+        class Client(OfflineLLM):
+            def generate(self,role,instruction,payload,schema,tools=None):
+                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+                answer['ranked_findings'][0]['priority']='low'
+                answer['task_details']=[dict(meaning='False',source_quote='Invented condition')]
+                return answer
+        client=Client();result=self.prepare(client)
+        self.assertEqual(len(client.calls),2)
+        self.assertEqual(result['status'],'fallback')
+        self.assertIn('Critical input findings',result['reason'])
+        self.assertEqual(len(result['mandatory_findings']),1)
+        self.assertEqual(result['requirements']['task'],self.context.task.model_dump(mode='json'))
 
     def test_cache_reuses_brief_for_retries_and_invalidates_on_new_evidence(self):
         client=OfflineLLM();first=self.prepare(client);again=self.prepare(client)

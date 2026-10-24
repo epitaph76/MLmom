@@ -78,7 +78,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                     'coding_agent':{'candidate_sdk','metrics','sklearn'} |
                                    ({'imbalance'} if kind=='multiclass_classification' else set()),
                     'training_agent':{'metrics','hpo'},
-                    'reconnaissance_agent':{'reconnaissance_agent'},'result_validator':{'result_validator'},
+                    'reconnaissance_agent':{'reconnaissance_agent','polars_sql'},'result_validator':{'result_validator'},
                     'context_agent':{'context_agent'},
                 }
                 for role,payload in client.calls:

@@ -68,6 +68,61 @@ def composite_case(root, kind='regression', method='mean', different_policies=Fa
 
 
 class FamilyPlanTests(unittest.TestCase):
+    def test_single_group_label_is_normalized_without_rewriting_historical_lineage(self):
+        plan = case()[3]
+        plan.hypothesis.hypothesis_id = 'h2-log1p-target-transform'
+        plan.hypothesis.based_on_hypothesis_id = 'old-backend-child'
+        plan.parent_hypothesis = plan.hypothesis.model_copy(update={'hypothesis_id': 'old-family'})
+        plan.search_group_id = 'h2-single-change-ablation'
+        group = collect_groups([plan])[0]
+        variant = group.variants[0]
+        self.assertEqual(group.hypothesis.hypothesis_id, plan.hypothesis.hypothesis_id)
+        self.assertEqual(variant.search_group_id, plan.hypothesis.hypothesis_id)
+        self.assertEqual(variant.parent_hypothesis.hypothesis_id, 'old-family')
+        self.assertEqual(variant.hypothesis.based_on_hypothesis_id, 'old-backend-child')
+        self.assertEqual(variant.agent_notes['requested_search_group_id'], 'h2-single-change-ablation')
+        self.assertEqual(plan.search_group_id, 'h2-single-change-ablation')
+
+    def test_standalone_hypotheses_do_not_merge_by_an_invented_shared_group_label(self):
+        plans = []
+        for key in ['first', 'second']:
+            plan = case()[3]
+            plan.hypothesis.hypothesis_id, plan.search_group_id = key, 'shared-label'
+            plans.append(plan)
+        groups = collect_groups(plans)
+        self.assertEqual([g.hypothesis.hypothesis_id for g in groups], ['first', 'second'])
+        self.assertTrue(all(len(g.variants) == 1 for g in groups))
+
+    def test_family_group_mismatch_remains_an_error(self):
+        plan = case()[3]
+        plan.parent_hypothesis = plan.hypothesis.model_copy(update={'hypothesis_id': 'actual-family'})
+        plan.search_group_kind, plan.search_group_id = 'family', 'wrong-family'
+        with self.assertRaisesRegex(ValueError, 'different search group'):
+            collect_groups([plan])
+
+    def test_accepted_cached_single_group_is_repaired_without_another_llm_call(self):
+        context, tools, budget, _ = case()
+        saved = {}
+        def save(progress):
+            saved.update(json.loads(json.dumps(progress)))
+        first = build_planning_graph(Planner(), context, tools, Skills(), budget,
+            save_progress=save).invoke({'payload': {'round_number': 2}})
+        self.assertTrue(first['valid'], first)
+        for phase in ['proposed', 'accepted']:
+            saved[phase]['base']['search_group_id'] = 'narrative-ablation-label'
+            saved[phase]['base']['parent_hypothesis'] = dict(
+                saved[phase]['base']['hypothesis'], hypothesis_id='old-family')
+        client = Planner()
+        resumed = build_planning_graph(client, context, tools, Skills(), budget,
+            saved_progress=saved, save_progress=save).invoke(dict(
+                payload={'round_number': 2}, hypotheses=saved['hypotheses']))
+        self.assertTrue(resumed['valid'], resumed)
+        self.assertEqual(client.calls, [])
+        base = next(p for p in resumed['plans'] if p['hypothesis']['hypothesis_id'] == 'base')
+        self.assertEqual(base['search_group_id'], 'base')
+        self.assertEqual(base['parent_hypothesis']['hypothesis_id'], 'old-family')
+        self.assertEqual(saved['accepted']['base']['search_group_id'], 'base')
+
     def test_boosting_is_one_parent_with_three_stable_variants(self):
         context,tools,budget,_ = case()
         parent = Hypothesis(hypothesis_id='trees',kind='family',model_family='gradient_boosting',

@@ -15,6 +15,7 @@ from tests.fakes import GENERATED_CODE as ADAPTER_CODE
 
 
 class Skills:
+    def validate_selection(self,*args,**kwargs): return []
     def load(self,*args,**kwargs): return []
     def list(self,**kwargs): return []
     def technique_catalog(self,task_type): return []
@@ -57,9 +58,9 @@ class PlanningLimitTests(unittest.TestCase):
                     observed.append((role,current_context().get('hypothesis_id')))
                 return super().generate(role,instruction,payload,schema,tools)
         class TracedSkills(Skills):
-            def load(self,*args,**kwargs):
+            def validate_selection(self,*args,**kwargs):
                 if args[0]:skill_contexts.append(current_context().get('hypothesis_id'))
-                return super().load(*args,**kwargs)
+                return super().validate_selection(*args,**kwargs)
         context,tools,budget,plan=case()
         output=build_planning_graph(TracedPlanner(),context,tools,TracedSkills(),budget).invoke({'payload':{'round_number':1}})
         self.assertTrue(output['valid'])

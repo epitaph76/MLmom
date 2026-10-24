@@ -18,6 +18,43 @@ ROOT = Path(__file__).resolve().parent.parent / 'skills'
 
 
 class SkillTests(unittest.TestCase):
+    def test_large_selection_is_checked_as_metadata_then_loaded_per_actual_role(self):
+        registry = SkillRegistry(ROOT)
+        ids = ['xgboost', 'lightgbm', 'catboost', 'ensembles', 'categorical_encoding',
+               'missing_values', 'numeric_transforms', 'preprocessing_core']
+        with patch('mlmom.registry.importlib.metadata.version', return_value='test'):
+            # Reproduce the erroneous administrative prompt, without raising its cap.
+            with self.assertRaisesRegex(ValueError, 'context budget'):
+                registry.load(ids, 'regression')
+            with patch.object(Path, 'read_text', side_effect=AssertionError('Prompt text was read')):
+                selected = registry.validate_selection(ids, 'regression')
+            self.assertEqual([m.skill_id for m in selected], ids)
+            from mlmom.planning import validate_plan
+            from tests.test_planning_limits import case
+            context, tools, budget, plan = case()
+            plan.tool_id, plan.skill_ids = 'xgboost', ids
+            with patch.object(registry, 'load', side_effect=AssertionError('Combined prompt was loaded')):
+                result = validate_plan(plan, context, tools, registry, budget)
+            self.assertTrue(result.valid, result)
+            for role in ['coding_agent', 'preprocessing_agent']:
+                cards = registry.load([k for k in ids if registry.allowed(k, role)], 'regression',
+                    role=role, max_chars=48000, include_references=True)
+                self.assertLessEqual(sum(len(card['content']) for card in cards), 48000)
+                self.assertTrue(all(registry.allowed(card['skill_id'], role) for card in cards))
+
+    def test_metadata_validation_keeps_id_task_dependency_and_role_checks(self):
+        registry = SkillRegistry(ROOT)
+        with self.assertRaisesRegex(ValueError, 'Unknown skill'):
+            registry.validate_selection(['missing_skill'], 'regression')
+        with self.assertRaisesRegex(ValueError, 'incompatible'):
+            registry.validate_selection(['statsmodels'], 'multiclass_classification')
+        with self.assertRaisesRegex(ValueError, 'not available'):
+            registry.validate_selection(['planner'], 'regression', role='coding_agent')
+        with patch('mlmom.registry.importlib.metadata.version',
+                   side_effect=importlib.metadata.PackageNotFoundError('flaml')):
+            with self.assertRaises(importlib.metadata.PackageNotFoundError):
+                registry.validate_selection(['flaml'], 'regression')
+
     def test_core_contract_is_automatic_ordered_and_deduplicated(self):
         registry = SkillRegistry(ROOT)
         loaded = registry.load(['sklearn', 'metrics', 'sklearn', 'candidate_sdk'], 'regression')

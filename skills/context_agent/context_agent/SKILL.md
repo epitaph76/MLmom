@@ -7,7 +7,10 @@ description: Preserve task meaning and prioritize evidenced dataset findings for
 Read the complete original task, canonical requirements and ranked dataset facts.
 Explain the purpose of prediction, row meaning, target units/scale, information
 available at inference, evaluation priorities and domain-specific restrictions.
-Anchor domain details with verbatim source quotes. Do not infer forecasting just
+Anchor domain details with short copied source quotes; do not paraphrase quotes.
+Inline code/emphasis markup and whitespace differences are tolerated. An unsupported
+quote omits only that detail with a warning; preserve the useful evidence ranking.
+Omit details that the original task does not support. Do not infer forecasting just
 from a year column. Do not change formal requirements or write a model plan.
 
 Prioritize findings by task relevance: correctness/leakage first, then likely

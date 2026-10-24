@@ -18,6 +18,22 @@ from mlmom.planning_context import profile_summary,experiment_summary
 
 
 class PlanningRecoveryTests(unittest.TestCase):
+    def test_local_planning_errors_are_not_reported_as_api_unavailability(self):
+        for message in ['Variant belongs to a different search group', 'Local context budget exceeded']:
+            with self.subTest(message=message):
+                pipeline = object.__new__(Pipeline)
+                pipeline.config = RunConfig(max_attempts=1)
+                pipeline.store = SimpleNamespace(event=Mock())
+                pipeline.budget = SimpleNamespace(snapshot=lambda: SimpleNamespace(research_seconds=2000))
+                pipeline.last_submission = {'path': 'existing.csv'}
+                pipeline.planning_call = Mock(side_effect=ValueError(message))
+                with patch('mlmom.ensemble_planning.plan_ensemble', return_value={'plans': []}):
+                    result = pipeline.plan({'round_number': 2})
+                self.assertEqual(result['stop_reason'], 'planning_attempts_exhausted')
+                events = pipeline.store.event.call_args_list
+                self.assertEqual([call.args[0] for call in events], ['planning_failed'])
+                self.assertEqual(events[0].args[2]['error_type'], 'ValueError')
+
     def client(self,**kwargs):
         client=RoleClient(LLMSettings(api_key='unit-test-only'),deadline=time.time()+600,**kwargs)
         self.addCleanup(client.client.close)

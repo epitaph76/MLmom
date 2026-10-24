@@ -32,6 +32,9 @@ Do not import preprocessing or fit feature cleaning/encoding/imputation again. B
 excerpts must be adapted to this separation. Implement the selected model directly,
 prediction/class ordering and portable estimator persistence. Runtime owns target_transform,
 weight_policy and prediction_policy: do not implement log1p/expm1, clipping or custom weights again.
+load_candidate must return the restored estimator without nominal Candidate class checks such as
+isinstance(obj, Candidate) or type(obj) is Candidate: cloudpickle by-value restoration can create
+a distinct Python class object with the same name. Let the SDK exercise its callable interface.
 Pass context.sample_weight to the backend unchanged; do not mutate fitted parameters after fit.
 Consume all config['model_params'], including declared search parameters. No Optuna loop inside fit:
 the runner supplies each trial. Reuse validation only for stopping/selection, never ordinary fitting.
@@ -98,6 +101,35 @@ class SourcePatch(StrictModel):
 
 class CodePatch(StrictModel):
     patches: list[SourcePatch] = Field(default_factory=list,max_length=20)
+
+
+def remove_loader_type_guard(source):
+    """Remove the generated nominal Candidate guard before source is versioned."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source, 0
+    removed = set()
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef) or function.name != 'load_candidate':
+            continue
+        for node in function.body:
+            if not isinstance(node, ast.If) or node.orelse or len(node.body) != 1:
+                continue
+            test, error = node.test, node.body[0]
+            if not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+                    and isinstance(test.operand, ast.Call)):
+                continue
+            call = test.operand
+            if not (isinstance(call.func, ast.Name) and call.func.id == 'isinstance'
+                    and len(call.args) == 2 and not call.keywords
+                    and isinstance(call.args[1], ast.Name) and call.args[1].id == 'Candidate'
+                    and isinstance(error, ast.Raise) and isinstance(error.exc, ast.Call)
+                    and isinstance(error.exc.func, ast.Name) and error.exc.func.id == 'TypeError'):
+                continue
+            removed.update(range(node.lineno, node.end_lineno + 1))
+    lines = source.splitlines(keepends=True)
+    return ''.join(line for number, line in enumerate(lines, 1) if number not in removed), len(removed)
 
 
 def reuse_assignment(previous, plan):
@@ -336,6 +368,13 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
     def verify(state):
         smoke_report=None
         smoke_report_ref=None
+        if (workspace.root/'candidate.py').is_file():
+            source = workspace.read_file('candidate.py')
+            normalized, removed_lines = remove_loader_type_guard(source)
+            if removed_lines:
+                workspace.write_file('candidate.py', normalized)
+                store.event('candidate_loader_normalized', budget_key,
+                            dict(removed_guard_lines=removed_lines))
         report = source_report(workspace.root)
         report.warnings.extend(state.get('warnings',[]))
         report.errors.extend(state.get('errors',[])); report.valid = not report.errors

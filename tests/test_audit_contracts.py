@@ -85,22 +85,43 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(resumed.tools.invoke('save_observation',args).error_code,'repeated_observation_error')
         self.assertEqual(len(resumed.unfinished),1)
 
-    def test_final_observations_reconcile_without_losing_valid_proposals(self):
+    def test_final_observations_keep_proposals_with_original_unchecked_ids(self):
         session=self.session();result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
         draft=Observation(observation_id='local-count',topic='size',description='Measured training count',numbers={'n':180},source_ref=result['source_ref'])
         valid=dict(description='Check size',evidence_ids=['local-count'],expected_effect='unknown',verification='same split')
         answer=session.reconcile(ReconnaissanceReport(observations=[draft],proposals=[valid,dict(valid,evidence_ids=['invented'])]))
-        self.assertEqual(answer.status,'partial');self.assertEqual(len(answer.observations),1)
-        self.assertEqual(len(answer.proposals),1)
-        self.assertEqual(answer.proposals[0].evidence_ids,[answer.observations[0].observation_id])
+        self.assertEqual(answer.status,'completed');self.assertEqual(len(answer.observations),1)
+        self.assertEqual(len(answer.proposals),2)
+        self.assertEqual([p.evidence_ids for p in answer.proposals],[['local-count'],['invented']])
+        self.assertIsNone(answer.reason)
         self.assertEqual(len(self.session().observations),1)
 
-    def test_conflicting_local_ids_cannot_alias_one_valid_finding(self):
+    def test_invalid_observation_does_not_discard_proposals(self):
         session=self.session();result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
         a=Observation(observation_id='same',topic='size',description='Count',numbers={'n':180},source_ref=result['source_ref'])
         b=a.model_copy(update={'numbers':{'n':999}})
         report=session.reconcile(ReconnaissanceReport(observations=[a,b],proposals=[dict(description='bad alias',evidence_ids=['same'],expected_effect='gain',verification='test')]))
-        self.assertEqual(len(report.observations),1);self.assertFalse(report.proposals)
+        self.assertEqual(len(report.observations),1)
+        self.assertEqual(len(report.proposals),1)
+        self.assertEqual(report.proposals[0].evidence_ids,['same'])
+        self.assertEqual(report.status,'partial')
+
+    def test_reworded_saved_observation_does_not_discard_its_proposal(self):
+        session=self.session();result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
+        saved=Observation.model_validate(session.save_observation('size','Training count',numbers={'n':180},source_ref=result['source_ref']))
+        proposal=dict(description='Check size',evidence_ids=[saved.observation_id],expected_effect='unknown',verification='same split')
+        report=session.reconcile(ReconnaissanceReport(observations=[saved.model_copy(update={'description':'Reworded training count'})],proposals=[proposal]))
+        self.assertEqual(report.status,'completed')
+        self.assertEqual(report.proposals[0].model_dump(),proposal)
+        self.assertIsNone(report.reason)
+
+    def test_proposal_references_can_be_missing_or_empty(self):
+        session=self.session()
+        proposal=dict(description='Try a different model',expected_effect='unknown',verification='same split')
+        report=session.reconcile(ReconnaissanceReport(proposals=[proposal,dict(proposal,evidence_ids=[])]))
+        self.assertEqual(report.status,'completed')
+        self.assertEqual(len(report.proposals),2)
+        self.assertEqual([p.evidence_ids for p in report.proposals],[[],[]])
 
     def test_saved_observation_reaches_context_and_hypothesis_roles(self):
         parent=self

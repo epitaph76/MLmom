@@ -106,6 +106,21 @@ class SkillRegistry:
                 if (self.owners[s.skill_id] == 'preprocessing_agent' or s.skill_id in {'imbalance','ensembles'})
                 and s.status == 'ready' and (not s.task_types or task_type in s.task_types)]
 
+    def validate_selection(self, ids: list[str], task_type: str, *, role=None):
+        """Check metadata/dependencies without building any role's prompt."""
+        if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')
+        selected = []
+        for key in dict.fromkeys(ids):
+            if key not in self.manifests:raise ValueError(f'Unknown skill: {key}')
+            if not self.allowed(key,role):raise ValueError(f'Skill {key} is not available to {role}')
+            manifest = self.manifests[key]
+            if manifest.task_types and task_type not in manifest.task_types:
+                raise ValueError(f'Skill {key} is incompatible with {task_type}')
+            for distribution in manifest.dependencies:
+                importlib.metadata.version(distribution)
+            selected.append(manifest)
+        return selected
+
     def load(self, ids: list[str], task_type: str, *, role=None, max_chars=24000,include_references=False):
         if role is not None and role not in ROLE_DEFAULTS:raise ValueError(f'Unknown role: {role}')
         automatic = ROLE_DEFAULTS.get(role, ()) if role else CORE_SKILLS
@@ -119,14 +134,8 @@ class SkillRegistry:
         used = 0
         # Every candidate receives the same contract, even when a planner only
         # selects a backend. Shared text is counted and versioned exactly once.
-        for key in dict.fromkeys([*automatic, *ids]):
-            if key not in self.manifests: raise ValueError(f'Unknown skill: {key}')
-            if not self.allowed(key,role): raise ValueError(f'Skill {key} is not available to {role}')
-            manifest = self.manifests[key]
-            if manifest.task_types and task_type not in manifest.task_types:
-                raise ValueError(f'Skill {key} is incompatible with {task_type}')
-            for distribution in manifest.dependencies:
-                importlib.metadata.version(distribution)
+        for manifest in self.validate_selection([*automatic, *ids],task_type,role=role):
+            key = manifest.skill_id
             root = self.paths[key]
             text = (root/'SKILL.md').read_text(encoding='utf-8')
             if key == 'candidate_sdk':

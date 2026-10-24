@@ -4,12 +4,12 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 2077 nodes · 7750 edges · 110 communities (94 shown, 16 thin omitted)
-- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 963 edges (avg confidence: 0.9)
+- 2116 nodes · 7860 edges · 111 communities (90 shown, 21 thin omitted)
+- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 971 edges (avg confidence: 0.9)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `a01caf4d`
+- Built from commit: `11e691e7`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -120,275 +120,271 @@
 - Community 103
 - Community 104
 - Community 105
-- Community 106
 - Community 107
 - Community 108
 - Community 109
+- Community 110
 
 ## God Nodes (most connected - your core abstractions)
 1. `Pipeline` - 151 edges
-2. `RunConfig` - 142 edges
+2. `RunConfig` - 143 edges
 3. `DataInspector` - 103 edges
-4. `case()` - 81 edges
+4. `case()` - 91 edges
 5. `OfflineLLM` - 78 edges
-6. `ExperimentStore` - 76 edges
-7. `atomic_json()` - 76 edges
-8. `build_planning_graph()` - 72 edges
-9. `SandboxManager` - 60 edges
+6. `build_planning_graph()` - 78 edges
+7. `ExperimentStore` - 76 edges
+8. `atomic_json()` - 76 edges
+9. `Skills` - 64 edges
 10. `RoleClient` - 60 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `SchedulerIntegrationTests` --uses--> `Job`  [INFERRED]
-  tests/test_scheduler_integration.py → mlmom/resources.py
-- `InfrastructureRoutingTests` --uses--> `Job`  [INFERRED]
-  tests/test_worker_supervision.py → mlmom/resources.py
-- `SchedulerIntegrationTests` --uses--> `ResourceUnavailable`  [INFERRED]
-  tests/test_scheduler_integration.py → mlmom/resources.py
-- `InvariantTests` --uses--> `SandboxManager`  [INFERRED]
-  tests/test_invariants.py → mlmom/resources.py
-- `NativeValidationTests` --uses--> `SandboxManager`  [INFERRED]
-  tests/test_native_validation.py → mlmom/resources.py
+- `ModelContractV2Tests` --uses--> `FidelityError`  [INFERRED]
+  tests/test_contract_v2.py → mlmom/execution.py
+- `LightGBMFitEvidenceTests` --uses--> `FidelityError`  [INFERRED]
+  tests/test_lightgbm_fit_evidence.py → mlmom/execution.py
+- `ExecutionContractTests` --uses--> `ResultReview`  [INFERRED]
+  tests/test_audit_contracts.py → mlmom/pipeline_contracts.py
+- `ExecutionContractTests` --uses--> `FitContext`  [INFERRED]
+  tests/test_audit_contracts.py → mlmom/sdk.py
+- `ExecutionResourceTests` --uses--> `FitContext`  [INFERRED]
+  tests/test_execution_resources.py → mlmom/sdk.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (110 total, 16 thin omitted)
+## Communities (111 total, 21 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.06
-Nodes (17): process_identity(), process_matches(), ProcessIdentity, recorded_process_matches(), Job, ResourceUnavailable, SandboxManager, trace_event() (+9 more)
+Cohesion: 0.07
+Nodes (30): audit_fit(), complete_export(), _component_objects(), config_hash(), _equal(), FidelityError, fitted_components(), inspect_component() (+22 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.06
-Nodes (13): JsonSerializer, SQLiteCheckpointer, _unsupported(), SkillRegistry, check(), render(), RoleSkillTests, generate() (+5 more)
+Cohesion: 0.09
+Nodes (19): FeatureSession, ExperimentStore, RunConfig, component_pool(), CheckpointIntegrationTests, ControlledLLM, SubmissionIsolationTests, generate() (+11 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.08
-Nodes (18): role_window(), finding_catalog(), prepare_planner_context(), previous_brief_summary(), TableReadOptions, csv_worker(), _json_value(), _lazy_table() (+10 more)
+Nodes (28): AgentNarrative, CodePatch, CodingState, SourcePatch, StrictModel, TableReadOptions, FeatureEvidence, FeatureExperimentPlan (+20 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.08
-Nodes (27): build_coding_graph(), check_source(), coding_capacity(), generate(), generation_remaining(), inspect_api(), preprocessing(), preprocessing_failed() (+19 more)
+Cohesion: 0.07
+Nodes (15): BudgetSnapshot, installed_tools(), Budget, ResourceUnavailable, SandboxManager, trace_event(), AdapterTests, ExecutionTests (+7 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.11
-Nodes (16): ExperimentStore, RunConfig, CheckpointIntegrationTests, ContextAndPatchTests, SubmissionIsolationTests, FeaturePipelineTests, InitialBoostingIntegrationTests, CustomCandidatePipeline (+8 more)
+Cohesion: 0.10
+Nodes (8): DeferredTask, Pipeline, finished(), group_remaining(), process_jobs(), experiment_summary(), WorkerRuntimeError, emit()
 
 ### Community 5 - "Community 5"
-Cohesion: 0.09
-Nodes (14): FeatureSpec, FeatureAugmentingPreprocessor, FeatureTransformer, screen_features(), validate_features(), dictionary_metadata(), fixed_model_hash(), paired_evidence() (+6 more)
+Cohesion: 0.11
+Nodes (10): ColumnProfile, ColumnRole, DataIssue, DatasetChecks, TableProfile, TaskSpec, DataInspector, InputLayout (+2 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.11
-Nodes (10): FileRole, InferenceConfidence, SemanticType, TableProfile, TaskType, DataInspector, InputLayout, _resolve_path() (+2 more)
+Cohesion: 0.08
+Nodes (11): classification(), LibraryCandidate, load_adapter(), preprocessor(), text_columns(), text_values(), EnsembleCandidate, load_ensemble() (+3 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.11
-Nodes (3): Champion, MLToolSpec, capability_matrix()
+Cohesion: 0.10
+Nodes (17): evaluate(), atomic_json(), process_identity(), process_matches(), ProcessIdentity, recorded_process_matches(), worker_record(), capacity() (+9 more)
 
 ### Community 8 - "Community 8"
-Cohesion: 0.14
-Nodes (24): audit_fit(), compare_roundtrip(), complete_export(), config_hash(), _equal(), _leaves(), _missing(), require_admitted() (+16 more)
+Cohesion: 0.11
+Nodes (7): group_keys(), inner_protocol(), make_split(), split_indices(), validation_groups(), execution_case(), InnerProtocolTests
 
 ### Community 9 - "Community 9"
-Cohesion: 0.11
-Nodes (10): classification(), LibraryCandidate, load_adapter(), text_columns(), EnsembleCandidate, load_ensemble(), FitContext, smoke() (+2 more)
+Cohesion: 0.09
+Nodes (9): validate_plan(), MetricsAndSplitTests, generate(), InitialPlanningTests, case(), PlanningLimitTests, Skills, generate() (+1 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.12
-Nodes (12): MetricDirection, ResultFormat, TaskDefinition, TaskValidationFinding, TaskValidationReport, ValidationStrategy, _normalise_metric(), TaskValidator (+4 more)
+Cohesion: 0.08
+Nodes (10): SkillRegistry, check(), render(), RoleSkillTests, generate(), generate(), DecisionSkillCardTests, ResultClient (+2 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.14
-Nodes (10): main(), package(), main(), main(), main(), report(), main(), main() (+2 more)
+Cohesion: 0.13
+Nodes (22): require_admitted(), inside(), read_table(), resolve_inputs(), find(), CandidateVersion, ExperimentRun, publish_submission() (+14 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.09
-Nodes (9): GeneratedCandidateTests, generate(), case(), PlanningLimitTests, generate(), Skills, generate(), generate() (+1 more)
+Cohesion: 0.11
+Nodes (15): checked_predictions(), compare_roundtrip(), tree_hash(), load_module(), create(), load(), failure_result(), main() (+7 more)
 
 ### Community 13 - "Community 13"
-Cohesion: 0.10
-Nodes (11): GlobalAPIError, LLMUnavailable, StructuredOutputError, CodingState, extract_json(), traced_node(), bind(), current_sink() (+3 more)
+Cohesion: 0.13
+Nodes (12): CodeBundle, SeparatePreprocessingTests, run(), ClockBudget, Coder, CodingBudgetTests, Sandbox, Store (+4 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.12
-Nodes (6): RoleClient, LLMSettings, AgentProtocolTests, ProviderFailureTests, OptionalTimeoutTests, unavailable()
+Cohesion: 0.13
+Nodes (11): MetricDirection, ResultFormat, TaskDefinition, TaskValidationFinding, TaskValidationReport, ValidationStrategy, _normalise_metric(), TaskValidator (+3 more)
 
 ### Community 15 - "Community 15"
-Cohesion: 0.09
-Nodes (8): capture(), PolicyState, create(), load(), _load_policy(), PolicyCandidate, Estimator, ModelContractV2Tests
+Cohesion: 0.12
+Nodes (5): RoleClient, LLMSettings, AgentProtocolTests, ProviderFailureTests, unavailable()
 
 ### Community 16 - "Community 16"
-Cohesion: 0.13
-Nodes (18): plan_ensemble(), finish(), read_component_history(), frozen_plan(), EnsembleProposal, Hypothesis, SearchGroupPlan, collect_groups() (+10 more)
+Cohesion: 0.12
+Nodes (19): DatasetProfile, FileRole, InferenceConfidence, SemanticType, Severity, SplitColumnStats, build_llm_context(), main() (+11 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.14
-Nodes (15): stopping_metric(), preprocessor(), text_values(), inspect_model(), checked_predictions(), diagnostics(), error_metrics(), evaluate() (+7 more)
+Cohesion: 0.09
+Nodes (15): LLMUnavailable, StructuredOutputError, generate(), ToolSet, generate(), generate(), PlanningRecoveryTests, read_skills() (+7 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.12
-Nodes (14): better(), TrainingCheckpoint, TrialResult, runtime_versions(), fallback(), worker_checkpoint(), fit_context(), train() (+6 more)
+Cohesion: 0.11
+Nodes (16): plan_ensemble(), read_component_history(), frozen_plan(), EnsembleProposal, Hypothesis, HypothesisPlan, SearchGroupPlan, collect_groups() (+8 more)
 
 ### Community 19 - "Community 19"
+Cohesion: 0.13
+Nodes (10): inspect(), package(), main(), main(), package_info(), main(), archive_hash(), main() (+2 more)
+
+### Community 20 - "Community 20"
+Cohesion: 0.10
+Nodes (13): save(), OfflineLLM, OfflinePipeline, FeatureClient, NativeStarterClient, broken_code(), RepairLLM, ScoutingTests (+5 more)
+
+### Community 21 - "Community 21"
 Cohesion: 0.10
 Nodes (13): relative_gain(), run_search(), apply_decision(), persist(), request_control(), TrainingDecision, TrainingControlTests, batch() (+5 more)
 
-### Community 20 - "Community 20"
-Cohesion: 0.15
-Nodes (15): features(), read_table(), file_hash(), CandidateVersion, ExperimentRun, SubmissionArtifact, publish_submission(), snapshot_cycle_submission() (+7 more)
-
-### Community 21 - "Community 21"
-Cohesion: 0.14
-Nodes (16): atomic_json(), Budget, capacity(), terminate_tree(), main(), audit_csv(), audit_cycles(), main() (+8 more)
-
 ### Community 22 - "Community 22"
-Cohesion: 0.15
-Nodes (6): ColumnProfile, ColumnRole, DataIssue, DatasetChecks, TaskSpec, _normalise_name()
+Cohesion: 0.11
+Nodes (17): FeatureSet, constant_space(), normalize_protocol(), normalize_champion_assignment(), build_planning_graph(), for_hypothesis(), hypotheses(), is_light() (+9 more)
 
 ### Community 23 - "Community 23"
-Cohesion: 0.11
-Nodes (12): FeatureSet, PredictionPolicy, TargetTransform, WeightPolicy, HypothesisPlan, infrastructure_overrides(), normalize_champion_assignment(), categorical_probe() (+4 more)
+Cohesion: 0.14
+Nodes (10): HypothesisBatch, PlanBatch, ValidationReport, RepairingPlanningClient, generate(), native_source(), ReviewPromptPlanner, StarterPlanner (+2 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.17
-Nodes (12): feature_profile(), targets(), InputFiles, TaskContext, group_keys(), inner_protocol(), make_split(), split_indices() (+4 more)
+Cohesion: 0.13
+Nodes (13): _leaves(), screen_features(), validate_features(), dictionary_metadata(), feature_profile(), fixed_model_hash(), paired_evidence(), actual_configuration() (+5 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.11
-Nodes (18): constant_space(), normalize_protocol(), normalize_cpu_hints(), build_planning_graph(), for_hypothesis(), generate(), hypotheses(), is_light() (+10 more)
+Cohesion: 0.13
+Nodes (14): better(), TrainingCheckpoint, TrialResult, fallback(), worker_checkpoint(), fit_context(), train(), control() (+6 more)
 
 ### Community 26 - "Community 26"
-Cohesion: 0.13
-Nodes (7): metric_capabilities(), Observation, ReconnaissanceReport, add(), ReconnaissanceSession, collect(), EvidenceContractTests
+Cohesion: 0.15
+Nodes (12): main(), audit_csv(), audit_cycles(), main(), now(), run_case(), save_report(), stop_pipeline() (+4 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.14
-Nodes (7): OfflineLLM, OfflinePipeline, ContextAgentTests, generate(), generate(), generate(), SchedulerIntegrationTests
+Cohesion: 0.12
+Nodes (5): FrozenEnsemble, objective(), capture(), records_for(), _execute_module()
 
 ### Community 28 - "Community 28"
-Cohesion: 0.17
-Nodes (5): dumps(), plain(), SelectedPreviousResults, finished(), emit()
+Cohesion: 0.14
+Nodes (6): csv_worker(), _json_value(), validate_sql(), PolarsSQLSkillTests, CSVEngineTests, run()
 
 ### Community 29 - "Community 29"
-Cohesion: 0.21
-Nodes (7): validator_repair(), CodePatch, Workspace, apply_patch(), read_file(), main(), request()
+Cohesion: 0.15
+Nodes (10): GlobalAPIError, request_messages(), role_window(), comparable_scores(), relative_gain(), extract_json(), review_result(), WorkerInfrastructureError (+2 more)
 
 ### Community 30 - "Community 30"
-Cohesion: 0.19
-Nodes (14): DatasetProfile, Severity, build_llm_context(), _format_number(), main(), _write_json(), build_llm_markdown(), _distribution_text() (+6 more)
+Cohesion: 0.16
+Nodes (9): ContextAgentTests, generate(), generate(), generate(), generate(), generate(), generate(), generate() (+1 more)
 
 ### Community 31 - "Community 31"
-Cohesion: 0.11
-Nodes (4): PreparedCandidate, Base, MeanPreprocessor, Stack
+Cohesion: 0.12
+Nodes (3): JsonSerializer, SQLiteCheckpointer, _unsupported()
 
 ### Community 32 - "Community 32"
-Cohesion: 0.16
-Nodes (5): inspect(), main(), archive_hash(), main(), names()
+Cohesion: 0.20
+Nodes (8): validator_repair(), Workspace, apply_patch(), read_file(), main(), request(), ContextAndPatchTests, ComponentTests
 
 ### Community 33 - "Community 33"
-Cohesion: 0.26
-Nodes (5): RouterAIChatClient, completion(), TraceTests, handler(), handler()
+Cohesion: 0.17
+Nodes (17): build_coding_graph(), check_source(), coding_capacity(), generate(), generation_remaining(), inspect_api(), preprocessing(), preprocessing_failed() (+9 more)
 
 ### Community 34 - "Community 34"
-Cohesion: 0.17
-Nodes (7): tree_hash(), _execute_module(), load_module(), predict(), write_predictions(), composite_case(), CompositeTests
+Cohesion: 0.14
+Nodes (9): feature_task_view(), run_feature_session(), session_directory(), session_object_key(), require_worker_infrastructure(), SessionAccountingTests, run(), renamed() (+1 more)
 
 ### Community 35 - "Community 35"
-Cohesion: 0.13
-Nodes (7): PlanBatch, RepairingPlanningClient, StarterPlanner, Planner, generate(), generate(), generate()
+Cohesion: 0.17
+Nodes (10): finding_catalog(), _ground_task_details(), prepare_planner_context(), _quote_text(), _validate(), previous_brief_summary(), FeatureProposal, PlannerContextDraft (+2 more)
 
 ### Community 36 - "Community 36"
-Cohesion: 0.19
-Nodes (5): ToolResult, ResearchTools, ToolSet, PlanningRecoveryTests, read_skills()
+Cohesion: 0.25
+Nodes (5): DistributionBucket, _display_value(), _finite_float(), _format_number(), _rate()
 
 ### Community 37 - "Community 37"
-Cohesion: 0.21
-Nodes (3): DeferredTask, group_remaining(), process_jobs()
+Cohesion: 0.20
+Nodes (6): _lazy_table(), file_hash(), SubmissionArtifact, snapshot_cycle_submission(), validate_submission_file(), CycleSubmissionTests
 
 ### Community 38 - "Community 38"
 Cohesion: 0.16
-Nodes (8): CodeBundle, HypothesisBatch, ValidationReport, ControlledLLM, broken_code(), RepairLLM, PlanClient, AlternativeFailure
+Nodes (7): finish(), PlanningRejections, generate(), RetryTests, planning_call(), generate(), generate()
 
 ### Community 39 - "Community 39"
-Cohesion: 0.17
-Nodes (14): FeatureEvidence, FeatureSession, complete_feature_session(), feature_session_key(), feature_task_view(), run_feature_session(), evaluate(), save() (+6 more)
+Cohesion: 0.20
+Nodes (4): NetworkCircuit, thinking_parameters(), NetworkPolicyTests, handler()
 
 ### Community 40 - "Community 40"
-Cohesion: 0.14
-Nodes (8): SourcePatch, SplitColumnStats, StrictModel, TaskAnalysisResult, __getattr__(), PreprocessingSpec, ResearchProposal, SkillManifest
+Cohesion: 0.16
+Nodes (6): Observation, ReconnaissanceReport, data_observations(), add(), ResearchTests, EvidenceContractTests
 
 ### Community 41 - "Community 41"
-Cohesion: 0.19
-Nodes (3): FidelityError, Candidate, LightGBMFitEvidenceTests
+Cohesion: 0.18
+Nodes (10): fingerprint(), install(), importing(), patch_loaded(), visit(), _patch(), captured(), _patch_lightgbm_updates() (+2 more)
 
 ### Community 42 - "Community 42"
-Cohesion: 0.18
-Nodes (5): request_messages(), NetworkCircuit, thinking_parameters(), NetworkPolicyTests, handler()
+Cohesion: 0.24
+Nodes (11): stopping_metric(), inspect_model(), diagnostics(), error_metrics(), evaluate(), metric_name(), prediction_kind(), score_predictions() (+3 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.20
-Nodes (9): AgentNarrative, reuse_assignment(), _validate(), FeatureExperimentPlan, FeatureProposal, PlannerContextDraft, RankedFinding, TaskDetail (+1 more)
+Cohesion: 0.40
+Nodes (4): completion(), TraceTests, handler(), handler()
 
 ### Community 44 - "Community 44"
-Cohesion: 0.17
-Nodes (7): comparable_scores(), relative_gain(), ResultReview, review_result(), failure_result(), ResearchTests, MetricsAndSplitTests
+Cohesion: 0.20
+Nodes (5): cases(), evidence(), gate(), main(), ReleaseGateTests
 
 ### Community 45 - "Community 45"
 Cohesion: 0.16
-Nodes (7): select_feature_baseline(), EvaluationResult, SplitSpec, SessionAccountingTests, run(), renamed(), run()
-
-### Community 46 - "Community 46"
-Cohesion: 0.20
-Nodes (5): ScoutingTests, generate(), generate(), generate(), generate()
+Nodes (5): default_space(), interrupt_search(), dumps(), plain(), report()
 
 ### Community 48 - "Community 48"
-Cohesion: 0.29
-Nodes (4): DistributionBucket, _display_value(), _finite_float(), _rate()
+Cohesion: 0.25
+Nodes (8): traced_node(), bind(), current_context(), current_sink(), span(), generate(), validate_selection(), worker()
 
 ### Community 49 - "Community 49"
-Cohesion: 0.20
-Nodes (6): cases(), evidence(), gate(), main(), package_info(), ReleaseGateTests
+Cohesion: 0.19
+Nodes (4): TaskType, MLToolSpec, SkillManifest, capability_matrix()
 
 ### Community 50 - "Community 50"
-Cohesion: 0.19
-Nodes (10): fingerprint(), install(), importing(), patch_loaded(), visit(), _patch(), captured(), _patch_lightgbm_updates() (+2 more)
+Cohesion: 0.23
+Nodes (4): FeatureSpec, FeatureAugmentingPreprocessor, definition(), FeatureDSLTests
+
+### Community 51 - "Community 51"
+Cohesion: 0.25
+Nodes (3): metric_capabilities(), ReconnaissanceSession, collect()
 
 ### Community 52 - "Community 52"
-Cohesion: 0.23
-Nodes (10): inside(), resolve_inputs(), find(), case_config(), digest(), main(), select_real_settings(), verify_observation_handoff() (+2 more)
+Cohesion: 0.26
+Nodes (6): handler(), handler(), handler(), handler(), response(), tool_call()
 
 ### Community 53 - "Community 53"
-Cohesion: 0.20
-Nodes (6): PlanningRejections, generate(), RetryTests, planning_call(), generate(), generate()
-
-### Community 55 - "Community 55"
-Cohesion: 0.19
-Nodes (5): compact_planning_payload(), observation_index(), paged_evidence(), hpo_child(), Intervention
-
-### Community 56 - "Community 56"
 Cohesion: 0.28
 Nodes (3): size(), _plain(), TraceSink
 
-### Community 58 - "Community 58"
-Cohesion: 0.32
-Nodes (7): RealFailureRegressions, handler(), handler(), handler(), handler(), response(), tool_call()
+### Community 54 - "Community 54"
+Cohesion: 0.18
+Nodes (3): Base, MeanPreprocessor, Stack
 
 ### Community 59 - "Community 59"
-Cohesion: 0.29
-Nodes (5): BudgetSnapshot, installed_tools(), InvariantTests, NativeValidationTests, tools()
-
-### Community 60 - "Community 60"
-Cohesion: 0.25
-Nodes (3): commit_mailbox(), external_stop(), main()
+Cohesion: 0.27
+Nodes (4): compact_diagnostics(), champion_snapshot(), evaluation_summary(), plan_summary()
 
 ### Community 62 - "Community 62"
-Cohesion: 0.27
-Nodes (5): compact_diagnostics(), champion_snapshot(), evaluation_summary(), experiment_summary(), plan_summary()
+Cohesion: 0.29
+Nodes (5): complete_feature_session(), feature_session_key(), select_feature_baseline(), feature_branch(), internal_winner()
+
+### Community 63 - "Community 63"
+Cohesion: 0.32
+Nodes (3): runtime_versions(), worker_runtime(), WorkerRuntimeTests
 
 ### Community 64 - "Community 64"
-Cohesion: 0.22
-Nodes (3): FeatureClient, native_source(), NativeStarterClient
+Cohesion: 0.25
+Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
+
+### Community 65 - "Community 65"
+Cohesion: 0.25
+Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
 
 ### Community 66 - "Community 66"
 Cohesion: 0.25
@@ -514,41 +510,29 @@ Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
 Cohesion: 0.25
 Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
 
-### Community 97 - "Community 97"
-Cohesion: 0.25
-Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
-
-### Community 98 - "Community 98"
-Cohesion: 0.25
-Nodes (7): dependencies, ml_tools, skill_id, status, task_types, title, version
-
-### Community 101 - "Community 101"
+### Community 100 - "Community 100"
 Cohesion: 0.38
-Nodes (4): _component_objects(), fitted_components(), inspect_component(), _json_params()
-
-### Community 106 - "Community 106"
-Cohesion: 0.60
-Nodes (3): current_context(), generate(), load()
+Nodes (3): compact_planning_payload(), observation_index(), paged_evidence()
 
 ## Knowledge Gaps
 - **1 isolated node(s):** `mlmom`
-  These have ≤1 connection - possible missing edges. (Counts symbols only; 608 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **16 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges. (Counts symbols only; 614 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **21 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `DataInspector` connect `Community 6` to `Community 2`, `Community 36`, `Community 4`, `Community 7`, `Community 40`, `Community 10`, `Community 13`, `Community 46`, `Community 48`, `Community 18`, `Community 22`, `Community 24`, `Community 27`, `Community 30`?**
-  _High betweenness centrality (0.061) - this node is a cross-community bridge._
+- **Why does `Pipeline` connect `Community 4` to `Community 1`, `Community 2`, `Community 3`, `Community 6`, `Community 7`, `Community 8`, `Community 10`, `Community 11`, `Community 12`, `Community 13`, `Community 14`, `Community 15`, `Community 16`, `Community 17`, `Community 18`, `Community 20`, `Community 21`, `Community 23`, `Community 25`, `Community 28`, `Community 29`, `Community 30`, `Community 31`, `Community 37`, `Community 38`, `Community 40`, `Community 42`, `Community 51`, `Community 53`, `Community 61`, `Community 63`, `Community 97`, `Community 98`, `Community 104`, `Community 108`?**
+  _High betweenness centrality (0.073) - this node is a cross-community bridge._
 - **Are the 58 inferred relationships involving `Pipeline` (e.g. with `LibraryCandidate` and `._fit_text()`) actually correct?**
   _`Pipeline` has 58 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `mlmom` to the rest of the system?**
   _1 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.06331976481230213 - nodes in this community are weakly interconnected._
-- **Why does `Pipeline` connect `Community 57` to `Community 0`, `Community 1`, `Community 2`, `Community 3`, `Community 4`, `Community 7`, `Community 9`, `Community 10`, `Community 11`, `Community 13`, `Community 14`, `Community 16`, `Community 17`, `Community 18`, `Community 19`, `Community 20`, `Community 21`, `Community 23`, `Community 24`, `Community 26`, `Community 27`, `Community 28`, `Community 30`, `Community 36`, `Community 37`, `Community 38`, `Community 39`, `Community 43`, `Community 44`, `Community 45`, `Community 46`, `Community 53`, `Community 56`, `Community 59`, `Community 60`, `Community 62`, `Community 63`, `Community 64`, `Community 65`, `Community 99`, `Community 100`?**
-  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+  _Cohesion score 0.06690140845070422 - nodes in this community are weakly interconnected._
+- **Why does `DataInspector` connect `Community 5` to `Community 1`, `Community 2`, `Community 36`, `Community 4`, `Community 105`, `Community 12`, `Community 14`, `Community 16`, `Community 49`, `Community 17`, `Community 20`, `Community 28`, `Community 30`?**
+  _High betweenness centrality (0.063) - this node is a cross-community bridge._
 - **Are the 37 inferred relationships involving `RunConfig` (e.g. with `Pipeline` and `Budget`) actually correct?**
   _`RunConfig` has 37 INFERRED edges - model-reasoned connections that need verification._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.05706214689265537 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.09045680687471733 - nodes in this community are weakly interconnected._

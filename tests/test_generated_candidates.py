@@ -1,12 +1,14 @@
 """Generated implementations receive references, own transforms and preserve HPO."""
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
-from mlmom.coding import build_coding_graph
+from mlmom.coding import build_coding_graph,remove_loader_type_guard
 from mlmom.pipeline_contracts import RunConfig,HypothesisPlan
 from mlmom.registry import SkillRegistry
 from mlmom.sdk import FitContext,load_module
@@ -19,6 +21,56 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 class GeneratedCandidateTests(unittest.TestCase):
+    def test_restored_by_value_class_loads_in_fresh_process_after_guard_removal(self):
+        source = '''from pathlib import Path
+import cloudpickle
+class Candidate:
+    def __init__(self, config):
+        if not isinstance(config, dict):
+            raise TypeError('configuration must be a dict')
+        self.value = config['value']
+    def predict(self, X, prediction_spec=None):
+        if not isinstance(X, list):
+            raise TypeError('input must be a list')
+        return [self.value for _ in X]
+    def save(self, directory):
+        Path(directory, 'candidate.pkl').write_bytes(cloudpickle.dumps(self))
+def create_candidate(config):
+    return Candidate(config)
+def load_candidate(directory):
+    candidate = cloudpickle.loads(Path(directory, 'candidate.pkl').read_bytes())
+    if not isinstance(candidate, Candidate):
+        raise TypeError('artifact does not contain a Candidate instance')
+    return candidate
+'''
+        probe = '''import json,sys
+from mlmom.sdk import load_module
+module=load_module(sys.argv[1])
+obj=module.load_candidate(sys.argv[2])
+assert obj.predict([1,2,3]) == [7,7,7]
+try: obj.predict((1,2))
+except TypeError: pass
+else: raise AssertionError('Unrelated input check was removed')
+try: module.Candidate('invalid')
+except TypeError: pass
+else: raise AssertionError('Unrelated configuration check was removed')
+print(json.dumps(obj.predict([1,2,3])))
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);code=root/'code';code.mkdir();artifact=root/'artifact';artifact.mkdir()
+            path=code/'candidate.py';path.write_text(source,encoding='utf-8')
+            load_module(code).create_candidate({'value':7}).save(artifact)
+            command=[sys.executable,'-X','utf8','-c',probe,str(code),str(artifact)]
+            failed=subprocess.run(command,cwd=ROOT,capture_output=True,text=True)
+            self.assertNotEqual(failed.returncode,0)
+            self.assertIn('artifact does not contain a Candidate instance',failed.stderr)
+            normalized,removed=remove_loader_type_guard(source)
+            self.assertEqual(removed,2)
+            path.write_text(normalized,encoding='utf-8')
+            passed=subprocess.run(command,cwd=ROOT,capture_output=True,text=True)
+            self.assertEqual(passed.returncode,0,passed.stderr)
+            self.assertEqual(json.loads(passed.stdout),[7,7,7])
+
     def test_selected_reference_is_coder_only_versioned_and_budgeted(self):
         registry=SkillRegistry(ROOT/'skills')
         brief=registry.load(['sklearn'],'regression')

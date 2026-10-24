@@ -4,6 +4,30 @@ description: Keep model selection inside supplied training data and form valid g
 ---
 # Internal validation
 
+## Review scope and execution ownership
+
+Review exactly the single executable plan supplied in plans. review_scope identifies
+its backend, family and siblings scheduled or already accepted by the runtime.
+Sibling plans are intentionally absent from this payload. Never reject one member
+because it does not also contain LightGBM, CatBoost or XGBoost siblings. The runtime
+expands families and checks the required backend identity and group membership.
+
+execution_contract declares trusted ownership. CPU/RAM allocation and worker admission
+belong to the runtime; the estimator coder obtains threads from FitContext.cpus and
+the machine execution gate verifies the fitted model. Do not require n_jobs,
+num_threads or thread_count in model_params/search_space: their absence is expected.
+Explicit conflicting resource overrides remain defects, checked by Python.
+preprocessing_agent owns X transforms, coding_agent owns the estimator, and the SDK
+owns target/weight/prediction policies. Compare executable policy fields with the
+current assignment; parent-hypothesis prose is historical intent, not an override.
+
+Review feasibility and leakage of the declared experiment, not possible redesigns.
+A cheap baseline need not exhaust every feature-engineering technique. Circular
+encoding, rare-category pooling and missing indicators are optional experiments
+unless supplied evidence demonstrates a concrete failure of the chosen recipe.
+Prefer at most three distinct, actionable warnings, tied to plan fields and evidence.
+Do not limit actual blocking issues or replace missing evidence with speculation.
+
 Machine checks own formal backend/skill/protocol compatibility. For a blocking semantic
 issue return rule_id, field, reason and an exact source_quote from that plan field in issues.
 Use task_contract for canonical task contradictions and holdout_training for explicit use

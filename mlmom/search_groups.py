@@ -65,10 +65,20 @@ def expand_families(hypotheses, tools, task_type, mode='all'):
     return expanded, metadata, skipped
 
 
+def normalize_single_group(plan):
+    """A standalone hypothesis owns its group; historical lineage remains separate."""
+    if plan.search_group_kind != 'single' or plan.search_group_id in {None, plan.hypothesis.hypothesis_id}:
+        return plan
+    notes = dict(plan.agent_notes)
+    notes.setdefault('requested_search_group_id', plan.search_group_id)
+    return plan.model_copy(update=dict(search_group_id=plan.hypothesis.hypothesis_id, agent_notes=notes))
+
+
 def collect_groups(plans, skipped=()):
     groups = {}
     for value in plans:
         plan = value if isinstance(value, HypothesisPlan) else HypothesisPlan.model_validate(value)
+        plan = normalize_single_group(plan)
         key = plan.search_group_id or plan.hypothesis.hypothesis_id
         if key not in groups:
             groups[key] = SearchGroupPlan(hypothesis=(plan.parent_hypothesis or plan.hypothesis)
