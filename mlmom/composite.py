@@ -42,7 +42,7 @@ class FrozenEnsemble:
         return load_module(directory), config
 
     def _fit_base(self, source, X, y, context, *, indices=None, tag='full', final=False):
-        from .execution import audit_fit
+        from .execution import export_params
         from .execution_resources import execution_config
         module, config = self._base(source)
         model = module.create_candidate(execution_config(config, context.cpus))
@@ -55,10 +55,8 @@ class FrozenEnsemble:
             work_dir=str(Path(context.work_dir)/source['name']/tag))
         Path(c.work_dir).mkdir(parents=True, exist_ok=True)
         model.fit(X, y, c)
-        report = audit_fit(model, config['model_params'], config, c,
-            Path(c.work_dir)/'execution.json', stage=context.stage)
         if final:
-            self.params[source['name']] = report['exported_params']
+            self.params[source['name']] = export_params(model, config['model_params'])
         return model
 
     def _prediction(self, model, X):
@@ -106,7 +104,6 @@ class FrozenEnsemble:
 
     def fit(self, X, y, context):
         from .search_groups import SUPERVISED
-        from .fit_provenance import capture
         from .model_spec import model_spec
         if context.task_type not in SUPERVISED:
             raise ValueError('Automatic ensembles require a supported regression/classification task')
@@ -147,13 +144,11 @@ class FrozenEnsemble:
                     for j in range(np.asarray(y).shape[1]):
                         meta = LogisticRegression(max_iter=1000, random_state=context.seed)
                         target = np.asarray(y)[:, j]
-                        with capture(context, self.config, target, context.sample_weight):
-                            meta.fit(matrix, target, sample_weight=context.sample_weight)
+                        meta.fit(matrix, target, sample_weight=context.sample_weight)
                         self.meta.append(meta)
                 else:
                     self.meta = LogisticRegression(max_iter=1000, random_state=context.seed) if self.classification else Ridge()
-                    with capture(context, self.config, y, context.sample_weight):
-                        self.meta.fit(matrix, y, sample_weight=context.sample_weight)
+                    self.meta.fit(matrix, y, sample_weight=context.sample_weight)
         self.models = {s['name']:self._fit_base(s, X, y, context, tag='refit', final=True) for s in self.sources}
         self.source_specs = {s['name']:(self.models[s['name']].export_model_spec()
             if callable(getattr(self.models[s['name']],'export_model_spec',None)) else
@@ -200,13 +195,6 @@ class FrozenEnsemble:
             prediction = np.tensordot(self.weights,np.asarray(values),axes=1)
         return self._labels(prediction) if self.classification and prediction_spec['kind']=='label' else prediction
 
-    def fitted_components(self):
-        result = dict(self.models)
-        if isinstance(self.meta,list):
-            result.update({f'meta_target_{i}':m for i,m in enumerate(self.meta)})
-        elif self.meta is not None:
-            result['meta'] = self.meta
-        return result
 
     def export_model_params(self):
         return dict(copy.deepcopy(self.params), __source_specs=copy.deepcopy(self.source_specs))

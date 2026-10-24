@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from mlmom.execution import require_admitted
 from mlmom.inputs import read_table, features, targets
 from mlmom.persistence import atomic_json, file_hash, tree_hash
 from mlmom.pipeline_contracts import CandidateVersion, ExperimentRun, RunConfig, TaskContext
@@ -55,7 +54,7 @@ def main():
                        reserve_cpus=4, reserve_memory_gb=2, max_workers=1)
     budget = Budget(config, time.time())
     report = dict(status='running', source=str(source), split_id=split['split_id'],
-        runtime_hashes={p.name:file_hash(p) for p in [ROOT/'mlmom/execution.py', ROOT/'mlmom/fit_provenance.py']},
+        runtime_hashes={p.name:file_hash(p) for p in [ROOT/'mlmom/execution.py']},
         inputs={p.name:file_hash(p) for p in task.iterdir()}, candidates=[])
     atomic_json(output/'report.json', report)
 
@@ -83,7 +82,6 @@ def main():
                 fixed=final, phase='final' if final else 'initial'), output/'runs'/identity)
             run = ExperimentRun.model_validate(dict(initial.model_dump(mode='json'),
                 **{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
-            require_admitted(run, candidate)
             return run
 
         def predict(candidate, run, frame, directory):
@@ -117,8 +115,7 @@ def main():
                 smoke_request.update(action='smoke', code_dir=str(code), code_hash=candidate.code_hash)
                 smoke = worker(smoke_request, output/'checks'/name, 90)
                 candidate.verification = source_verification
-                candidate.execution_report = smoke['execution_report']
-                candidate.execution_report_ref = smoke['execution_report_ref']
+                candidate.execution_report = candidate.execution_report_ref = None
                 trained = fitted(plan, candidate, name, run_source/'splits'/'r1'/'train.csv')
                 predicted = predict(candidate, trained, holdout, output/'holdout_predictions'/name)
                 from sklearn.metrics import accuracy_score, f1_score

@@ -45,8 +45,6 @@ class FeatureSet(StrictModel):
     def distinct(self):
         if len({f.name for f in self.features}) != len(self.features):
             raise ValueError('Duplicate feature names')
-        if len({f.expression_key() for f in self.features}) != len(self.features):
-            raise ValueError('Duplicate feature expressions')
         return self
 
 

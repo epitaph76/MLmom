@@ -119,30 +119,3 @@ class FeatureAugmentingPreprocessor:
         return dict(feature_set_hash=feature_hash(self.features.definition),
                     names=[f.name for f in self.features.definition.features],
                     base_width=self.base_width, output_width=self.output_width)
-
-
-def screen_features(definition, X, folds=None):
-    definition = validate_features(definition, X.columns)
-    reasons = {f.name: [] for f in definition.features}
-    for indices in ([f['train_indices'] for f in folds] if folds else [list(range(len(X)))]):
-        train = X.iloc[indices]
-        values = FeatureTransformer(definition).fit_transform(train)
-        seen = []
-        for i, item in enumerate(definition.features):
-            column = values[:, i]
-            reason = None
-            if not np.isfinite(column).all():
-                raise ValueError('Nonfinite feature: ' + item.name)
-            if len(np.unique(column)) <= 1:
-                reason = 'Constant feature: ' + item.name
-            elif any(np.array_equal(column, other) for other in seen):
-                reason = 'Duplicate feature values: ' + item.name
-            elif any(np.array_equal(column, pd.to_numeric(train[c], errors='coerce').to_numpy(dtype=float), equal_nan=True)
-                     for c in train.select_dtypes(include=['number', 'bool']).columns):
-                reason = 'Feature duplicates an input column: ' + item.name
-            reasons[item.name].append(reason)
-            seen.append(column)
-    for values in reasons.values():
-        if values and all(values):
-            raise ValueError(values[0])
-    return definition

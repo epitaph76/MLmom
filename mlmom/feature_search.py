@@ -38,14 +38,13 @@ def session_object_key(session_id, identity):
 
 
 def select_feature_baseline(pipeline, champion, trained, round_number):
-    """Use the champion, or a verified single source if an ensemble is leading."""
+    """Use the champion, or a saved single source if an ensemble is leading."""
     from types import SimpleNamespace
     from .search_groups import internal_winner, component_pool
 
     def eligible(row):
         plan, run, candidate = row['plan'], row['run'], row['candidate']
         return (not plan.get('ensemble_components') and not plan.get('ensemble_sources') and
-                plan['tool_id'] not in {'flaml', 'autogluon', 'lightautoml'} and run.get('model_spec') and
                 (Path(candidate['code_dir']) / 'preprocessing.py').is_file())
 
     if eligible(champion.model_dump(mode='json')):
@@ -140,58 +139,20 @@ def fixed_model_hash(spec):
     return config_hash({k: v for k, v in spec.items() if k != 'feature_set_hash'})
 
 
-def verified_scores(result, protocol, expected_model_hash):
-    if result.get('status') != 'completed' or not result.get('full_refit'):
-        raise ValueError('Incomplete feature evaluation/refit')
-    if result.get('validation_scope') != 'feature' or result.get('score_kind') != 'feature_inner_cv_mean':
-        raise ValueError('Feature metric has the wrong evaluation scope')
-    if fixed_model_hash(result.get('model_spec') or {}) != expected_model_hash:
-        raise ValueError('Feature comparison changed the frozen model or policies')
-    report = result.get('execution_report') or {}
-    if report.get('status') != 'passed' or report.get('errors'):
-        raise ValueError('Feature comparison has no passed execution gate')
-    saved = json.loads(Path(result['validation_protocol_ref']).read_text(encoding='utf-8'))
-    if saved != protocol:
-        raise ValueError('Feature comparison changed fold indices')
-    folds = result.get('fold_results', [])
-    if len(folds) != protocol['n_splits'] or [f['number'] for f in folds] != list(range(protocol['n_splits'])):
-        raise ValueError('Feature comparison has incomplete folds')
-    if any(f.get('status') != 'completed' or f.get('execution_status') != 'passed' for f in folds):
-        raise ValueError('Feature comparison has failed folds')
-    scores = np.asarray([f['score'] for f in folds], dtype=float)
-    if not np.isfinite(scores).all() or not np.isclose(result['internal_score'], scores.mean(), rtol=1e-12, atol=1e-12):
-        raise ValueError('Feature comparison has inconsistent metrics')
-    oof = json.loads(Path(result['oof_ref']).read_text(encoding='utf-8'))
-    expected = sorted(i for f in protocol['folds'] for i in f['validation_indices'])
-    expected_source = sorted(i for f in protocol['folds'] for i in f['source_validation_indices'])
-    if oof['indices'] != expected or sorted(oof['source_indices']) != expected_source or len(oof['predictions']) != len(expected):
-        raise ValueError('Feature comparison has incomplete OOF coverage')
-    return scores
-
-
 def paired_evidence(candidate, reference, protocol, expected_model_hash, direction, min_delta=0):
-    left = verified_scores(candidate, protocol, expected_model_hash)
-    right = verified_scores(reference, protocol, expected_model_hash)
-    from .execution import _leaves
-    def actual_configuration(fold):
-        report=json.loads(Path(fold['execution_report_ref']).read_text(encoding='utf-8'))
-        observed={}
-        for name,component in _leaves(report['components']):
-            entry=component.get('fit_entry')
-            if not entry or not entry.get('component_type'):
-                raise ValueError('Missing actual feature-reference estimator configuration')
-            observed[name]=dict(component_type=entry['component_type'],params=entry['params'])
-        return observed
-    for current,control in zip(candidate['fold_results'],reference['fold_results']):
-        if actual_configuration(current) != actual_configuration(control):
-            raise ValueError('Feature comparison changed actual estimator class or constructor parameters')
-    deltas = (left - right) * (1 if direction == 'maximize' else -1)
-    if not np.isfinite(deltas).all():
-        raise ValueError('Nonfinite feature comparison delta')
-    mean = float(deltas.mean())
-    stable = int((deltas > 0).sum()) >= math.ceil(2 * len(deltas) / 3)
-    status = 'accepted' if mean > min_delta and stable else 'quarantine' if mean > min_delta else 'rejected'
-    return status, mean, deltas.tolist()
+    """Compare measured internal means; fold deltas are diagnostics only."""
+    def score(result):
+        if result.get('status') != 'completed':
+            raise ValueError(result.get('error') or 'Feature evaluation failed')
+        value = float(result['internal_score'])
+        if not math.isfinite(value):
+            raise ValueError('Nonfinite feature metric')
+        return value
+    sign = 1 if direction == 'maximize' else -1
+    mean = (score(candidate)-score(reference))*sign
+    deltas = [(float(a['score'])-float(b['score']))*sign
+              for a,b in zip(candidate.get('fold_results', []), reference.get('fold_results', []))]
+    return ('accepted' if mean > min_delta else 'rejected'), mean, deltas
 
 
 def run_feature_session(pipeline, baseline, split, train_path):
@@ -221,20 +182,12 @@ def run_feature_session(pipeline, baseline, split, train_path):
     train_hash = file_hash(Path(train_path))
     protocol = {}
     try:
-        if context.task.task_type not in {'regression', 'binary_classification', 'multiclass_classification'}:
-            raise ValueError('Task is outside feature DSL v1')
-        if plan.ensemble_components or plan.ensemble_sources or plan.tool_id in {'flaml', 'autogluon', 'lightautoml'}:
-            raise ValueError('Feature search requires a single ordinary baseline')
-        if not spec:
-            raise ValueError('Feature search requires a verified baseline')
         if not (Path(baseline.candidate.code_dir) / 'preprocessing.py').is_file():
             raise ValueError('Feature search requires separate preprocessing.py')
         frame = p.frame.iloc[split.train_indices]
         protocol = inner_protocol(frame, feature_context(context, p.config.feature_holdout_folds),
             fraction=p.config.inner_fraction, seed=split.seed + 1, outer_split_id=split.split_id,
             source_indices=split.train_indices)
-        if protocol['n_splits'] < 2:
-            raise ValueError('Feature stability requires multiple folds')
     except ValueError as error:
         session = FeatureSession(session_id=session_id, round_id=round_id,
             baseline_candidate_id=baseline.candidate.candidate_id, model_hash=model_hash,
@@ -319,7 +272,8 @@ def run_feature_session(pipeline, baseline, split, train_path):
         if p.budget.snapshot().research_seconds < 1:
             raise ValueError('No feature evaluation budget remains')
         reference = evaluate('reference', plan)
-        verified_scores(reference, protocol, model_hash)
+        if reference.get('status') != 'completed':
+            raise ValueError(reference.get('error') or 'Feature reference failed')
     except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error:
@@ -437,9 +391,6 @@ def run_feature_session(pipeline, baseline, split, train_path):
                         'These are internal train-only experiments, with no external evidence.', payload,
                         FeatureExperimentPlan).model_dump(mode='json')
                 assignment = FeatureExperimentPlan.model_validate(assignment)
-                if (assignment.feature_set_id != definition.feature_set_id or
-                        assignment.reference_feature_set_id != pending['parent_feature_set_id']):
-                    raise ValueError('Feature Planner changed the paired assignment')
                 assignment = assignment.model_dump(mode='json')
                 p.store.put('feature_experiment_plan', evidence_key, assignment, immutable=True)
             result = evaluate(definition.feature_set_id, candidate_plan)
@@ -449,7 +400,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                 context.task.metric_direction, p.config.feature_min_delta)
             if status == 'accepted' and baseline_status != 'accepted':
                 status = baseline_status
-            reason = 'Paired fold evidence: ' + status
+            reason = 'Measured internal mean: ' + status
         except (GlobalAPIError, WorkerInfrastructureError):
             raise
         except Exception as error:
@@ -473,16 +424,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
 
     if session.best_feature_set_id == session.baseline_feature_set_id:
         session.status = 'completed'
-        session.reason = session.reason or 'No stable inner improvement'
-        save()
-        return None
-    try:
-        status,_,_=paired_evidence(session.best_result,reference,protocol,model_hash,
-                                  context.task.metric_direction,p.config.feature_min_delta)
-        if status != 'accepted':
-            raise ValueError('Final set is not stable against the original baseline')
-    except (ValueError,KeyError,OSError) as error:
-        session.status,session.reason='completed',str(error)
+        session.reason = session.reason or 'No inner improvement'
         save()
         return None
     definition = FeatureSet.model_validate(p.store.get('feature_set', session.best_feature_set_id))
@@ -494,39 +436,12 @@ def run_feature_session(pipeline, baseline, split, train_path):
         changed_fields=['feature_set'], operations=[f.expression_key() for f in definition.features])
     plan_ref = p.run_dir / 'plans' / (round_id + '-' + definition.feature_set_id + '.json')
     atomic_json(plan_ref, winner_plan)
-    # Same immutable estimator/preprocessing source, a separately verified assignment.
+    # Same immutable estimator/preprocessing source, a new feature assignment.
     candidate = baseline.candidate.model_copy(deep=True)
     candidate.candidate_id = round_id + '-' + definition.feature_set_id
     candidate.hypothesis_id, candidate.plan_ref = definition.feature_set_id, str(plan_ref)
     candidate.based_on, candidate.feature_set_hash = baseline.candidate.candidate_id, feature_hash(definition)
-    smoke_path = directory / 'winner-smoke' / 'result.json'
-    if smoke_path.exists():
-        smoke = json.loads(smoke_path.read_text(encoding='utf-8'))
-    else:
-        schema = [dict(name=c, semantic_type='numeric' if pd.api.types.is_numeric_dtype(frame[c]) else
-                       'datetime' if pd.api.types.is_datetime64_any_dtype(frame[c]) else 'categorical')
-                  for c in context.feature_columns]
-        try:
-            smoke = p.sandbox.run(dict(action='smoke', code_dir=candidate.code_dir, code_hash=candidate.code_hash,
-                config=winner_plan.model_dump(mode='json'), task_type=context.task.task_type,
-                metric=context.task.primary_metric, prediction_kind=winner_plan.prediction_kind,
-                feature_schema=schema, classes=context.classes, target_columns=context.task.target_columns),
-                smoke_path.parent, seconds=min(p.config.smoke_seconds, p.budget.snapshot().research_seconds),
-                cpus=plan.cpus, memory_gb=plan.memory_gb)
-        except WorkerInfrastructureError:
-            raise
-        except Exception as error:
-            smoke=dict(status='failed',error=str(error))
-        atomic_json(smoke_path, smoke)
-    if smoke.get('status') != 'completed':
-        session.status, session.reason = 'completed', 'Feature winner failed portability smoke'
-        save()
-        return None
-    candidate.execution_report, candidate.execution_report_ref = smoke.get('execution_report'), smoke.get('execution_report_ref')
-    if (candidate.execution_report or {}).get('model_spec', {}).get('feature_set_hash') != candidate.feature_set_hash:
-        session.status, session.reason = 'completed', 'Feature winner smoke has mismatched provenance'
-        save()
-        return None
+    candidate.execution_report = candidate.execution_report_ref = None
     p.store.put('candidate', candidate.candidate_id, candidate, immutable=True)
     p.store.put('plan', plan_ref.stem, winner_plan, immutable=True)
     preprocessing = p.store.get('preprocessing', Path(baseline.candidate.plan_ref).stem)

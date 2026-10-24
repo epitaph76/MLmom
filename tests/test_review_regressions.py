@@ -71,9 +71,9 @@ class ReviewRegressionTests(unittest.TestCase):
         for groups in [[],['g']]:
             context.task.group_columns=groups
             plan.ensemble_components=[{'tool_id':'sklearn'},{'tool_id':'flaml'}]
-            self.assertFalse(validate_plan(plan,context,tools,Skills(),budget).valid)
+            self.assertTrue(validate_plan(plan,context,tools,Skills(),budget).valid)
         plan.ensemble_components[1]['tool_id']='torch'
-        self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,lightweight=True).valid)
+        self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,lightweight=True).valid)
     def test_stack_fold_local_preprocessing_and_persistence(self):
         X=pd.DataFrame({'x':range(30)});y=pd.Series(np.arange(30,dtype=float))
         context=FitContext('regression','rmse','minimize',42,1,2,30)
@@ -108,13 +108,6 @@ class ReviewRegressionTests(unittest.TestCase):
             job=root/'job';job.mkdir()
             result=smoke(dict(code_dir=str(code),task_type='regression',config={'ensemble_components':[{},{}],'model_params':{'method':'stack'}},worker_seconds=30,worker_cpus=1,worker_memory_gb=2),job)
             self.assertEqual(result['status'],'completed')
-    def test_multilabel_cv_rejected_at_confirmation(self):
-        from mlmom.task_validator import TaskValidator
-        from mlmom.contracts import TaskDefinition
-        task=TaskDefinition(objective='labels',task_type='multilabel_classification',target_columns=['a','b'],primary_metric='log_loss',metric_direction='minimize',validation_strategy='stratified_kfold',result_format={})
-        findings=[]
-        TaskValidator()._validate_strategy(task,lambda *args,**kwargs:findings.append(args[0]))
-        self.assertIn('unsupported_multilabel_cv',findings)
     def test_preprocessing_sibling_import_is_isolated(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

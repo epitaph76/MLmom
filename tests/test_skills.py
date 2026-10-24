@@ -23,9 +23,8 @@ class SkillTests(unittest.TestCase):
         ids = ['xgboost', 'lightgbm', 'catboost', 'ensembles', 'categorical_encoding',
                'missing_values', 'numeric_transforms', 'preprocessing_core']
         with patch('mlmom.registry.importlib.metadata.version', return_value='test'):
-            # Reproduce the erroneous administrative prompt, without raising its cap.
-            with self.assertRaisesRegex(ValueError, 'context budget'):
-                registry.load(ids, 'regression')
+            # Metadata validation does not construct another role's prompt.
+            self.assertTrue(registry.load(ids, 'regression'))
             with patch.object(Path, 'read_text', side_effect=AssertionError('Prompt text was read')):
                 selected = registry.validate_selection(ids, 'regression')
             self.assertEqual([m.skill_id for m in selected], ids)
@@ -42,18 +41,15 @@ class SkillTests(unittest.TestCase):
                 self.assertLessEqual(sum(len(card['content']) for card in cards), 48000)
                 self.assertTrue(all(registry.allowed(card['skill_id'], role) for card in cards))
 
-    def test_metadata_validation_keeps_id_task_dependency_and_role_checks(self):
-        registry = SkillRegistry(ROOT)
-        with self.assertRaisesRegex(ValueError, 'Unknown skill'):
-            registry.validate_selection(['missing_skill'], 'regression')
-        with self.assertRaisesRegex(ValueError, 'incompatible'):
-            registry.validate_selection(['statsmodels'], 'multiclass_classification')
-        with self.assertRaisesRegex(ValueError, 'not available'):
-            registry.validate_selection(['planner'], 'regression', role='coding_agent')
-        with patch('mlmom.registry.importlib.metadata.version',
-                   side_effect=importlib.metadata.PackageNotFoundError('flaml')):
-            with self.assertRaises(importlib.metadata.PackageNotFoundError):
-                registry.validate_selection(['flaml'], 'regression')
+    def test_metadata_validation_keeps_id_and_role_boundaries(self):
+        registry=SkillRegistry(ROOT)
+        with self.assertRaisesRegex(ValueError,'Unknown skill'):
+            registry.validate_selection(['missing_skill'],'regression')
+        with self.assertRaisesRegex(ValueError,'not available'):
+            registry.validate_selection(['planner'],'regression',role='coding_agent')
+        self.assertEqual(registry.validate_selection(['statsmodels'],'multiclass_classification')[0].skill_id,'statsmodels')
+        with patch('mlmom.registry.importlib.metadata.version',side_effect=importlib.metadata.PackageNotFoundError('flaml')):
+            self.assertEqual(registry.validate_selection(['flaml'],'regression')[0].skill_id,'flaml')
 
     def test_core_contract_is_automatic_ordered_and_deduplicated(self):
         registry = SkillRegistry(ROOT)
@@ -113,18 +109,14 @@ class SkillTests(unittest.TestCase):
                 self.assertEqual(metadata['name'], key.replace('_', '-'))
                 self.assertTrue(metadata['description'])
 
-    def test_incompatible_unknown_and_missing_dependency_rejected(self):
-        registry = SkillRegistry(ROOT)
-        for ids, task in [(['statsmodels'], 'multiclass_classification'),
-                          (['imbalance'], 'clustering'), (['ensembles'], 'ranking')]:
-            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'incompatible'):
-                registry.load(ids, task)
-        with self.assertRaisesRegex(ValueError, 'Unknown skill'):
-            registry.load(['missing_skill'], 'regression')
-        with patch('mlmom.registry.importlib.metadata.version',
-                   side_effect=importlib.metadata.PackageNotFoundError('flaml')):
-            with self.assertRaises(importlib.metadata.PackageNotFoundError):
-                registry.load(['flaml'], 'regression')
+    def test_skill_loading_does_not_enforce_task_or_dependency_tables(self):
+        registry=SkillRegistry(ROOT)
+        for ids,task in [(['statsmodels'],'multiclass_classification'),(['imbalance'],'clustering'),(['ensembles'],'ranking')]:
+            self.assertTrue(registry.load(ids,task))
+        with self.assertRaisesRegex(ValueError,'Unknown skill'):
+            registry.load(['missing_skill'],'regression')
+        with patch('mlmom.registry.importlib.metadata.version',side_effect=importlib.metadata.PackageNotFoundError('flaml')):
+            self.assertTrue(registry.load(['flaml'],'regression'))
 
     def test_technique_catalog_exposes_compatible_metadata_without_role_instructions(self):
         registry = SkillRegistry(ROOT)

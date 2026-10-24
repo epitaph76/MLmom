@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from mlmom.execution import audit_fit, complete_export, config_hash, FidelityError
+from mlmom.execution import export_params, config_hash
 from mlmom.execution_resources import execution_config, model_parameters
 from mlmom.model_spec import ModelSpec, model_spec, with_spec
 from mlmom.persistence import tree_hash
@@ -74,50 +74,18 @@ class ExecutionResourceTests(unittest.TestCase):
                         plan=plan.model_dump(mode='json'), code_dir=str(code), code_hash=tree_hash(code),
                         train_path=str(root / 'train.csv'), worker_seconds=60, worker_cpus=cpus,
                         worker_memory_gb=2, timeouts_enabled=False, fixed=True, phase='submission'), output)
-                    report = result['execution_report']
-                    reports.append(report)
+                    reports.append(result['model_spec'])
                     self.assertEqual(result['status'], 'completed')
-                    self.assertEqual(report['status'], 'passed')
+                    self.assertIsNone(result.get('execution_report'))
                     key = 'thread_count' if backend == 'catboost' else 'n_jobs'
-                    self.assertEqual(report['execution_resources']['declared_threads'], {key: 2})
-                    self.assertEqual(report['execution_resources']['exported_threads'], {key: cpus})
-                    actual = report['components']['model']
-                    self.assertEqual(actual['fit_entry']['params'][key], cpus)
-                    self.assertEqual(actual['fit_entry']['rows'], len(frame))
-                    self.assertNotIn(key, report['model_spec']['backend_params'])
+                    self.assertEqual(result['best_params'][key], cpus)
+                    self.assertNotIn(key, result['model_spec']['backend_params'])
                     loaded = load_module(code).load_candidate(result['model_artifact'])
                     prediction = loaded.predict(frame[context.feature_columns], {'kind': 'value'})
                     self.assertEqual(len(prediction), len(frame))
                     self.assertTrue(np.isfinite(prediction).all())
-                self.assertEqual(reports[0]['configuration_hash'], reports[1]['configuration_hash'])
-                self.assertEqual(reports[0]['model_spec'], reports[1]['model_spec'])
+                self.assertEqual(reports[0], reports[1])
 
-    def test_thread_exemption_does_not_hide_learning_changes_or_cpu_overruns(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            frame, task, _, _ = execution_case(root, 'regression', 'xgboost')
-            code = root / 'resource-code'
-            code.mkdir()
-            (code / 'candidate.py').write_text(SOURCE, encoding='utf-8')
-            config = dict(contract_version=2, tool_id='xgboost', model_params=PARAMETERS['xgboost'])
-            context = FitContext('regression', 'rmse', 'minimize', 42, 6, 2, 60,
-                                 timeouts_enabled=False, fit_rows=len(frame))
-            model = load_module(code).create_candidate(execution_config(config, 6))
-            model.fit(frame[task.feature_columns], frame[task.task.target_columns[0]], context)
-            for key, value in [('max_depth', 3), ('learning_rate', .2), ('random_state', 43),
-                               ('n_estimators', 12)]:
-                requested = dict(config['model_params'], **{key: value})
-                with self.subTest(key=key), self.assertRaisesRegex(FidelityError, key):
-                    audit_fit(model, requested, config, context, root / f'{key}.json', stage='full_refit')
-            with self.assertRaisesRegex(FidelityError, 'CPU allocation'):
-                audit_fit(model, config['model_params'], config, replace(context, cpus=2),
-                          root / 'over-budget.json', stage='full_refit')
-            # Fit-entry evidence still wins over a post-fit attempt to disguise the thread count.
-            model.estimator.model.set_params(n_jobs=2)
-            model.estimator.config['model_params']['n_jobs'] = 2
-            with self.assertRaisesRegex(FidelityError, 'CPU allocation'):
-                audit_fit(model, config['model_params'], config, replace(context, cpus=2),
-                          root / 'spoofed-budget.json', stage='full_refit')
 
     def test_nested_aliases_rebind_without_changing_device_seed_or_model_parameters(self):
         params = dict(left=dict(n_jobs=2, nthread=2, max_depth=4),
@@ -150,8 +118,8 @@ class ExecutionResourceTests(unittest.TestCase):
         self.assertEqual(ModelSpec.model_validate(dict(first, backend_params=params)).model_dump(), first)
         for value in [-1, 0, 7, True]:
             export = SimpleNamespace(export_model_params=lambda: dict(n_jobs=value))
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'CPU allocation'):
-                complete_export(export, {'n_jobs': 2}, cpus=6)
+            with self.subTest(value=value):
+                export_params(export, {'n_jobs': 2})
         self.assertEqual(model_parameters(params), first['backend_params'])
 
 

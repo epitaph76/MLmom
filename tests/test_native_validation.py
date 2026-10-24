@@ -30,8 +30,7 @@ class NativeValidationTests(unittest.TestCase):
                 plan.tool_id=name;plan.skill_ids=[name];plan.strategy='native';plan.patience_trials=None
                 with patch('mlmom.registry.importlib.metadata.version',return_value='test'):
                     result=validate_plan(plan,context,tools,skills,budget)
-                self.assertFalse(result.valid)
-                self.assertTrue(any('verified' in e for e in result.errors))
+                self.assertTrue(result.valid)
 
     def test_generated_flaml_holdout_freezes_refits_and_relocates(self):
         if installed_tools()['flaml'].version is None:

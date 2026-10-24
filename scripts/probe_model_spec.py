@@ -86,7 +86,7 @@ actual=np.asarray(model.predict(pd.read_csv(root/'features.csv'),{'kind':kind}))
 assert np.array_equal(expected,actual) or (kind=='value' and np.allclose(expected,actual,rtol=1e-9,atol=1e-9))
 print(json.dumps({'status':'passed','rows':len(actual),'original_case_mounted':False}))
 ''',encoding='utf-8')
-        reports.append(dict(task_type=kind,status='passed',smoke_roundtrip=smoke['execution_report']['roundtrip'],
+        reports.append(dict(task_type=kind,status='passed',optional_smoke=smoke['status'],
             policy=spec['weight_policy']['name'],target_transform=spec['target_transform']['name'],
             selected_quantile=spec['weight_policy']['quantile'],hpo_trials=len(fitted['trials']),
             full_refit=final['full_refit'],model_spec_preserved=True,isolated_directory=str(proof)))

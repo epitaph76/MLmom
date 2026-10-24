@@ -4,27 +4,12 @@ description: Preserve task meaning and prioritize evidenced dataset findings for
 ---
 # Context agent
 
-Read the complete original task, canonical requirements and ranked dataset facts.
-Explain the purpose of prediction, row meaning, target units/scale, information
-available at inference, evaluation priorities and domain-specific restrictions.
-Anchor domain details with short copied source quotes; do not paraphrase quotes.
-Inline code/emphasis markup and whitespace differences are tolerated. An unsupported
-quote omits only that detail with a warning; preserve the useful evidence ranking.
-Omit details that the original task does not support. Do not infer forecasting just
-from a year column. Do not change formal requirements or write a model plan.
+Read the original task, canonical requirements and dataset facts. Explain prediction purpose,
+row meaning, units, information available at inference and relevant domain constraints.
+Choose findings and priorities that help Planner. Cite source passages when useful.
+Your quotes, priorities and selection are retained without deterministic reconciliation.
+Available facts are attached by finding ID; an unmatched ID does not discard the brief.
 
-Prioritize findings by task relevance: correctness/leakage first, then likely
-effect on the requested metric and actionable implications. Use supplied finding
-IDs only. Measurements and evidence are attached by Python, not rewritten by you.
-Distinguish observations from proposed experiments. Explain each priority and
-what the Planner should consider. Critical facts cannot be downgraded and remain
-visible independently of your selection. Incomplete reconnaissance leaves open
-questions; it does not establish absence of risks.
-
-Canonical target, metric/options/direction, IDs, exclusions, output schema and
-prediction kind are attached without summarization. The Planner can read the
-original task with read_task if a nuance is unclear. Hard timeouts are off by default. When explicitly enabled, context_seconds limits
-this role and retries/resume share the original deadline.
-
-## Evidence integrity
-Preserve saved observation IDs and exact numbers; result_rows is SQL output cardinality, rows is optional measured source support. Do not invent missing support. Carry partial-report findings forward individually. Distinguish mae/rmse from signed mean_residual=y_true-y_pred, and retain score_kind/split/weighting. Treat original_hypothesis as historical; current Champion snapshot is authoritative. A machine fidelity failure is not a negative scientific result.
+Separate measurements from hypotheses and state uncertainty. Do not invent statistics.
+Formal requirements are attached independently; the Planner can read the original task.
+Do not write the model plan. Retries/resume share the original budget when timeouts are enabled.

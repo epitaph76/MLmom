@@ -10,9 +10,7 @@ BOOSTERS = ('lightgbm', 'catboost', 'xgboost')
 
 
 def compatible_boosters(tools, task_type):
-    return [key for key in BOOSTERS if (tool := tools.get(key)) and
-            task_type in tool.task_types and not tool.native_hpo and
-            (tool.available or tool.reason == 'adapter probe required')]
+    return [key for key in BOOSTERS if key in tools]
 
 
 def initial_boosting_resources(budget, variants, max_workers):
@@ -42,15 +40,7 @@ def expand_families(hypotheses, tools, task_type, mode='all'):
         requested = list(BOOSTERS) if family in {'boosting', 'gradient_boosting', 'gbdt', 'boosted_trees'} else parent.family_tools
         if not requested:
             raise ValueError('A model family requires model_family=gradient_boosting or explicit family_tools')
-        compatible = []
-        for key in dict.fromkeys(requested):
-            tool = tools.get(key)
-            if (not tool or task_type not in tool.task_types or tool.native_hpo or
-                    (not tool.available and tool.reason != 'adapter probe required')):
-                skipped.append(dict(group_id=parent.hypothesis_id, tool_id=key,
-                                    reason=tool.reason if tool else 'unknown backend'))
-            else:
-                compatible.append(key)
+        compatible = list(dict.fromkeys(requested))
         for index, key in enumerate(compatible[:3]):
             child = parent.model_copy(deep=True, update=dict(
                 hypothesis_id=variant_id(parent.hypothesis_id, key), kind='single',
@@ -120,8 +110,7 @@ def component_pool(store, round_number):
     # Existing contract-v2 runs may predate the dedicated component index.
     indexed={row['experiment_id'] for row in records}
     from .pipeline_contracts import CandidateVersion, ExperimentRun
-    from .execution import require_admitted, config_hash
-    from .registry import NATIVE_VALIDATION
+    from .execution import config_hash
     import json
     from pathlib import Path
     for run in store.list('experiment'):
@@ -132,8 +121,7 @@ def component_pool(store, round_number):
         if not candidate:continue
         try:
             plan=store.get('training_plan',run['experiment_id']) or json.loads(Path(candidate['plan_ref']).read_text(encoding='utf-8'))
-            if plan.get('ensemble_components') or plan.get('ensemble_sources') or plan['tool_id'] in NATIVE_VALIDATION:continue
-            require_admitted(ExperimentRun.model_validate(run),CandidateVersion.model_validate(candidate))
+            if plan.get('ensemble_components') or plan.get('ensemble_sources'):continue
             records.append(dict(experiment_id=run['experiment_id'],round_id=run['round_id'],run=run,
                 candidate=candidate,plan=plan,evaluation=store.get('evaluation',run['experiment_id']),
                 configuration_hash=config_hash(run.get('model_spec') or run['best_params'])))

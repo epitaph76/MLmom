@@ -22,9 +22,6 @@ ROLE_DEFAULTS = {
                                   'context_agent', 'hypothesis_generator', 'planner', 'ensemble_agent', 'feature_agent')},
 }
 LIGHTAUTOML_OBJECTIVES = {'regression':'rmse','binary_classification':'roc_auc','multiclass_classification':'log_loss'}
-# Only independently exercised generated-code protocols are admitted. The old
-# compatibility adapters and a library's advertised CV do not establish support.
-NATIVE_VALIDATION = {'flaml': ['holdout'], 'autogluon': [], 'lightautoml': []}
 DEFINITIONS = [
     ('sklearn','scikit-learn','sklearn','1.5.2',MULTI+['clustering','anomaly_detection'],'fast',False,True,False),
     ('catboost','catboost','catboost','1.2.8',MULTI+['ranking'],'medium',False,True,True),
@@ -44,17 +41,17 @@ def installed_tools() -> dict[str, MLToolSpec]:
         try:
             version = importlib.metadata.version(distribution)
             found = importlib.util.find_spec(module) is not None
-            reason = 'adapter probe required' if found else 'import not found'
+            reason = None if found else 'import not found'
             if version.split('+')[0] != expected: reason = f'version mismatch: expected {expected}, found {version}'
         except (importlib.metadata.PackageNotFoundError, ImportError, OSError, ValueError):
-            version, reason = None, 'distribution not installed'
+            found, version, reason = False, None, 'distribution not installed'
         result[tool] = MLToolSpec(tool_id=tool, distribution=distribution, import_name=module,
-            version=version, expected_version=expected, reason=reason, task_types=tasks,
+            version=version, expected_version=expected, available=found, reason=reason, task_types=tasks,
             prediction_kinds=['value','label','probability'] + (['ranking_score'] if 'ranking' in tasks else [])
             + (['cluster','anomaly_score'] if tool=='sklearn' else []), skill_ids=[tool],
             cost_tag=cost, native_hpo=native, supports_weights=weights, supports_groups=groups,
             supports_patience=not native, adapter='generated_candidate',
-            validation_strategies=NATIVE_VALIDATION[tool] if native else ['holdout','kfold','stratified_kfold','group_kfold'])
+            validation_strategies=[] if native else ['holdout','kfold','stratified_kfold','group_kfold'])
     return result
 
 
@@ -114,10 +111,6 @@ class SkillRegistry:
             if key not in self.manifests:raise ValueError(f'Unknown skill: {key}')
             if not self.allowed(key,role):raise ValueError(f'Skill {key} is not available to {role}')
             manifest = self.manifests[key]
-            if manifest.task_types and task_type not in manifest.task_types:
-                raise ValueError(f'Skill {key} is incompatible with {task_type}')
-            for distribution in manifest.dependencies:
-                importlib.metadata.version(distribution)
             selected.append(manifest)
         return selected
 

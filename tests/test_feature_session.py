@@ -300,7 +300,7 @@ class SessionAccountingTests(unittest.TestCase):
             self.assertEqual(len(p.store.list('feature_evidence')),3)
             self.assertTrue(all(e['status']=='rejected' for e in p.store.list('feature_evidence')))
 
-    def test_positive_but_unstable_effect_is_quarantined(self):
+    def test_positive_mean_is_accepted_without_stability_gate(self):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as cleanup:
             p,base,split,path=self.harness(Path(tmp),fail=False)
             cleanup.callback(p.store.close)
@@ -313,7 +313,7 @@ class SessionAccountingTests(unittest.TestCase):
             result['internal_score']=np.mean([f['score'] for f in result['fold_results']])
             from mlmom.feature_search import fixed_model_hash
             status,mean,deltas=paired_evidence(result,reference,protocol,fixed_model_hash(reference['model_spec']),'minimize')
-            self.assertEqual(status,'quarantine')
+            self.assertEqual(status,'accepted')
             self.assertGreater(mean,0)
 
 

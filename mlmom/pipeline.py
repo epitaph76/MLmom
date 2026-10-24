@@ -199,21 +199,6 @@ class Pipeline:
             self.frame = read_table(self.files.train,table_format=self.context.table_formats.get(self.files.train))
         return self.context
 
-    def preflight_tools(self, *, advanced=False, requested=None):
-        for name,spec in self.tools.items():
-            if spec.reason != 'adapter probe required': continue
-            if requested is not None and name not in requested: continue
-            if not advanced and (spec.native_hpo or spec.cost_tag=='slow'): continue
-            saved = self.store.get('capability',name)
-            if saved:
-                spec.available=saved['available'];spec.reason=saved['reason'];continue
-            if self.budget.snapshot().research_seconds < 1: break
-            result = self.sandbox.run(dict(action='probe',config={'tool_id':name,'model_params':{}},task_type='regression'),
-                self.run_dir/'probes'/name,seconds=min(self.config.smoke_seconds,self.budget.snapshot().research_seconds),
-                memory_gb=self.budget.memory_gb,cpus=min(2,self.budget.cpus))
-            spec.available = result['status']=='completed'
-            spec.reason = None if spec.available else (result.get('error') or result.get('stop_reason','Probe failed'))[-2000:]
-            self.store.put('capability',name,spec)
 
     def preflight_runtime(self):
         """Check the real child process before spending tokens or training budget."""
@@ -482,7 +467,7 @@ class Pipeline:
             known_candidates={c['candidate_id'] for c in self.store.list('candidate') if c['verification']['valid']},
             candidate_hypotheses={c['candidate_id']:c['hypothesis_id'] for c in self.store.list('candidate')},
             lightweight=lightweight,initial_experiment_seconds=self.config.initial_experiment_seconds,planning_mode=mode,
-            probe_tool=self.probe_ml_tool,evaluation_reserve_seconds=2*self.config.prediction_seconds,
+            evaluation_reserve_seconds=2*self.config.prediction_seconds,
             hypothesis_seconds=self.config.hypothesis_seconds,planner_seconds=self.config.planner_seconds,
             validator_seconds=self.config.validator_seconds,saved_progress=progress,
             save_progress=lambda value:self.store.put('planning_progress',key,value),
@@ -514,8 +499,6 @@ class Pipeline:
             self.store.event('validation_degraded',key,output['warnings'])
         return output
 
-    def probe_ml_tool(self, tool_id):
-        self.preflight_tools(advanced=True,requested={tool_id})
 
     def plan(self,state):
         if self.budget.snapshot().research_seconds <= .5: return {'plans':[],'stop_reason':'research_deadline'}
@@ -670,8 +653,6 @@ class Pipeline:
         if self.budget.snapshot().remaining_seconds < 1: return
         if self.test is None: self.test=read_table(self.files.test,table_format=self.context.table_formats.get(self.files.test))
         try:
-            from .execution import require_admitted
-            require_admitted(run,candidate)
             p = self._prediction(candidate,run,features(self.test,self.context),[self.context.submission_kind])
             artifact = publish_submission(self.context,self.test,p[self.context.submission_kind],run,candidate)
             saved=self.run_dir/'submissions'/f'{artifact.experiment_id}-{artifact.sha256}.csv'
@@ -702,9 +683,8 @@ class Pipeline:
 
     def refit_submission(self,champion,*,round_id,experiment_id,final=False):
         """Fit the frozen winner on all labeled rows, outside the comparison ledger."""
-        from .execution import require_admitted, config_hash
+        from .execution import config_hash
         from .model_spec import frozen_plan
-        require_admitted(champion.run, champion.candidate)
         source = dict(champion_experiment_id=champion.run.experiment_id,
             candidate_id=champion.candidate.candidate_id, code_hash=champion.candidate.code_hash,
             configuration_hash=config_hash(champion.run.model_spec or champion.run.best_params),
@@ -745,7 +725,6 @@ class Pipeline:
                 run = ExperimentRun.model_validate(dict(run.model_dump(), **{k:v for k,v in result.items() if k in ExperimentRun.model_fields}))
             if run.status != 'completed':
                 raise ValueError(run.error or run.stop_reason or 'Full-data refit failed')
-            require_admitted(run, champion.candidate)
             if run.role != 'submission_refit' or run.split_id != 'all-train' or run.internal_score is not None or run.trials:
                 raise ValueError('Full-data refit must have no comparison scores or search trials')
             self.store.put(kind, experiment_id, run)
@@ -830,8 +809,6 @@ class Pipeline:
             try:
                 require_worker_infrastructure(result, self.run_dir/'runs'/run.experiment_id)
                 if run.status!='completed': raise ValueError(run.error or run.stop_reason or 'Training failed')
-                from .execution import require_admitted
-                require_admitted(run,candidate)
                 if run.role!='evaluation' or run.split_id!=split.split_id: raise ValueError('Incomparable evaluation artifact')
                 training_entry=dict(candidate=candidate.model_dump(mode='json'),plan=plan.model_dump(mode='json'),run=run.model_dump(mode='json'))
                 if not run.incumbent:
@@ -910,11 +887,6 @@ class Pipeline:
                 raise
             except Exception as error:
                 run.status='failed';run.error=str(error)
-                if (run.execution_report and run.execution_report.get('status') != 'passed') or 'Machine execution gate' in str(error):
-                    from .pipeline_contracts import ResultReview
-                    review=ResultReview(implementation='mismatch',effect='inconclusive',explanation=run.error[:4000])
-                    self.store.put('result_review',run.experiment_id,review,immutable=True)
-                    atomic_json(self.run_dir/'reviews'/f'{run.experiment_id}.json',review)
                 self.store.event('experiment_failed',run.experiment_id,{'error':str(error)})
             self.store.put('experiment',run.experiment_id,run)
             return run

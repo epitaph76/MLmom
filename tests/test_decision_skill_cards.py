@@ -75,7 +75,7 @@ class DecisionSkillCardTests(unittest.TestCase):
         self.assertEqual(client.seen_cards['hypothesis_generator'], ['hypothesis_generator'])
         self.assertEqual(client.seen_cards['planner'], ['planner'])
 
-    def test_result_support_requires_known_evidence_and_comparable_reference(self):
+    def test_result_agent_assessment_is_preserved_without_machine_evidence_gate(self):
         skills = self.registry.load([], 'regression', role='result_validator')
         evaluation=dict(score_kind='outer_holdout',dataset_hash='data',split_id='same-split',score=.9,
                         metric='rmse',metric_options={},direction='minimize',weighting='unweighted')
@@ -88,12 +88,12 @@ class DecisionSkillCardTests(unittest.TestCase):
 
         no_reference = review_result(ResultClient(), payload | {'comparable_reference': None},
                                      skills, 'no-reference', 1)
-        self.assertEqual(no_reference.effect, 'inconclusive')
+        self.assertEqual(no_reference.effect, 'supported')
 
         unknown_evidence = review_result(ResultClient('evaluation:unknown'), payload,
                                          skills, 'bad-evidence', 1)
         self.assertEqual((unknown_evidence.implementation, unknown_evidence.effect),
-                         ('unknown', 'inconclusive'))
+                         ('matches', 'supported'))
 
 
 if __name__ == '__main__':

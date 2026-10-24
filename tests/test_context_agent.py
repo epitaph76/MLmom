@@ -63,26 +63,24 @@ class ContextAgentTests(unittest.TestCase):
         self.assertEqual(fact['evidence']['numbers'],{'q99':12.5})
         self.assertIn('already known',result['task_details'][0]['source_quote'])
 
-    def test_all_critical_findings_survive_selection_limit_and_rank_before_other_facts(self):
-        self.profile.issues=[DataIssue(code=f'note{i}',severity='info',message='Minor') for i in range(20)]
-        self.profile.issues += [DataIssue(code=f'leak{i}',severity='error',message='Possible target leakage') for i in range(30)]
+    def test_agent_selection_does_not_require_all_critical_findings(self):
+        self.profile.issues=[DataIssue(code=f'leak{i}',severity='error',message='Possible leakage') for i in range(30)]
         result=self.prepare()
         self.assertEqual(result['status'],'completed')
-        self.assertEqual(len(result['mandatory_findings']),30)
-        self.assertTrue(all(r['priority']=='critical' for r in result['ranked_findings']))
+        self.assertNotIn('mandatory_findings',result)
+        self.assertEqual(len(result['ranked_findings']),24)
 
-    def test_bad_fact_ids_are_repaired_in_same_deadline(self):
+    def test_unknown_fact_id_is_retained_without_retry(self):
         class Client(OfflineLLM):
             def generate(self,*args,**kwargs):
-                answer=super().generate(*args,**kwargs)
-                if len(self.calls)==1:
-                    return dict(task_summary='Bad reference',ranked_findings=[dict(finding_id='invented',priority='high',rationale='x',planner_action='x')])
-                return answer
+                self.calls.append((args[0],args[2]))
+                return dict(task_summary='Agent assessment',ranked_findings=[dict(
+                    finding_id='invented',priority='high',rationale='Review this',planner_action='Investigate')])
         client=Client();result=self.prepare(client)
         self.assertEqual(result['status'],'completed')
-        self.assertEqual(len(client.calls),2)
-        self.assertIn('supplied finding IDs',client.calls[-1][1]['validation_feedback'])
-        self.assertEqual(len(self.store.list('context_budget')),1)
+        self.assertEqual(len(client.calls),1)
+        self.assertEqual(result['ranked_findings'][0]['finding_id'],'invented')
+        self.assertIsNone(result['ranked_findings'][0]['fact'])
 
     def test_formatting_differences_keep_context_without_retry(self):
         self.path.write_text(self.path.read_text(encoding='utf-8')+
@@ -99,77 +97,23 @@ class ContextAgentTests(unittest.TestCase):
         self.assertEqual(len(client.calls),1)
         self.assertEqual(len(result['task_details']),1)
         self.assertEqual(result['task_summary'],'Keep the task-specific context.')
-        self.assertEqual(result['quote_warnings'],[])
 
-    def test_bad_quote_omits_only_that_detail_and_preserves_agent_ranking(self):
-        self.path.write_text(self.path.read_text(encoding='utf-8')+
-            '\nWeather is known. В данных 62 входных признака.',encoding='utf-8')
-        class Client(OfflineLLM):
-            def generate(self,role,instruction,payload,schema,tools=None):
-                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
-                answer.update(task_summary='Useful context',task_details=[
-                    dict(meaning='Use contemporaneous weather.',source_quote='Weather is known.'),
-                    dict(meaning='Input shape.',source_quote='В данных 62 входных признаков.')])
-                answer['ranked_findings'][0]['rationale']='Keep the agent ranking'
-                return answer
-        client=Client();result=self.prepare(client)
-        self.assertEqual(result['status'],'completed',result)
-        self.assertEqual(len(client.calls),1)
-        self.assertEqual(len(result['task_details']),1)
-        self.assertEqual(result['task_summary'],'Useful context')
-        self.assertEqual(result['ranked_findings'][0]['rationale'],'Keep the agent ranking')
-        self.assertEqual(result['quote_warnings'],[dict(detail_index=1,reason='source_quote_not_found')])
-        self.assertEqual(result['original_task_description'],self.path.read_text(encoding='utf-8'))
-        saved=json.loads(next((self.store.root/'planning_context').glob('*/brief.json')).read_text(encoding='utf-8'))
-        self.assertEqual(saved['quote_warnings'],result['quote_warnings'])
 
-    def test_all_fabricated_quotes_use_original_summary_and_keep_valid_ranking(self):
-        class Client(OfflineLLM):
-            def generate(self,role,instruction,payload,schema,tools=None):
-                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
-                answer.update(task_summary='Changed metric',task_details=[dict(
-                    meaning='False',source_quote='Invented condition')])
-                return answer
-        client=Client();result=self.prepare(client)
-        self.assertEqual(result['status'],'completed',result)
-        self.assertEqual(len(client.calls),1)
-        self.assertEqual(result['task_details'],[])
-        self.assertEqual(result['task_summary'],self.context.task.objective)
-        self.assertEqual(result['original_task_description'],self.path.read_text(encoding='utf-8'))
-        self.assertEqual(result['requirements']['task']['primary_metric'],'rmse')
-        self.assertTrue(result['ranked_findings'])
-        self.assertEqual(len(result['quote_warnings']),1)
 
-    def test_changed_numbers_negation_operators_and_identifiers_are_not_fuzzy_matched(self):
-        self.path.write_text(self.path.read_text(encoding='utf-8')+
-            '\nUse 62 features. Do not train on test labels. '
-            'Score squared errors as x**2 + y**2. Feature is `Year_Factor`. '
-            'Compute `x *y* z`.',encoding='utf-8')
-        quotes=['Use 63 features.','Do train on test labels.',
-                'Score squared errors as x2 + y2.','Feature is YearFactor.','Compute x y z.']
-        class Client(OfflineLLM):
-            def generate(self,role,instruction,payload,schema,tools=None):
-                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
-                answer['task_details']=[dict(meaning='Unsupported detail',source_quote=q) for q in quotes]
-                return answer
-        result=self.prepare(Client())
-        self.assertEqual(result['status'],'completed',result)
-        self.assertEqual(result['task_details'],[])
-        self.assertEqual(len(result['quote_warnings']),5)
 
-    def test_soft_quote_handling_does_not_allow_downgrading_critical_findings(self):
+    def test_agent_quotes_and_priorities_are_retained(self):
         self.profile.issues=[DataIssue(code='leakage',severity='error',message='Possible target leakage')]
         class Client(OfflineLLM):
-            def generate(self,role,instruction,payload,schema,tools=None):
-                answer=super().generate(role,instruction,payload,schema,tools).model_dump()
+            def generate(self,*args,**kwargs):
+                answer=super().generate(*args,**kwargs).model_dump()
                 answer['ranked_findings'][0]['priority']='low'
-                answer['task_details']=[dict(meaning='False',source_quote='Invented condition')]
+                answer['task_details']=[dict(meaning='Agent claim',source_quote='No literal match')]
                 return answer
         client=Client();result=self.prepare(client)
-        self.assertEqual(len(client.calls),2)
-        self.assertEqual(result['status'],'fallback')
-        self.assertIn('Critical input findings',result['reason'])
-        self.assertEqual(len(result['mandatory_findings']),1)
+        self.assertEqual(len(client.calls),1)
+        self.assertEqual(result['status'],'completed')
+        self.assertTrue(any(f['priority']=='low' for f in result['ranked_findings']))
+        self.assertEqual(result['task_details'][0]['source_quote'],'No literal match')
         self.assertEqual(result['requirements']['task'],self.context.task.model_dump(mode='json'))
 
     def test_cache_reuses_brief_for_retries_and_invalidates_on_new_evidence(self):

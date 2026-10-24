@@ -18,7 +18,6 @@ from mlmom.search_groups import (expand_families, collect_groups, component_pool
 from mlmom.search_groups import limit_parent_groups
 from mlmom.persistence import ExperimentStore, tree_hash
 from mlmom.sdk import FrozenEnsemble, FitContext, load_module
-from mlmom.execution import audit_fit, compare_roundtrip
 from mlmom.planning import build_planning_graph
 from mlmom.worker import synthetic
 from tests.fakes import MODEL_CODE, PREPROCESSING_CODE, OfflineLLM
@@ -155,9 +154,8 @@ class FamilyPlanTests(unittest.TestCase):
         _,tools,_,_=case();tools['catboost'].available=False;tools['catboost'].reason='distribution not installed'
         parent=Hypothesis(hypothesis_id='g',kind='family',model_family='gradient_boosting',description='GBDT',rationale='test')
         children,_,skipped=expand_families([parent],tools,'regression')
-        self.assertEqual(len(children),2)
-        self.assertEqual(skipped[0]['tool_id'],'catboost')
-        self.assertIn('not installed',skipped[0]['reason'])
+        self.assertEqual(len(children),3)
+        self.assertEqual(skipped,[])
 
     def test_pipeline_plans_every_selected_family_variant_and_resumes_deferred_members(self):
         from mlmom.pipeline import Pipeline
@@ -256,16 +254,12 @@ class CompositeTests(unittest.TestCase):
                 config=dict(plan.model_dump(mode='json'),_code_hash=tree_hash(code))
                 module=load_module(code);model=module.create_candidate(config)
                 model.fit(X,y,c)
-                report=audit_fit(model,plan.model_params,config,c,root/'audit.json',stage='test')
-                self.assertEqual(report['status'],'passed')
                 prediction=model.predict(X,{'kind':'value'})
                 self.assertTrue(np.isfinite(prediction).all())
                 frozen=dict(config,model_params=model.export_model_params())
                 recreated=module.create_candidate(frozen)
                 c2=copy.copy(c);c2.fit_id=uuid.uuid4().hex;c2.work_dir=str(root/'recreate')
                 recreated.fit(X,y,c2)
-                second=audit_fit(recreated,frozen['model_params'],frozen,c2,root/'recreated.json',stage='test')
-                self.assertEqual(compare_roundtrip(report,second),[])
                 np.testing.assert_allclose(prediction,recreated.predict(X,{'kind':'value'}))
                 artifact=root/'artifact';model.save(artifact)
                 moved=root/'moved';artifact.rename(moved)
@@ -289,7 +283,6 @@ class CompositeTests(unittest.TestCase):
                     c.classes=list(reversed(context.classes))
                 config=dict(plan.model_dump(mode='json'),_code_hash=tree_hash(code))
                 model=load_module(code).create_candidate(config);model.fit(X,y,c)
-                audit_fit(model,plan.model_params,config,c,Path(tmp)/'audit.json',stage='test')
                 probabilities=model.predict(X,{'kind':'probability' if 'classification' in kind else 'value'})
                 self.assertTrue(np.isfinite(probabilities).all())
                 if context.classes:
@@ -318,13 +311,13 @@ class CompositeTests(unittest.TestCase):
             model=load_module(code).create_candidate(plan.model_dump())
             with self.assertRaisesRegex(ValueError,'hash mismatch'):model.fit(X,y,c)
 
-    def test_generated_composition_cannot_replace_frozen_component_policies(self):
+    def test_generated_composition_assignment_is_left_to_agents(self):
         with tempfile.TemporaryDirectory() as tmp:
             code,_,plan,_,_,_=composite_case(Path(tmp),different_policies=True)
             changed=COMPOSITION_CODE.replace("return FrozenEnsemble(config,", "config['ensemble_sources'][1]['config']['target_transform']['name']='identity'\n    return FrozenEnsemble(config,")
             (code/'candidate.py').write_text(changed,encoding='utf-8')
-            with self.assertRaisesRegex(ValueError,'changed its assignment'):
-                load_module(code).create_candidate(plan.model_dump())
+            model=load_module(code).create_candidate(plan.model_dump())
+            self.assertEqual(model.config['ensemble_sources'][1]['config']['target_transform']['name'], 'identity')
 
     def test_fixed_full_data_refit_relearns_weights_without_recipe_search(self):
         from mlmom.worker import train

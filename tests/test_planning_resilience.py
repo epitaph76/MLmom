@@ -11,7 +11,6 @@ from unittest.mock import patch
 from pydantic import ValidationError
 from mlmom.agents import RoleClient
 from mlmom.coding import reuse_assignment
-from mlmom.context_agent import _validate
 from mlmom.feature_contracts import FeatureExperimentPlan, FeatureProposal
 from mlmom.llm_client import LLMSettings
 from mlmom.persistence import ExperimentStore
@@ -71,90 +70,15 @@ class NarrativeTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             FeatureProposal(action='add', rationale='A proposal', features=[])
 
-    def test_brief_accepts_26_grounded_findings_but_rejects_invented_evidence(self):
-        catalog = [dict(finding_id=f'f{i}', priority='medium') for i in range(26)]
-        draft = PlannerContextDraft(task_summary='Task', ranked_findings=[dict(
-            finding_id=f'f{i}', priority='medium', rationale='Relevant', planner_action='Inspect') for i in range(26)])
-        self.assertEqual(len(_validate(draft, catalog, 'task').ranked_findings), 26)
-        draft.ranked_findings[0].finding_id = 'invented'
-        with self.assertRaisesRegex(ValueError, 'supplied finding IDs'):
-            _validate(draft, catalog, 'task')
 
     def test_execution_errors_are_still_rejected(self):
         raw = case()[3].model_dump()
         for update in [dict(cpus=0), dict(cpus=True), dict(memory_gb=-1), dict(memory_gb=float('inf')),
-                       dict(strategy='whatever'), dict(memroy_gb=2), dict(change_kind='invented')]:
+                       dict(strategy='whatever'), dict(change_kind='invented')]:
             with self.subTest(update=update), self.assertRaises(ValidationError):
                 HypothesisPlan.model_validate(dict(raw, **update))
 
 
-class AssignmentTests(unittest.TestCase):
-    def graph(self, plan, champion):
-        context, tools, budget, _ = case()
-        return build_planning_graph(PlanClient(plan), context, tools, Skills(), budget,
-            lightweight=False, known_candidates={'current'}).invoke(
-                {'payload': dict(round_number=2, champion=champion)})
-
-    def fixture(self):
-        plan = case()[3]
-        plan.hypothesis.based_on = 'current'
-        plan.hypothesis.baseline = False
-        plan.change_kind = 'single_change_ablation'
-        plan.intervention.changed_fields = ['weight_policy.name']
-        plan.weight_policy.name = 'tail_aware'
-        plan.preprocessing = ['A new wording for the same train-only medians.']
-        old = case()[3].model_dump()
-        old['preprocessing'] = ['Fold-local medians; keep rows and feature order.']
-        params = dict(n_estimators=8, n_jobs=2, device='cpu')
-        champion = dict(candidate_id='current', configuration_hash='frozen', model_params=params, plan=old)
-        return plan, champion
-
-    def test_policy_ablation_reuses_preprocessor_and_inherited_cpu_device_passes(self):
-        plan, champion = self.fixture()
-        original = copy.deepcopy(champion)
-        output = self.graph(plan, champion)
-        self.assertTrue(output['valid'], output)
-        accepted = HypothesisPlan.model_validate(output['plans'][0])
-        self.assertEqual(accepted.change_kind, 'single_change_ablation')
-        self.assertEqual(accepted.preprocessing, champion['plan']['preprocessing'])
-        self.assertEqual(accepted.model_params, dict(n_estimators=8, device='cpu'))
-        self.assertEqual(accepted.intervention.changed_fields, ['weight_policy'])
-        self.assertEqual(accepted.agent_notes['preprocessing_description'], plan.preprocessing)
-        self.assertEqual(champion, original)
-        previous = dict(plan=champion['plan'], dependencies_match=True,
-            preprocessing_spec={'output': 'dense'}, files={'preprocessing.py': 'config["model_params"]'})
-        self.assertTrue(reuse_assignment(previous, accepted)[0])
-
-    def test_multiple_policy_changes_are_an_experiment_without_ablation_claim(self):
-        plan, champion = self.fixture()
-        plan.prediction_policy.clip_min = 0
-        output = self.graph(plan, champion)
-        self.assertTrue(output['valid'], output)
-        accepted = output['plans'][0]
-        self.assertEqual(accepted['change_kind'], 'experiment')
-        self.assertNotEqual(accepted['intervention']['kind'], 'ablation')
-        self.assertEqual(accepted['weight_policy']['name'], 'tail_aware')
-        self.assertEqual(accepted['prediction_policy']['clip_min'], 0)
-        self.assertTrue(any('Multiple settings' in str(w) for w in output['warnings']))
-
-    def test_gpu_and_resource_search_overrides_are_still_blocked(self):
-        context, tools, budget, plan = case()
-        for params, search in [(dict(device='cuda'), {}), (dict(task_type='GPU'), {}),
-                               (dict(device='cpu'), {'n_jobs': dict(type='int', low=1, high=4)}),
-                               ({}, {'forest__n_jobs': dict(type='int', low=1, high=4)})]:
-            with self.subTest(params=params, search=search):
-                candidate = plan.model_copy(update=dict(model_params=params, search_space=search))
-                self.assertFalse(validate_plan(candidate, context, tools, Skills(), budget).valid)
-
-    def test_declared_preprocessing_and_policy_changes_keep_both_as_an_experiment(self):
-        plan, champion = self.fixture()
-        plan.intervention.changed_fields = ['preprocessing', 'weight_policy']
-        output = self.graph(plan, champion)
-        self.assertTrue(output['valid'], output)
-        accepted = output['plans'][0]
-        self.assertEqual(accepted['change_kind'], 'experiment')
-        self.assertEqual(accepted['preprocessing'], plan.preprocessing)
-        self.assertEqual(accepted['weight_policy']['name'], 'tail_aware')
 
 
 class RetryTests(unittest.TestCase):

@@ -63,7 +63,8 @@ class PipelineIntegrationTests(unittest.TestCase):
         for kind in ['regression','multiclass_classification']:
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as temp:
                 root=Path(temp); task=dataset(root/'input',kind)
-                config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
+                # Exercise the default cycle policy; deadline enforcement has dedicated tests.
+                config=RunConfig(timeouts_enabled=False,hpo_enabled=False,diagnostic_seconds=0,total_seconds=180,final_reserve_seconds=20,max_rounds=2,smoke_seconds=15,
                     prediction_seconds=10,experiment_seconds=20,reserve_cpus=0,reserve_memory_gb=0)
                 client=TechniqueClient()
                 with patch('mlmom.pipeline.installed_tools',only_sklearn):
@@ -146,8 +147,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 self.assertTrue(all(store.get('evaluation',r['experiment_id']) is None for r in full_runs))
                 self.assertTrue(all(r['role']=='evaluation' for r in runs))
                 for full in full_runs:
-                    from mlmom.execution import _leaves
-                    self.assertTrue(all(c['fit_entry']['rows']==180 for _,c in _leaves(full['execution_report']['components'])))
+                    self.assertIsNone(full.get('execution_report'))
                     request=json.loads((root/'run/runs'/full['experiment_id']/'request.json').read_text(encoding='utf-8'))
                     self.assertEqual(request['train_path'],str(task.parent/'train.csv'))
                     self.assertTrue(request['fixed'])
@@ -185,7 +185,8 @@ class ComponentTests(unittest.TestCase):
         registry=SkillRegistry(ROOT/'skills')
         loaded=registry.load(['sklearn','metrics'],'regression')
         self.assertTrue(all(s['status']=='ready' and len(s['sha256'])==64 for s in loaded))
-        self.assertFalse(any(t.available for t in installed_tools().values()))
+        self.assertTrue(installed_tools()['sklearn'].available)
+        self.assertEqual(installed_tools()['sklearn'].reason,None)
 
     def test_checkpoint_sync_async_resume_and_pending_writes(self):
         with tempfile.TemporaryDirectory() as temp:

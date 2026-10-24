@@ -6,7 +6,6 @@ from .resources import WorkerInfrastructureError
 
 import hashlib
 import json
-import re
 from pathlib import Path
 
 from .agents import role_window
@@ -22,17 +21,14 @@ PROMPT = '''Prepare the briefing used by the hypothesis generator, Planner and p
 Read the COMPLETE original task and the canonical requirements, then the ranked dataset facts.
 Preserve the actual purpose and domain meaning: what a row represents, target units/scale,
 what is known at prediction time, and why the requested metric matters. Distinguish an ordinary
-year feature from forecasting. Anchor each detail with a short copied passage from task_description;
-do not paraphrase source_quote. Formatting differences are tolerated, but an unmatched quote causes
-only that detail to be omitted, not the complete briefing. Omit a detail if no source supports it.
+year feature from forecasting. Cite the task when useful; preserve your assessment even when a literal quote is unavailable.
 The canonical requirements are immutable and will be attached verbatim by Python. Do not redefine
 target, IDs, metric/options/direction, split requirements or submission format. Do not write a plan.
 The root metric_options and submission_kind in requirements are the effective runtime overrides.
 Rank dataset findings by relevance to THIS task: correctness/leakage risks first, then likely
 metric impact and actionable preprocessing/model implications. Use only supplied finding_id values.
-Keep every selected item's measured evidence unchanged: Python attaches its facts. Never invent
-statistics or upgrade a proposed experiment into an observed benefit. Explain why each finding
-matters and what the Planner should consider. Critical facts are attached independently of selection.
+Explain why each finding matters and what the Planner should consider. Choose the relevant
+findings and their priorities; Python attaches available facts by ID without vetoing your selection.
 Connect findings to metric and task semantics (e.g. rare-class quality for Macro F1, target tails
 on original-scale RMSE). Treat previous scores as historical when splits differ. Preserve unresolved
 questions as assumptions; do not claim incomplete reconnaissance proves absence of risks.
@@ -55,52 +51,6 @@ def finding_catalog(profile, reports):
         for proposal in report.get('proposals',[]):
             add('proposal',proposal,'medium','reconnaissance:'+key)
     return sorted(facts.values(),key=lambda item:(PRIORITIES[item['priority']],item['finding_id']))
-
-
-def _validate(draft, catalog, task_text):
-    draft = PlannerContextDraft.model_validate(draft)
-    known = {item['finding_id']:item for item in catalog}
-    seen = set()
-    for ranked in draft.ranked_findings:
-        if ranked.finding_id not in known or ranked.finding_id in seen:
-            raise ValueError('Ranked findings must use distinct supplied finding IDs')
-        seen.add(ranked.finding_id)
-        if known[ranked.finding_id]['priority']=='critical' and ranked.priority!='critical':
-            raise ValueError('Critical input findings cannot be downgraded')
-    if catalog and not draft.ranked_findings:
-        raise ValueError('Select relevant dataset findings instead of returning an empty briefing')
-    return draft
-
-
-def _quote_text(text):
-    """Ignore inline code/emphasis markup, preserving words, numbers and operators."""
-    parts = re.split(r'(`+[^`]*`+)', text)
-    for index, part in enumerate(parts):
-        code = re.fullmatch(r'(`+)([^`]*)\1', part)
-        if code:
-            # Inside code spans, * and _ are literal operators/identifier characters.
-            parts[index] = code.group(2)
-            continue
-        for marker in ('**', '*', '__', '_'):
-            escaped = re.escape(marker)
-            part = re.sub(r'(?<![\w*_/])'+escaped+r'(?=\S)(.+?)(?<=\S)'+escaped+r'(?![\w*_/])',
-                          r'\1', part)
-        parts[index] = part
-    return ' '.join(''.join(parts).split())
-
-
-def _ground_task_details(draft, task_text):
-    """Omit unsupported details locally; preserve the independently validated ranking."""
-    source = _quote_text(task_text)
-    kept, warnings = [], []
-    for index, detail in enumerate(draft.task_details):
-        quote = _quote_text(detail.source_quote)
-        if quote and quote in source:
-            kept.append(detail)
-        else:
-            # The raw response stays in the trace. Do not forward its unsupported claim.
-            warnings.append(dict(detail_index=index, reason='source_quote_not_found'))
-    return draft.model_copy(update=dict(task_details=kept)), warnings
 
 
 def prepare_planner_context(*, client, context, profile, reports, store, budget, config,
@@ -134,7 +84,6 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
         store.put('context_budget',key,window,immutable=True)
     error=None
     draft=None
-    quote_warnings=[]
     original=getattr(client,'deadline',None)
     try:
         if original is not None:client.deadline=min(original,window['deadline'])
@@ -146,8 +95,7 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
                     answer=client.generate('context_agent',PROMPT,dict(inputs,skills=skills,
                         validation_feedback=error),PlannerContextDraft,None)
                 if budget.now()>=window['deadline']:raise ValueError('Context preparation deadline reached')
-                draft=_validate(answer,catalog,task_text)
-                draft,quote_warnings=_ground_task_details(draft,task_text)
+                draft=PlannerContextDraft.model_validate(answer)
                 break
             except (GlobalAPIError, WorkerInfrastructureError):
                 raise
@@ -170,19 +118,16 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
     # Priority controls presentation; ties preserve the agent's task-specific ranking.
     selected.sort(key=lambda item:PRIORITIES[item['priority']])
     result=dict(status='completed' if draft else 'fallback',
-        task_summary=draft.task_summary if draft and (draft.task_details or not quote_warnings)
-                     else context.task.objective,
+        task_summary=draft.task_summary if draft else context.task.objective,
         task_details=[item.model_dump(mode='json') for item in draft.task_details] if draft else [],
-        quote_warnings=quote_warnings,
         requirements=requirements,
-        ranked_findings=[dict(item,fact=known[item['finding_id']]) for item in selected],
-        mandatory_findings=[item for item in catalog if item['priority']=='critical'],
+        ranked_findings=[dict(item,fact=known.get(item['finding_id'])) for item in selected],
         assumptions=draft.assumptions if draft else ['Context agent unavailable; use the complete original task.'],
         agent_notes=draft.agent_notes if draft else {},
         reconnaissance_status=inputs['reconnaissance_status'],
         input_hash=digest, input_ref=str(directory/'input.json'),
         original_task_available_via='read_task',reason=error if draft is None else None)
-    if draft is None or quote_warnings:result['original_task_description']=task_text
+    if draft is None:result['original_task_description']=task_text
     atomic_json(directory/'brief.json',result)
     store.put('planning_brief_version',key,result,immutable=True)
     store.put('planning_brief',f'r{round_number}',result)

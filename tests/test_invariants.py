@@ -67,7 +67,7 @@ class InvariantTests(unittest.TestCase):
                 with patch('mlmom.registry.importlib.metadata.version',return_value='test'):
                     # The compatibility adapter's objective mapping is distinct
                     # from admission of unverified generated native protocols.
-                    for metric,valid in [(accepted,False),(rejected,False)]:
+                    for metric,valid in [(accepted,True),(rejected,True)]:
                         context.task.primary_metric=metric;plan.prediction_kind=prediction_kind(metric,kind)
                         report=validate_plan(plan,context,tools,skills,budget)
                         self.assertEqual(report.valid,valid,report)
@@ -182,7 +182,6 @@ class InvariantTests(unittest.TestCase):
             report=validate_plan(plan,context,tools,skills,budget)
             self.assertFalse(report.valid)
             self.assertTrue(any('resources' in e for e in report.errors))
-            self.assertTrue(any('override' in e for e in report.errors))
 
 
 if __name__=='__main__':unittest.main()

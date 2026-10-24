@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypedDict
 from pydantic import Field
 from langgraph.graph import StateGraph, START, END
+from .agent_contracts import AgentNarrative
 from .contracts import StrictModel
 from .pipeline_contracts import CandidateVersion,ValidationReport,PreprocessingBundle
 from .tools import Workspace,verify_source
@@ -38,13 +39,10 @@ a distinct Python class object with the same name. Let the SDK exercise its call
 Pass context.sample_weight to the backend unchanged; do not mutate fitted parameters after fit.
 Consume all config['model_params'], including declared search parameters. No Optuna loop inside fit:
 the runner supplies each trial. Reuse validation only for stopping/selection, never ordinary fitting.
-export_model_params() MUST return the COMPLETE reproducible model_params, not a patch: retain
-every fixed backend parameter, nested ensemble config, blend weight and flat backend HPO
-override. Only explicitly permitted stopping can replace counts with measured selected counts.
-The runner rejects incomplete exports. Smoke recreates, refits and compares effective configuration
-and predictions. Expose self.model for a single estimator; ensembles MUST implement
-fitted_components() returning every named fitted estimator (including stacking meta learners).
-The runner inspects backend parameters and actual iterations after every fit and blocks mismatches.
+export_model_params() is optional: return JSON parameters for later refit when available.
+Without an export, the runner reuses the executed trial parameters. No fitted_components interface
+or estimator audit is required. check_source validates syntax/interfaces; run_smoke_check is an
+optional tool to exercise a synthetic fit/predict/save/load. Real runtime errors return for repair.
 stopping_policy and component_stopping_policies in the plan define whether early stopping is allowed.
 context.timeouts_enabled controls time callbacks: when false do not add deadline callbacks.
 CatBoost callback after_iteration returns True to CONTINUE, False to STOP. Never invert it.
@@ -67,7 +65,7 @@ shell, credentials or input-directory reads. Use X/y/context; save estimator fil
 No training during import/load/predict. The SDK is installed; do not search for its source.
 During repair use the existing apply_patch tool to fix the specific defect in current_files.
 Worker errors include the failing source line and a full traceback artifact reference.
-Return complete {"files":{"candidate.py":"...", ...}} immediately for AST/smoke verification.
+Return complete {"files":{"candidate.py":"...", ...}} for syntax/interface verification.
 Do not return preprocessing.py. Fix reported errors promptly using only the selected API.
 """
 
@@ -88,7 +86,7 @@ During repair retain previous_spec unless the output interface must change.
 '''
 
 
-class CodeBundle(StrictModel):
+class CodeBundle(AgentNarrative):
     files: dict[str,str] = Field(min_length=1,max_length=20)
 
 
@@ -99,37 +97,8 @@ class SourcePatch(StrictModel):
     new_text: str
 
 
-class CodePatch(StrictModel):
+class CodePatch(AgentNarrative):
     patches: list[SourcePatch] = Field(default_factory=list,max_length=20)
-
-
-def remove_loader_type_guard(source):
-    """Remove the generated nominal Candidate guard before source is versioned."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return source, 0
-    removed = set()
-    for function in tree.body:
-        if not isinstance(function, ast.FunctionDef) or function.name != 'load_candidate':
-            continue
-        for node in function.body:
-            if not isinstance(node, ast.If) or node.orelse or len(node.body) != 1:
-                continue
-            test, error = node.test, node.body[0]
-            if not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
-                    and isinstance(test.operand, ast.Call)):
-                continue
-            call = test.operand
-            if not (isinstance(call.func, ast.Name) and call.func.id == 'isinstance'
-                    and len(call.args) == 2 and not call.keywords
-                    and isinstance(call.args[1], ast.Name) and call.args[1].id == 'Candidate'
-                    and isinstance(error, ast.Raise) and isinstance(error.exc, ast.Call)
-                    and isinstance(error.exc.func, ast.Name) and error.exc.func.id == 'TypeError'):
-                continue
-            removed.update(range(node.lineno, node.end_lineno + 1))
-    lines = source.splitlines(keepends=True)
-    return ''.join(line for number, line in enumerate(lines, 1) if number not in removed), len(removed)
 
 
 def reuse_assignment(previous, plan):
@@ -182,6 +151,13 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         from .persistence import file_hash
         store.put('preprocessing',budget_key,dict(spec=previous['preprocessing_spec'],sha256=file_hash(workspace.root/'preprocessing.py')))
         store.event('source_reused',budget_key,dict(preprocessing=True,estimator=reuse_estimator))
+    def remember_notes(role, bundle):
+        notes = getattr(bundle, 'agent_notes', {})
+        if notes:
+            saved = store.get('agent_notes', budget_key) or {}
+            saved.setdefault(role, []).append(notes)
+            store.put('agent_notes', budget_key, saved)
+
     def coding_capacity():
         # Preserve a complete selected fit and prediction window, including
         # when previous experiments increase the final-training reserve.
@@ -198,12 +174,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
         if not timeouts_enabled(config):return UNBOUNDED_SECONDS
         return max(0.,min(window['deadline']-budget.now(),coding_capacity()))
-    verification_reserve=min(config.coding_verification_seconds,
-                             max(0,window['deadline']-window['started'])*.2)
-    if not getattr(config,'timeouts_enabled',True):verification_reserve=0
-
     def generation_remaining():
-        return max(0.,remaining()-verification_reserve)
+        return remaining()
 
     def preprocessing(state):
         if plan.ensemble_sources:
@@ -233,6 +205,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                      feature_schema=schema,skills=preprocessing_skills or [],feedback=state.get('errors',[]),
                      runtime_feedback=runtime_feedback,previous_spec=saved['spec'] if saved else None,
                      previous={'source':path.read_text(encoding='utf-8'),'sha256':file_hash(path)} if repairing else None),CodePatch if repairing else PreprocessingBundle,None)
+            remember_notes('preprocessing_agent', bundle)
             if repairing:
                 pre_workspace.apply_patches([p.model_dump() for p in bundle.patches])
                 source=path.read_text(encoding='utf-8')
@@ -281,7 +254,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
 
     def check_source() -> dict:
         return source_report(workspace.root).model_dump()
-    role_tools.register('check_source',check_source,'Check syntax and allowed imports without running code.')
+    role_tools.register('check_source',check_source,'Check syntax and required factories without running code.')
 
     def smoke_check() -> dict:
         report = source_report(workspace.root)
@@ -303,6 +276,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
 
     def generate(state):
         attempts = state.get('attempts',0)+1
+        original_source_hash = tree_hash(workspace.root)
         original_deadline=getattr(client,'deadline',None)
         original_steps=getattr(client,'max_steps',None)
         if original_steps is not None:client.max_steps=min(original_steps,config.coding_tool_steps)
@@ -329,13 +303,14 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                     'Use ordinary Python newlines. Do not generate preprocessing.py or rewrite components. '
                     'Do not implement another estimator or change the recipe. During repairs preserve this SDK contract.')
             if repairing:
-                instruction+=' Existing files must be repaired with CodePatch only: {"patches":[{"path":"candidate.py","sha256":"...","old_text":"unique block","new_text":"replacement"}]}. Never return files or replace a whole file. Empty patches means keep tool-written source.'
+                instruction+=' Existing files must be repaired with CodePatch only: {"patches":[{"path":"candidate.py","sha256":"...","old_text":"unique block","new_text":"replacement"}]}. Return patches for existing files. Empty patches means keep tool-written source.'
             bundle = client.generate('coding_agent',instruction,
                 dict(payload,feedback=state.get('errors',[]),runtime_feedback=runtime_feedback,
                      preprocessing_spec=state['preprocessing_spec'],
                      current_files=current,file_hashes={name:hashlib.sha256(workspace.path(name).read_bytes()).hexdigest() for name in current}),
                 CodePatch if repairing else CodeBundle,repair_tools if repairing else
                 None if config.coding_direct_first and attempts==1 and not runtime_feedback else role_tools)
+            remember_notes('coding_agent', bundle)
             if repairing:
                 workspace.apply_patches([p.model_dump() for p in bundle.patches])
             else:
@@ -355,8 +330,9 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         except (ValueError,LLMUnavailable) as error:
             # Tool calls may have already written a complete candidate before
             # the final JSON, API failure or step limit. Verify that source in
-            # the usual subprocess rather than throwing completed work away.
-            if source_report(workspace.root).valid:
+            # the syntax/interface check rather than throwing completed work away.
+            if (source_report(workspace.root).valid and
+                    (not runtime_feedback or tree_hash(workspace.root) != original_source_hash)):
                 store.event('generation_interrupted',round_id,{'hypothesis_id':plan.hypothesis.hypothesis_id,'error':str(error)})
                 return {'attempts':attempts,'errors':[],
                         'warnings':['Using tool-written source after interrupted generation: '+str(error)]}
@@ -366,15 +342,6 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             if original_steps is not None:client.max_steps=original_steps
 
     def verify(state):
-        smoke_report=None
-        smoke_report_ref=None
-        if (workspace.root/'candidate.py').is_file():
-            source = workspace.read_file('candidate.py')
-            normalized, removed_lines = remove_loader_type_guard(source)
-            if removed_lines:
-                workspace.write_file('candidate.py', normalized)
-                store.event('candidate_loader_normalized', budget_key,
-                            dict(removed_guard_lines=removed_lines))
         report = source_report(workspace.root)
         report.warnings.extend(state.get('warnings',[]))
         report.errors.extend(state.get('errors',[])); report.valid = not report.errors
@@ -387,27 +354,14 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             dest = snapshot/source.relative_to(workspace.root); dest.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source,dest)
         digest = tree_hash(snapshot)
-        if report.valid:
-            seconds = min(config.smoke_seconds,remaining()) if getattr(config,'timeouts_enabled',True) else remaining()
-            if seconds < .5:
-                report.errors.append('No smoke-check budget remains')
-            else:
-                result = sandbox.run(dict(action='smoke',code_dir=str(snapshot),code_hash=digest,
-                    config=plan.model_dump(mode='json'),task_type=context.task.task_type,
-                    metric=context.task.primary_metric,prediction_kind=plan.prediction_kind,
-                    verify_frozen=plan.strategy=='native',native_holdout=plan.strategy=='native',**smoke_schema),
-                    store.root/'checks'/f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
-                    seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
-                if result['status']!='completed': report.errors.append(result.get('error') or result.get('stop_reason','Smoke failed'))
-                smoke_report=result.get('execution_report');smoke_report_ref=result.get('execution_report_ref')
         report.valid = not report.errors
         candidate = CandidateVersion(candidate_id=f'{round_id}-{plan.hypothesis.hypothesis_id}-v{version}',
             hypothesis_id=plan.hypothesis.hypothesis_id,version=version,code_dir=str(snapshot),code_hash=digest,
             plan_ref=str(plan_ref),skill_versions={s['skill_id']:{'version':s['version'],'sha256':s['sha256'],'status':s['status']} for s in [*skill_data,*(preprocessing_skills or [])]},
             dependencies={k:v.version for k,v in tools.items() if v.available and v.version},based_on=plan.hypothesis.based_on,
-            verification=report,preprocessing_hash=state.get('preprocessing_hash'),
-            feature_set_hash=feature_hash(plan.feature_set),
-            execution_report=smoke_report,execution_report_ref=smoke_report_ref)
+            verification=report,agent_notes=store.get('agent_notes',budget_key) or {},
+            preprocessing_hash=state.get('preprocessing_hash'),
+            feature_set_hash=feature_hash(plan.feature_set))
         store.put('candidate',candidate.candidate_id,candidate,immutable=True)
         atomic_json(snapshot/'metadata.json',candidate)
         return {'candidate':candidate.model_dump(mode='json'),'valid':report.valid,'errors':report.errors}

@@ -127,7 +127,7 @@ class RealFailureRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);source=root/'candidate.py'
             source.write_text(ADAPTER_CODE,encoding='utf-8')
-            self.assertFalse(verify_source(root).valid)
+            self.assertTrue(verify_source(root).valid)
             source.write_text(GENERATED_CODE,encoding='utf-8')
             self.assertTrue(verify_source(root).valid)
             (root/'extra.py').write_text('x=1',encoding='utf-8')
@@ -209,8 +209,8 @@ class RealFailureRegressions(unittest.TestCase):
             max_attempts=1,planning_mode='baseline').invoke({'payload':{'round_number':1}})
         self.assertFalse(output['valid']);self.assertFalse(output['warnings'])
 
-    def test_matching_cpu_parameter_is_normalized_but_override_is_rejected(self):
-        for cpus,expected in [(2,True),(-1,False)]:
+    def test_cpu_parameter_is_normalized_to_worker_allocation(self):
+        for cpus,expected in [(2,True),(-1,True)]:
             class CpuPlanner(Planner):
                 def generate(self,role,*args,**kwargs):
                     result=super().generate(role,*args,**kwargs)

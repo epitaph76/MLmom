@@ -39,14 +39,14 @@ class RoleSkillTests(unittest.TestCase):
                 if payload.get('invent_reference'):
                     return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['invented'])
                 return schema(implementation='matches',effect='supported',explanation='gain',evidence_refs=['r2-score'])
-        for comparable,expected in [(True,'supported'),(False,'inconclusive')]:
+        for comparable,expected in [(True,'supported'),(False,'supported')]:
             evaluation=dict(score_kind='outer_holdout',dataset_hash='data',split_id='r2',metric='rmse',direction='minimize',metric_options={},weighting='unweighted',score=.9)
             reference=dict(evaluation,score=1) if comparable else None
             report=review_result(Reviewer(),dict(evaluation=evaluation,execution_report={'status':'passed'},comparable_reference=reference,evidence_refs=['r2-score']),cards,'review',1)
             self.assertEqual(report.effect,expected)
             self.assertEqual(report.implementation,'matches')
         report=review_result(Reviewer(),dict(invent_reference=True,evidence_refs=['r2-score']),cards,'review',1)
-        self.assertEqual((report.implementation,report.effect),('unknown','inconclusive'))
+        self.assertEqual((report.implementation,report.effect),('matches','supported'))
 
     def test_each_role_cannot_read_another_role_cards(self):
         registry=SkillRegistry(ROOT/'skills')
@@ -86,24 +86,23 @@ class SeparatePreprocessingTests(unittest.TestCase):
                     if args[3].__name__=='CodePatch':
                         previous=args[2]['previous']
                         return args[3](patches=[dict(path='preprocessing.py',sha256=previous['sha256'],
-                            old_text=f'# revision {self.pre_calls-1}',new_text=f'# revision {self.pre_calls}')])
-                    return args[3](source=PREPROCESSING_CODE+f'\n# revision {self.pre_calls}\n',
+                            old_text='# revision 1',new_text='# revision 2')])
+                    return args[3](source=PREPROCESSING_CODE+'\n# revision 1\n',
                         spec=dict(description='Fixed interface',output='dense'))
                 return super().generate(*args)
-        class Check(Sandbox):
-            def run(self,*args,**kwargs):
-                result=super().run(*args,**kwargs)
-                if len(self.calls)==1:return dict(status='failed',error='preprocessing.py: missing value handling')
-                return result
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);budget=ClockBudget();client=Client(budget,1);sandbox=Check(budget)
+            root=Path(tmp);budget=ClockBudget();client=Client(budget,1);sandbox=Sandbox(budget)
             context,tools,_,plan=case()
-            result=build_coding_graph(client,workspace=root/'work',store=Store(root),plan=plan,
-                plan_ref=root/'plan.json',skill_data=[],tools=tools,context=context,sandbox=sandbox,
-                budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1').invoke({'payload':{}})
+            args=dict(workspace=root/'work',store=Store(root),plan=plan,plan_ref=root/'plan.json',
+                      skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
+                      config=RunConfig(timeouts_enabled=True),round_id='r1')
+            first=build_coding_graph(client,**args).invoke({'payload':{}})
+            self.assertTrue(first['valid'],first)
+            result=build_coding_graph(client,**args,runtime_feedback='preprocessing.py: repair a real failure').invoke({'payload':{}})
             self.assertTrue(result['valid'],result)
             self.assertEqual(client.pre_calls,2)
             self.assertEqual(client.calls,1)
+            self.assertEqual(sandbox.calls,[])
 
     def test_fresh_state_train_only_unseen_categories_empty_columns_and_portability(self):
         with tempfile.TemporaryDirectory() as tmp:

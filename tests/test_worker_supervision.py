@@ -238,27 +238,34 @@ class InfrastructureRoutingTests(unittest.TestCase):
             tools = ToolSet().register('broken', broken, 'Injected supervisor failure')
             with self.assertRaises(WorkerInfrastructureError): tools.invoke('broken', {})
 
-    def test_coding_smoke_aborts_without_another_generation(self):
+    def test_requested_smoke_propagates_infrastructure_failure_without_regeneration(self):
         from mlmom.coding import build_coding_graph
         from mlmom.pipeline_contracts import RunConfig
-        from tests.test_planning_limits import case, Store, ClockBudget, Coder
+        from tests.test_planning_limits import case, Store, ClockBudget, Coder, ADAPTER_CODE
+        class RequestingCoder(Coder):
+            def generate(self,*args):
+                if args[0]=='coding_agent':
+                    self.calls+=1
+                    args[4].invoke('write_file',dict(path='candidate.py',content=ADAPTER_CODE))
+                    args[4].invoke('run_smoke_check',{})
+                return super().generate(*args)
         context, tools, _, plan = case()
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); budget = ClockBudget(); client = Coder(budget, 0)
-            sandbox = Mock(run=Mock(side_effect=WorkerInfrastructureError(dict(stop_reason='parent_exit'), root/'check')))
-            graph = build_coding_graph(client, workspace=root/'workspace', store=Store(root), plan=plan,
-                plan_ref=root/'plan.json', skill_data=[], tools=tools, context=context,
-                sandbox=sandbox, budget=budget, config=RunConfig(max_attempts=3), round_id='r1')
-            with self.assertRaises(WorkerInfrastructureError): graph.invoke({'payload': {}})
-            self.assertEqual(client.calls, 1)
-            self.assertEqual(sandbox.run.call_count, 1)
+            root=Path(tmp);budget=ClockBudget();client=RequestingCoder(budget,0)
+            sandbox=Mock(run=Mock(side_effect=WorkerInfrastructureError(dict(stop_reason='parent_exit'),root/'check')))
+            graph=build_coding_graph(client,workspace=root/'workspace',store=Store(root),plan=plan,
+                plan_ref=root/'plan.json',skill_data=[],tools=tools,context=context,sandbox=sandbox,
+                budget=budget,config=RunConfig(max_attempts=3,coding_direct_first=False),round_id='r1')
+            with self.assertRaises(WorkerInfrastructureError):graph.invoke({'payload':{}})
+            self.assertEqual(client.calls,1)
+            self.assertEqual(sandbox.run.call_count,1)
 
     def test_pipeline_aborts_smoke_train_prediction_publication_diagnostics_and_final_refit(self):
         from mlmom.pipeline import Pipeline
         from mlmom.pipeline_contracts import RunConfig
         from tests.fakes import OfflineLLM
         from tests.test_pipeline import dataset, only_sklearn
-        for stage in ('smoke', 'train', 'predict', 'publish', 'diagnose', 'final'):
+        for stage in ('train', 'predict', 'publish', 'diagnose', 'final'):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); client = OfflineLLM()
                 with patch('mlmom.pipeline.installed_tools', only_sklearn):
@@ -282,7 +289,9 @@ class InfrastructureRoutingTests(unittest.TestCase):
                         process = Mock(poll=Mock(return_value=1), returncode=1, pid=999999999)
                         return Job(process, directory, time.monotonic(), 10, 1, 1, Mock(), Mock())
                     return start(request, directory, **limits)
-                if stage == 'final': pipeline.config.max_rounds = 1
+                if stage == 'final':
+                    pipeline.config.max_rounds = 1
+                    pipeline.config.cycle_full_refit = False
                 with patch.object(pipeline.sandbox, 'start', side_effect=launch):
                     output = pipeline.run()
                 self.assertEqual(output['status'], 'failed', output)

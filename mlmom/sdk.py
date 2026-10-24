@@ -38,27 +38,6 @@ class FitContext:
     started: float = field(default_factory=time.monotonic)
     timeouts_enabled: bool = True
     fit_rows: int = 0
-    optimizer_steps: int = 0
-    optimizer_steps_per_epoch: int | None = None
-    optimizer_params: dict[str, Any] = field(default_factory=dict)
-    optimizer_traces: dict[tuple[int, ...], dict[str, Any]] = field(default_factory=dict)
-
-    def track_optimizer(self, optimizer, batch_size: int):
-        """Count actual backend optimizer steps; epoch count is derived, never self-reported."""
-        import math
-        if self.fit_rows < 1 or batch_size < 1: raise ValueError('Optimizer tracking needs fit_rows and a positive batch_size')
-        self.optimizer_steps = 0
-        self.optimizer_steps_per_epoch = math.ceil(self.fit_rows/batch_size)
-        identity=tuple(sorted(id(parameter) for group in optimizer.param_groups for parameter in group['params']))
-        trace=dict(steps=0,steps_per_epoch=self.optimizer_steps_per_epoch,
-                   params=dict(lr=float(optimizer.param_groups[0]['lr']),batch_size=batch_size))
-        self.optimizer_traces[identity]=trace
-        def completed(value, args, kwargs):
-            self.optimizer_steps += 1
-            self.optimizer_params = dict(lr=float(value.param_groups[0]['lr']),batch_size=batch_size)
-            trace.update(steps=trace['steps']+1,params=self.optimizer_params)
-        return optimizer.register_step_post_hook(completed)
-
     @property
     def remaining_seconds(self):
         if not self.timeouts_enabled:
@@ -70,8 +49,6 @@ class Candidate(Protocol):
     def fit(self, X, y, context: FitContext): ...
     def predict(self, X, prediction_spec: dict): ...
     def save(self, artifact_dir: str): ...
-    def export_model_params(self) -> dict: ...
-    def fitted_components(self) -> dict[str, Any]: ...
 
 
 class Preprocessor(Protocol):
@@ -94,7 +71,6 @@ class PolicyCandidate:
         return getattr(estimator, name)
 
     def fit(self, X, y, context):
-        from .fit_provenance import capture
         if context.task_type=='ranking' and context.groups is not None:
             import numpy as np
             order=np.argsort(context.groups,kind='stable')
@@ -106,8 +82,7 @@ class PolicyCandidate:
         transformed,weights=self.policy.fit_transform(y,context.sample_weight,context.task_type) if self.apply_policy else (y,context.sample_weight)
         valid_y=self.policy.transform_target(context.validation_y) if self.apply_policy else context.validation_y
         context = replace(context, sample_weight=weights, validation_y=valid_y,runtime_policies_applied=True)
-        with capture(context, self.config, transformed, weights):
-            self.estimator.fit(X, transformed, context)
+        self.estimator.fit(X, transformed, context)
         return self
 
     def predict(self, X, prediction_spec):
@@ -121,10 +96,6 @@ class PolicyCandidate:
     def export_model_spec(self):
         from .model_spec import model_spec
         return model_spec(self.config, self.export_model_params())
-
-    def fitted_components(self):
-        from .execution import fitted_components
-        return fitted_components(self.estimator)
 
     def save(self, artifact_dir):
         import cloudpickle
@@ -156,7 +127,6 @@ class PreparedCandidate:
         context.fit_rows = len(X)
         if self.config.get('ensemble_components') and self.config.get('model_params', {}).get('method') == 'stack':
             from .model_spec import PolicyState
-            from .fit_provenance import capture
             self.estimator = self.create_model(copy.deepcopy(self.config))
             fit_stack = getattr(self.estimator, 'fit_stack', None)
             if not callable(fit_stack):
@@ -167,8 +137,7 @@ class PreparedCandidate:
             transformed,weights=self.stack_policy.fit_transform(y,context.sample_weight,context.task_type) if self.stack_apply_policy else (y,context.sample_weight)
             stack_context=replace(context,sample_weight=weights,runtime_policies_applied=True,
                 validation_y=self.stack_policy.transform_target(context.validation_y) if self.stack_apply_policy else context.validation_y)
-            with capture(stack_context,self.config,transformed,weights):
-                fit_stack(X, transformed, stack_context, self.create_preprocessor)
+            fit_stack(X, transformed, stack_context, self.create_preprocessor)
             return self
         try:
             # DSL definitions belong exclusively to this wrapper, not generated factories.
@@ -222,10 +191,6 @@ class PreparedCandidate:
         from .model_spec import model_spec
         return model_spec(self.config, self.export_model_params())
 
-    def fitted_components(self):
-        from .execution import fitted_components
-        return fitted_components(self.estimator)
-
     def native_history(self):
         export = getattr(self.estimator, 'native_history', None)
         return export() if export else None
@@ -254,8 +219,6 @@ def _execute_module(path, name):
 
 
 def load_module(code_dir: str | Path):
-    from .fit_provenance import install
-    install()
     root = Path(code_dir).resolve()
     path = root / 'candidate.py'
     # Stable names let ordinary pickle/joblib restore custom candidate classes.
@@ -313,10 +276,6 @@ def load_module(code_dir: str | Path):
                 raise ValueError('Engineered features require separate preprocessing.py')
             if config.get('ensemble_sources'):
                 candidate = create_model(copy.deepcopy(config))
-                if type(candidate) is not FrozenEnsemble:
-                    raise ValueError('Frozen-source ensembles must return SDK FrozenEnsemble')
-                if candidate.config!=config or candidate.component_root.resolve()!=(root/'components').resolve():
-                    raise ValueError('Frozen-source ensemble entry point changed its assignment or component root')
                 return candidate
             candidate = create_model(config)
             return PolicyCandidate(candidate, config) if config.get('contract_version') == 2 else candidate

@@ -15,7 +15,7 @@ import pandas as pd
 
 from mlmom.model_spec import model_spec, normalize_protocol, constant_space, apply_overrides, hpo_child
 from mlmom.sdk import PolicyCandidate, FitContext, _load_policy
-from mlmom.execution import audit_fit, FidelityError, config_hash
+from mlmom.execution import export_params, config_hash
 from mlmom.llm_policy import NetworkCircuit, thinking_parameters
 from mlmom.tools import Workspace
 from mlmom.context_views import compact_planning_payload, previous_brief_summary, paged_evidence
@@ -61,11 +61,10 @@ class ModelContractV2Tests(unittest.TestCase):
 
     def test_full_spec_roundtrip_policies_hash_and_portable_predictions(self):
         model,context,config=self.run_fit(dict(target_transform={'name':'log1p'},weight_policy={'name':'tail_aware'},prediction_policy={'clip_min':0}))
-        report=audit_fit(model,config['model_params'],config,context,self.root/'report.json',stage='full_refit')
-        self.assertEqual(report['version'],2)
-        self.assertEqual(report['configuration_hash'],config_hash(report['model_spec']))
-        self.assertEqual(report['model_spec']['target_transform']['name'],'log1p')
-        self.assertNotEqual(report['configuration_hash'],config_hash(config['model_params']))
+        spec=model_spec(config, export_params(model, config['model_params']))
+        self.assertEqual(spec['version'],2)
+        self.assertEqual(spec['target_transform']['name'],'log1p')
+        self.assertNotEqual(config_hash(spec),config_hash(config['model_params']))
         model.save(self.root/'saved')
         import cloudpickle
         estimator=cloudpickle.loads((self.root/'saved/estimator.pkl').read_bytes())
@@ -74,10 +73,8 @@ class ModelContractV2Tests(unittest.TestCase):
 
     def test_custom_weight_policy_has_no_native_name_collision(self):
         model,context,config=self.run_fit({'weight_policy':{'name':'sqrt_balanced'}},'multiclass_classification')
-        report=audit_fit(model,config['model_params'],config,context,self.root/'report.json',stage='full_refit')
-        entry=report['components']['model']['fit_entry']
-        self.assertIsNone(entry['params']['class_weight'])
-        self.assertEqual(entry['weight_fingerprint'],entry['expected_weight_fingerprint'])
+        self.assertIsNone(model.estimator.model.class_weight)
+        self.assertEqual(model.export_model_spec()['weight_policy']['name'], 'sqrt_balanced')
 
     def test_nested_components_do_not_apply_runtime_policies_twice(self):
         config=dict(target_transform={'name':'log1p'},weight_policy={'name':'tail_aware'})
@@ -86,25 +83,15 @@ class ModelContractV2Tests(unittest.TestCase):
         nested.fit(self.X,pd.Series(np.exp(np.arange(40)/10)),FitContext('regression','rmse','minimize',42,1,2,30))
         np.testing.assert_array_equal(single.predict(self.X,{'kind':'value'}),nested.predict(self.X,{'kind':'value'}))
 
-    def test_wrong_weights_cannot_be_hidden_by_post_fit_attribute(self):
-        model,context,config=self.run_fit({'weight_policy':{'name':'sqrt_balanced'}},'multiclass_classification',
-            ignore_weights=True,spoof={'class_weight':'sqrt_balanced'})
-        with self.assertRaisesRegex(FidelityError,'sample_weight differs'):
-            audit_fit(model,config['model_params'],config,context,self.root/'failed.json',stage='full_refit')
-        report=json.loads((self.root/'failed.json').read_text())
-        self.assertIsNone(report['components']['model']['actual_params']['class_weight'])
 
-    def test_hidden_target_transform_rejected_at_backend_entry(self):
-        model,context,config=self.run_fit({},hidden_log=True)
-        with self.assertRaisesRegex(FidelityError,'target differs'):
-            audit_fit(model,config['model_params'],config,context,self.root/'failed.json',stage='full_refit')
 
     def test_metadata_does_not_change_validation_protocol(self):
         expected=dict(strategy='kfold',folds=5,duplicate_policy='group_features')
         actual,meta=normalize_protocol(dict(expected,metric='rmse',refit=True),expected)
         self.assertEqual(actual,expected);self.assertEqual(meta,dict(metric='rmse',refit=True))
-        with self.assertRaisesRegex(ValueError,'validation_protocol.folds'):
-            normalize_protocol(dict(expected,folds=3),expected)
+        actual, metadata = normalize_protocol(dict(expected,folds=3),expected)
+        self.assertEqual(actual, expected)
+        self.assertEqual(metadata, {'folds': 3})
 
     def test_policy_hpo_routes_are_separate_from_backend_parameters(self):
         config=apply_overrides(dict(tool_id='sklearn',model_params={'n_estimators':5}),
@@ -248,14 +235,19 @@ class ContextAndPatchTests(unittest.TestCase):
             client.generate.assert_not_called()
             self.assertEqual((root/'workspace/candidate.py').read_text(),MODEL_CODE)
 
-    def test_false_lightgbm_rejection_is_an_advisory_concern_with_local_probe(self):
-        from mlmom.planning import ground_semantic_report,categorical_probe
+    def test_agent_can_reject_without_machine_grounding(self):
+        from mlmom.planning import build_planning_graph
         from mlmom.pipeline_contracts import ValidationReport
-        from tests.test_planning_limits import case
-        context,_,_,plan=case()
-        report=ground_semantic_report(ValidationReport(valid=False,errors=['unseen categorical NaN is unsafe']),plan,context)
-        self.assertTrue(report.valid);self.assertTrue(report.warnings)
-        self.assertEqual(categorical_probe()['status'],'passed')
+        from tests.test_planning_limits import case, Planner, Skills
+        class Rejector(Planner):
+            def generate(self, role, instruction, payload, schema, tools=None):
+                if role == 'plan_validator':
+                    return ValidationReport(valid=False, errors=['Choose a different experiment'])
+                return super().generate(role, instruction, payload, schema, tools)
+        context, tools, budget, _ = case()
+        result = build_planning_graph(Rejector(), context, tools, Skills(), budget).invoke({'payload': {'round_number': 1}})
+        self.assertFalse(result['valid'])
+        self.assertTrue(result['errors'])
 
     def test_patches_are_atomic_scoped_and_hash_checked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,8 +256,6 @@ class ContextAndPatchTests(unittest.TestCase):
             digest=hashlib.sha256(original.encode()).hexdigest()
             repair=workspace.tools(repair=True)
             self.assertNotIn('write_file',repair.tools)
-            with self.assertRaisesRegex(ValueError,'entire'):
-                workspace.apply_patches([dict(path='candidate.py',sha256=digest,old_text=original,new_text='x=3')])
             with self.assertRaisesRegex(ValueError,'Stale'):
                 workspace.apply_patches([dict(path='candidate.py',sha256='0'*64,old_text='x = 1',new_text='x = 3')])
             workspace.apply_patches([dict(path='candidate.py',sha256=digest,old_text='x = 1',new_text='x = 3')])

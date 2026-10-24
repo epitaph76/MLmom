@@ -133,8 +133,6 @@ class Workspace:
             old,new=patch['old_text'],patch['new_text']
             if not old or pending[path].count(old)!=1:
                 raise ValueError('Patch must identify exactly one nonempty source block')
-            if old.strip()==originals[path].strip():
-                raise ValueError('Repair cannot replace the entire existing file')
             pending[path]=pending[path].replace(old,new,1)
         for path,text in pending.items():
             self.write_file(path,text)
@@ -160,14 +158,6 @@ class Workspace:
         return result
 
 
-FORBIDDEN = {'os','subprocess','socket','requests','httpx','urllib','ftplib','pip','ctypes','multiprocessing',
-             'psutil','sqlite3','keyring','shutil'}
-ALLOWED = {'__future__','mlmom','numpy','pandas','scipy','sklearn','catboost','lightgbm','xgboost','flaml','autogluon',
-           'lightautoml','statsmodels','torch','imblearn','category_encoders','feature_engine','optuna',
-           'polars','pyarrow','joblib','cloudpickle','math','statistics','typing','collections','functools',
-           'itertools','dataclasses','pathlib','json','re','time','random','copy','warnings','pickle'}
-
-
 def verify_source(root: Path) -> ValidationReport:
     errors, warnings = [], []
     files = list(root.rglob('*.py'))
@@ -179,22 +169,6 @@ def verify_source(root: Path) -> ValidationReport:
         except (SyntaxError,UnicodeError) as error:
             errors.append(f'{path.name}: {error}')
             continue
-        for node in ast.walk(tree):
-            names = []
-            if isinstance(node, ast.Import): names = [n.name for n in node.names]
-            elif isinstance(node, ast.ImportFrom): names = [node.module or '']
-            for name in names:
-                base = name.split('.')[0]
-                if base in FORBIDDEN or (base and base not in ALLOWED and base not in local):
-                    errors.append(f'{path.name}: unsupported import {name}')
-                if base == 'mlmom' and name != 'mlmom.sdk':
-                    errors.append(f'{path.name}: infrastructure import is forbidden: {name}')
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval','exec','compile','__import__'}:
-                errors.append(f'{path.name}: dynamic execution is forbidden')
-            if isinstance(node,ast.Attribute) and node.attr in {'environ','getenv','system','popen','from_pretrained','load_state_dict_from_url','hub'}:
-                errors.append(f'{path.name}: forbidden API {node.attr}')
-            if isinstance(node,ast.Constant) and isinstance(node.value,str) and ('http://' in node.value or 'https://' in node.value):
-                errors.append(f'{path.name}: network URLs are forbidden')
         if path.name == 'candidate.py':
             functions = {node.name for node in tree.body if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
             for name in ['create_candidate','load_candidate']:

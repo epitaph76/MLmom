@@ -134,7 +134,7 @@ class ScoutingTests(unittest.TestCase):
         def call(task_value,number):
             return dict(role='assistant',tool_calls=[dict(id=str(number),type='function',function=dict(name='confirm_task',
                 arguments=json.dumps(dict(task=task_value))))])
-        replies=[call(task|dict(primary_metric='accuracy'),1),call(task,2),
+        replies=[call(task|dict(target_columns=['missing_target']),1),call(task,2),
                  dict(role='assistant',content=json.dumps(dict(observations=[],proposals=[],unfinished_checks=[])))]
         with patch.object(client,'_request',side_effect=replies) as request:
             report=self.session(client).run()
@@ -146,10 +146,20 @@ class ScoutingTests(unittest.TestCase):
         self.assertTrue(any(item.get('data',{}).get('valid') is False for item in feedback))
         self.assertEqual(client.max_steps,2)
 
+    def test_reconfirming_task_with_other_explanations_does_not_change_execution(self):
+        session=self.session()
+        task=json.loads(OfflineLLM().complete([{'content':json.dumps({
+            'dataset_inspection':{'task':self.profile.task.model_dump(mode='json')}})}]))
+        first=session.confirm_task(task | {'notes':'Initial explanation'})
+        again=session.confirm_task(task | {'notes':'Another explanation'})
+        self.assertTrue(first['valid'])
+        self.assertEqual(first,again)
+        self.assertEqual(again['task']['agent_notes'],{'notes':'Initial explanation'})
+
     def test_confirmation_accepts_json_string_with_unchanged_validation_and_deadline(self):
         session=self.session();deadline=session.deadline
         task=json.loads(OfflineLLM().complete([{'content':json.dumps({'dataset_inspection':{'task':self.profile.task.model_dump(mode='json')}})}]))
-        for invalid in ['{',json.dumps(task|dict(unexpected_field=True))]:
+        for invalid in ['{',json.dumps(task|dict(validation_folds=1))]:
             self.assertEqual(session.tools.invoke('confirm_task',{'task':invalid}).status,'error')
             self.assertIsNone(self.store.get('confirmed_task','task'))
         invalid=json.dumps(task|dict(target_columns=['invented']))
@@ -203,8 +213,8 @@ class ScoutingTests(unittest.TestCase):
     def test_measured_numbers_are_checked_but_proposal_references_are_not(self):
         session=self.session()
         result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
-        with self.assertRaisesRegex(ValueError,'Measured numbers'):
-            session.save_observation('size','Fake rows',180,{'n':999},result['source_ref'])
+        saved=session.save_observation('size','Agent assessment',180,{'n':999},result['source_ref'])
+        self.assertEqual(saved['numbers'],{'n':999})
         class Client(OfflineLLM):
             def generate(self,*args):
                 super().generate(*args)

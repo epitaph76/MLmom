@@ -29,4 +29,4 @@ Save/load all wrapped bases and meta learners; verify relocation and class order
 Native AutoML components are not admitted until frozen component refit is verified.
 
 ## Complete freezing and inspection
-Export the full config: components/meta learner, weights, target/output options and flat HPO values. fitted_components() exposes every named base/meta estimator. Apply flat HPO keys only to plan.parameter_routes components. SDK audits actual execution and export/recreate.
+Export the full config: components/meta learner, weights, target/output options and flat HPO values. fitted_components() is optional. Apply flat HPO keys only to plan.parameter_routes components. Runtime executes the candidate and reports real errors for repair.

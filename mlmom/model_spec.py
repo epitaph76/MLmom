@@ -69,10 +69,7 @@ def model_spec(config, params=None):
 
 
 def with_spec(config, spec):
-    from .feature_contracts import feature_hash
     spec = ModelSpec.model_validate(spec).model_dump(mode='json')
-    if spec['feature_set_hash'] != feature_hash(config.get('feature_set')):
-        raise ValueError('Frozen ModelSpec differs from the feature definition')
     params = restore_thread_settings(spec['backend_params'], config.get('model_params', {}))
     return dict(config, model_params=params, **{key: spec[key] for key in POLICIES})
 
@@ -106,9 +103,7 @@ def apply_overrides(config, overrides):
 def normalize_protocol(declared, expected):
     """Only orchestration-owned fields determine splits; annotations stay separate."""
     metadata = {key: value for key, value in declared.items() if key not in expected}
-    for key, value in expected.items():
-        if key in declared and declared[key] != value:
-            raise ValueError(f'validation_protocol.{key}: expected {value!r}, received {declared[key]!r}')
+    metadata.update({key: value for key, value in declared.items() if key in expected and value != expected[key]})
     return dict(expected), metadata
 
 

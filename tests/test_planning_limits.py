@@ -65,7 +65,7 @@ class PlanningLimitTests(unittest.TestCase):
         output=build_planning_graph(TracedPlanner(),context,tools,TracedSkills(),budget).invoke({'payload':{'round_number':1}})
         self.assertTrue(output['valid'])
         self.assertEqual(observed,[('planner','base'),('plan_validator','base'),('planner','alt'),('plan_validator','alt')])
-        self.assertEqual(skill_contexts,['base','alt'])
+        self.assertEqual(skill_contexts,[])
         self.assertNotIn('hypothesis_id',current_context())
 
     def test_batch_limit_and_config_limits(self):
@@ -78,27 +78,19 @@ class PlanningLimitTests(unittest.TestCase):
         with self.assertRaises(ValidationError): HypothesisBatch(hypotheses=[h,h,h])
         with self.assertRaises(ValidationError): PlanBatch(plans=[case()[3]]*3)
 
-    def test_lightweight_rules_cannot_be_bypassed_with_fast_label(self):
+    def test_methodological_and_backend_choices_are_not_machine_vetoes(self):
         context,tools,budget,plan=case()
-        for change in ({'strategy':'optuna','search_space':{'n_estimators':{'type':'int','low':1,'high':2}}},
-                       {'max_trials':2},{'time_limit_seconds':301},
-                       {'tool_id':'torch','skill_ids':['torch'],'cost_tag':'fast'},
-                       {'tool_id':'flaml','skill_ids':['flaml'],'strategy':'native','patience_trials':None},
-                       {'ensemble_components':[{'tool_id':'sklearn'}],'skill_ids':['sklearn','ensembles']}):
+        for change in [{'strategy':'optuna','search_space':{'depth':{'type':'int','low':1,'high':2}}},
+                       {'max_trials':2}, {'tool_id':'missing'}, {'time_limit_seconds':301},
+                       {'ensemble_components':[{'tool_id':'sklearn'}]}]:
             with self.subTest(change=change):
-                changed=plan.model_copy(update=change)
-                self.assertFalse(validate_plan(changed,context,tools,Skills(),budget,lightweight=True).valid)
-        cat=plan.model_copy(update={'tool_id':'catboost','skill_ids':['catboost']})
-        self.assertTrue(validate_plan(cat,context,tools,Skills(),budget,lightweight=True).valid)
-        self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,lightweight=True,initial_experiment_seconds=30).valid)
-        longer=plan.model_copy(update={'time_limit_seconds':360})
-        self.assertFalse(validate_plan(longer,context,tools,Skills(),budget,lightweight=True).valid)
-        self.assertTrue(validate_plan(longer,context,tools,Skills(),budget,lightweight=True,initial_experiment_seconds=360).valid)
+                self.assertTrue(validate_plan(plan.model_copy(update=change),context,tools,Skills(),budget,lightweight=True).valid)
+        self.assertFalse(validate_plan(plan.model_copy(update={'cpus':99}),context,tools,Skills(),budget).valid)
 
     def test_native_backend_single_loophole_closed_but_native_advanced_allowed(self):
         context,tools,budget,plan=case()
         p=plan.model_copy(update={'tool_id':'flaml','skill_ids':['flaml']})
-        self.assertFalse(validate_plan(p,context,tools,Skills(),budget).valid)
+        self.assertTrue(validate_plan(p,context,tools,Skills(),budget).valid)
         p.strategy='native';p.patience_trials=None
         self.assertTrue(validate_plan(p,context,tools,Skills(),budget).valid)
 
@@ -123,7 +115,7 @@ class PlanningLimitTests(unittest.TestCase):
             called.append(key);tools[key].available=True;tools[key].reason=None
         output=build_planning_graph(SelectedPlanner(),context,tools,Skills(),budget,lightweight=False,
             planning_mode='baseline',probe_tool=probe).invoke({'payload':{'round_number':2}})
-        self.assertFalse(output['valid']);self.assertEqual(called,['torch','catboost'])
+        self.assertTrue(output['valid']);self.assertEqual(called,[])
         self.assertFalse(tools['autogluon'].available)
 
     def test_lazy_probe_does_not_run_for_forbidden_initial_or_missing_backends(self):
@@ -143,7 +135,7 @@ class PlanningLimitTests(unittest.TestCase):
                 tools[key].available=False;tools[key].reason=reason
                 output=build_planning_graph(SelectedPlanner(),context,tools,Skills(),budget,lightweight=lightweight,
                     planning_mode='baseline',probe_tool=called.append).invoke({'payload':{'round_number':1}})
-                self.assertFalse(output['valid']);self.assertEqual(called,[])
+                self.assertTrue(output['valid']);self.assertEqual(called,[])
 
     def test_baseline_can_publish_before_planning_bad_alternative(self):
         context,tools,budget,plan=case();client=Planner(bad_alternative=True)
@@ -205,27 +197,30 @@ class Coder:
             from tests.fakes import PREPROCESSING_CODE
             return args[3](source=PREPROCESSING_CODE,spec=dict(description='Test transforms',output='dense'))
         self.calls+=1;self.budget.elapsed+=self.seconds
+        if args[3].__name__=='CodePatch':return args[3](patches=[])
         return CodeBundle(files={'candidate.py':ADAPTER_CODE})
 
 
 class CodingBudgetTests(unittest.TestCase):
-    def test_runtime_repairs_share_original_deadline_and_smoke_is_clamped(self):
+    def test_runtime_repairs_share_original_deadline_without_mandatory_smoke(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
             context,tools,_,plan=case();client=Coder(budget,250);original=client.deadline
-            kwargs=dict(workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',skill_data=[],
-                        tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1')
-            first=build_coding_graph(client,**kwargs).invoke({'payload':{}})
-            self.assertTrue(first['valid']);self.assertEqual(budget.elapsed,280)
+            args=dict(workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',skill_data=[],
+                      tools=tools,context=context,sandbox=sandbox,budget=budget,
+                      config=RunConfig(timeouts_enabled=True),round_id='r1')
+            self.assertTrue(build_coding_graph(client,**args).invoke({'payload':{}})['valid'])
+            self.assertEqual(budget.elapsed,250)
             deadline=store.get('coding_budget','r1-base')['deadline']
             client.seconds=10
-            second=build_coding_graph(client,**kwargs,runtime_feedback='Runtime failure').invoke({'payload':{}})
-            self.assertTrue(second['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],20)
-            self.assertEqual(budget.elapsed,300);self.assertEqual(client.deadline,original)
-            third=build_coding_graph(client,**kwargs,runtime_feedback='Another failure').invoke({'payload':{}})
-            self.assertFalse(third['valid']);self.assertEqual(client.calls,1)
+            self.assertTrue(build_coding_graph(client,**args,runtime_feedback='Runtime error').invoke({'payload':{}})['valid'])
+            self.assertEqual(budget.elapsed,260)
+            budget.elapsed=300
+            self.assertFalse(build_coding_graph(client,**args,runtime_feedback='Another error').invoke({'payload':{}})['valid'])
+            self.assertEqual(client.calls,2)
+            self.assertEqual(client.deadline,original)
             self.assertEqual(store.get('coding_budget','r1-base')['deadline'],deadline)
-            self.assertEqual(len(sandbox.calls),2)
+            self.assertEqual(sandbox.calls,[])
 
     def test_research_deadline_is_tighter_than_coding_window(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -234,7 +229,7 @@ class CodingBudgetTests(unittest.TestCase):
             result=build_coding_graph(client,workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',
                 skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
                 config=RunConfig(timeouts_enabled=True,prediction_seconds=5),round_id='r1').invoke({'payload':{}})
-            self.assertTrue(result['valid']);self.assertEqual(sandbox.calls[-1]['seconds'],5)
+            self.assertTrue(result['valid']);self.assertEqual(sandbox.calls,[])
             self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1885)
 
     def test_increased_final_reserve_protects_fit_and_prediction_during_repair(self):
@@ -246,7 +241,7 @@ class CodingBudgetTests(unittest.TestCase):
             first=build_coding_graph(client,**kwargs).invoke({'payload':{}})
             self.assertTrue(first['valid']);budget.extra_reserve=400
             second=build_coding_graph(client,**kwargs,runtime_feedback='Repair').invoke({'payload':{}})
-            self.assertFalse(second['valid']);self.assertEqual(client.calls,1);self.assertEqual(len(sandbox.calls),1)
+            self.assertFalse(second['valid']);self.assertEqual(client.calls,1);self.assertEqual(len(sandbox.calls),0)
 
 
 if __name__=='__main__': unittest.main()

@@ -1,4 +1,4 @@
-"""Hypothesis planning subgraph and deterministic plan validation."""
+"""Agent planning and review, with technical resource admission."""
 from __future__ import annotations
 
 from .agents import GlobalAPIError
@@ -9,214 +9,21 @@ from langgraph.graph import StateGraph, START, END
 from .pipeline_contracts import (HypothesisBatch, PlanBatch, HypothesisPlan, ValidationReport,
                                   BudgetSnapshot, TaskContext)
 from .evaluation import prediction_kind
-from .registry import LIGHTAUTOML_OBJECTIVES
 from .agents import LLMUnavailable, StructuredOutputError, role_window
 from .tracing import bind, emit
 from .model_spec import normalize_protocol, constant_space, apply_overrides, Intervention
-from functools import lru_cache
-from .planning_assignments import normalize_champion_assignment, infrastructure_overrides, normalize_cpu_hints
+from .planning_assignments import normalize_cpu_hints
 from .planning_retries import PlanningRejections
 
 
-@lru_cache(maxsize=1)
-def categorical_probe():
-    """A small executable counterexample, using no user data or API tokens."""
-    import numpy as np
-    import pandas as pd
-    import lightgbm as lgb
-    train=pd.DataFrame({'category':pd.Categorical(['a','b']*16)})
-    estimator=lgb.LGBMRegressor(n_estimators=3,min_child_samples=1,num_leaves=3,n_jobs=1,verbosity=-1)
-    estimator.fit(train,np.arange(32,dtype=float))
-    incoming=pd.DataFrame({'category':pd.Categorical(['a','unseen',None],categories=['a','b'])})
-    values=estimator.predict(incoming)
-    return dict(probe_id='lightgbm_native_categorical_unseen_nan',backend_version=lgb.__version__,
-                status='passed' if np.isfinite(values).all() else 'failed',synthetic=True,
-                known_unseen_missing_predictions_finite=bool(np.isfinite(values).all()))
-
-
-def ground_semantic_report(report, plan, context):
-    """LLM concerns need inspectable plan evidence; backend guesses cannot veto."""
-    import re
-    errors=[]
-    warnings=list(report.warnings)
-    data=plan.model_dump(mode='json')
-    canonical={'prediction_kind':prediction_kind(context.task.primary_metric,context.task.task_type)}
-    for issue in report.issues:
-        path=issue.get('field','')
-        observed=data
-        try:
-            for key in path.split('.'):
-                observed=observed[int(key)] if isinstance(observed,list) else observed[key]
-        except (KeyError,TypeError,ValueError,IndexError):
-            warnings.append('Ungrounded semantic issue: '+str(issue))
-            continue
-        reason=issue.get('reason','Semantic constraint violation')
-        if issue.get('rule_id')=='task_contract' and path in canonical and observed!=canonical[path]:
-            errors.append(path+': '+reason)
-        elif (issue.get('rule_id')=='holdout_training' and isinstance(observed,str)
-              and issue.get('source_quote') and issue['source_quote'] in observed
-              and re.search(r'fit|train',issue['source_quote'],re.I)
-              and re.search(r'holdout\s+labels|external\s+holdout|test\s+labels',issue['source_quote'],re.I)):
-            errors.append(path+': '+reason)
-        else:
-            warnings.append('Semantic concern requires a reproducible check: '+reason)
-    if not errors:
-        warnings.extend('Unverified semantic concern: '+message for message in report.errors)
-        if not report.valid and not report.errors:
-            warnings.append('Semantic rejection had no grounded field/evidence')
-    return ValidationReport(valid=not errors,errors=errors,warnings=warnings,issues=report.issues)
-
-
-def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills, budget: BudgetSnapshot,
-                  *, lightweight=False, initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
+def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills,
+                  budget: BudgetSnapshot, *, lightweight=False,
+                  initial_experiment_seconds=300, evaluation_reserve_seconds=0) -> ValidationReport:
     errors = []
-    if plan.feature_set_id:
-        if not plan.feature_set or plan.feature_set.feature_set_id != plan.feature_set_id:
-            errors.append('feature_set_id requires a registered feature definition')
-        else:
-            from .feature_engineering import validate_features
-            try: validate_features(plan.feature_set,context.feature_columns)
-            except ValueError as error: errors.append(str(error))
-        if plan.ensemble_components or plan.ensemble_sources:
-            errors.append('Shared engineered features are unsupported for ensembles; use frozen components')
-    elif plan.feature_set:
-        errors.append('feature_set requires an explicit feature_set_id')
-    expected_protocol=dict(strategy=str(context.task.validation_strategy),folds=context.task.validation_folds,
-                           duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
-    try:
-        plan.validation_protocol,metadata=normalize_protocol(plan.validation_protocol,expected_protocol)
-        plan.validation_metadata.update(metadata)
-    except ValueError as error:
-        errors.append(str(error))
-    if plan.model_params.get('class_weight') == 'sqrt_balanced':
-        errors.append('model_params.class_weight: sqrt_balanced is a runtime weight_policy, not a native backend parameter')
-    if plan.weight_policy.name != 'none' and plan.model_params.get('class_weight') is not None:
-        errors.append('weight_policy conflicts with native model_params.class_weight; declare one source of weights')
-    if plan.target_transform.name!='identity' and 'regression' not in context.task.task_type:
-        errors.append('target_transform requires a regression task')
-    if plan.weight_policy.name in {'balanced','sqrt_balanced'} and context.task.task_type not in {'binary_classification','multiclass_classification'}:
-        errors.append('weight_policy class balancing requires single-target classification')
-    if plan.weight_policy.name=='tail_aware' and context.task.task_type!='regression':
-        errors.append('weight_policy.tail_aware requires single-target regression')
-    text=' '.join([plan.hypothesis.description,plan.hypothesis.rationale,*plan.preprocessing]).lower()
-    if ('duplicate-aware' in text or 'duplicate aware' in text) and getattr(context.task,'duplicate_policy','allow') != 'group_features':
-        errors.append('duplicate-aware validation requires confirmed duplicate_policy=group_features; narrative cannot change the protocol')
-    if plan.stopping_policy=='early_stopping' and str(context.task.validation_strategy)!='holdout':
-        errors.append('early_stopping requires the confirmed holdout strategy; CV has no stopping validation set')
-    if any(v=='early_stopping' for v in plan.component_stopping_policies.values()) and str(context.task.validation_strategy)!='holdout':
-        errors.append('Component early_stopping requires holdout')
-    if plan.change_kind=='single_change_ablation' and (plan.strategy!='single' or plan.search_space):
-        errors.append('Single-change ablation must freeze model parameters without additional HPO')
-    tool = tools.get(plan.tool_id)
-    if not tool or not tool.available: errors.append(f'Tool unavailable: {plan.tool_id}')
-    else:
-        if context.task.validation_strategy not in tool.validation_strategies:
-            errors.append('Tool has no verified support for the confirmed internal validation strategy')
-        if tool.native_hpo and context.task.group_columns:
-            errors.append('Native group-aware validation has not been verified')
-        if context.task.task_type not in tool.task_types: errors.append('Tool does not support the task type')
-        if plan.weight_policy.name!='none' and not tool.supports_weights:errors.append('Backend has no verified sample-weight support')
-        if context.task.group_columns and not tool.supports_groups and context.task.task_type == 'ranking': errors.append('Ranking requires a group-aware adapter')
-        if context.task.weight_column and not tool.supports_weights: errors.append('Adapter does not support sample weights')
-        if plan.strategy == 'native' and not tool.native_hpo: errors.append('Native HPO is not supported')
-        if tool.native_hpo and plan.strategy != 'native': errors.append('Native AutoML requires strategy=native')
-        if plan.strategy == 'native' and plan.patience_trials is not None and not tool.supports_patience:
-            errors.append('Native adapter has no trial-patience callback; set patience_trials=null')
-        if not set(tool.skill_ids) <= set(plan.skill_ids): errors.append('Required library skills are missing')
-    if lightweight:
-        if plan.strategy != 'single' or plan.max_trials != 1:
-            errors.append('Lightweight plans require strategy=single and max_trials=1; search_space is reserved for later HPO')
-        if tool and (tool.native_hpo or tool.cost_tag == 'slow'):
-            errors.append('Lightweight plans cannot use native AutoML or slow backends')
-        if getattr(budget,'timeouts_enabled',True) and plan.time_limit_seconds > initial_experiment_seconds:
-            errors.append('Lightweight experiment exceeds the initial experiment limit')
     if plan.cpus > budget.available_cpus or plan.memory_gb > budget.available_memory_gb:
         errors.append('Requested resources exceed worker capacity')
-    if getattr(budget,'timeouts_enabled',True) and plan.time_limit_seconds + max(0,evaluation_reserve_seconds) > budget.research_seconds:
+    if getattr(budget, 'timeouts_enabled', True) and plan.time_limit_seconds + max(0, evaluation_reserve_seconds) > budget.research_seconds:
         errors.append('Experiment exceeds research deadline including evaluation reserve')
-    if plan.prediction_kind != prediction_kind(context.task.primary_metric, context.task.task_type):
-        errors.append('prediction_kind does not match the primary metric')
-    try: skills.validate_selection(plan.skill_ids, context.task.task_type)
-    except (GlobalAPIError, WorkerInfrastructureError):
-        raise
-    except Exception as error: errors.append(f'Skills: {error}')
-    for name, spec in plan.search_space.items():
-        if name.startswith('policy_params.'):
-            path=name.split('.')
-            policy_fields={'target_transform':set(item for item in type(plan.target_transform).model_fields),
-                           'weight_policy':set(item for item in type(plan.weight_policy).model_fields),
-                           'prediction_policy':set(item for item in type(plan.prediction_policy).model_fields)}
-            if len(path)!=3 or path[1] not in policy_fields or path[2] not in policy_fields[path[1]]:
-                errors.append('Unknown custom policy parameter route: '+name)
-        if not isinstance(spec.get('type'),str) or spec.get('type') not in {'int','float','categorical'}: errors.append(f'Invalid search type: {name}')
-        elif spec['type'] == 'categorical':
-            choices=spec.get('choices')
-            if not isinstance(choices,list) or not choices or any(type(x) not in {str,int,float,bool,type(None)} for x in choices):errors.append(f'Invalid search choices: {name}')
-        else:
-            low, high = spec.get('low'), spec.get('high')
-            if not isinstance(low,(int,float)) or not isinstance(high,(int,float)) or low > high:
-                errors.append(f'Invalid search bounds: {name}')
-            elif spec.get('log') and low <= 0: errors.append(f'Log search requires positive bounds: {name}')
-            if spec['type']=='int' and (type(low) is not int or type(high) is not int):errors.append(f'Integer search requires integer bounds: {name}')
-        if 'log' in spec and type(spec['log']) is not bool:errors.append(f'Log flag must be boolean: {name}')
-    if plan.strategy == 'optuna' and not plan.search_space: errors.append('Optuna requires a search space')
-    if infrastructure_overrides(plan.model_params, plan.search_space, native=bool(tool and tool.native_hpo)):
-        errors.append('Model/search parameters attempt to override infrastructure or pretrained policy')
-    if plan.tool_id=='statsmodels' and context.task.task_type!='regression':
-        errors.append('The statsmodels OLS adapter supports single-output regression')
-    if tool and tool.native_hpo:
-        from .evaluation import metric_name
-        accepted={'rmse','mae','f1_macro','roc_auc','accuracy','log_loss'}
-        if plan.tool_id=='lightautoml':accepted={'rmse','roc_auc','log_loss'}
-        if metric_name(context.task.primary_metric) not in accepted:errors.append('Native adapter cannot optimize this metric')
-        if plan.tool_id=='lightautoml' and metric_name(context.task.primary_metric)!=LIGHTAUTOML_OBJECTIVES.get(context.task.task_type):
-            errors.append('LightAutoML native objective must match its task: regression=rmse, binary=roc_auc, multiclass=log_loss')
-    if plan.ensemble_components:
-        for key in plan.search_space:
-            if key.startswith('policy_params.'):continue
-            if key not in plan.parameter_routes:
-                errors.append(f'Flat ensemble HPO parameter {key} requires parameter_routes to a named component')
-        component_names={entry.get('name',entry.get('tool_id')) for entry in plan.ensemble_components}
-        if len(component_names)!=len(plan.ensemble_components):
-            errors.append('Ensemble component names must be unique; add name when using the same backend twice')
-        if set(plan.parameter_routes.values())-component_names:
-            errors.append('parameter_routes names an undeclared ensemble component')
-        if len(plan.ensemble_components)<2:errors.append('At least two ensemble components are required')
-        if context.task.task_type not in {'regression','multioutput_regression','binary_classification','multiclass_classification','multilabel_classification'}:
-            errors.append('Ensemble SDK supports supervised regression/classification')
-        if 'ensembles' not in plan.skill_ids: errors.append('Ensembles require the ensembles skill')
-        for component in plan.ensemble_components:
-            entry = tools.get(component.get('tool_id'))
-            if not entry or not entry.available or context.task.task_type not in entry.task_types:
-                errors.append('Unavailable/incompatible ensemble component')
-            if entry and entry.native_hpo:
-                errors.append('Native AutoML ensemble components have no verified frozen refit protocol')
-            if lightweight and entry and entry.cost_tag == 'slow':
-                errors.append('Lightweight ensemble components cannot use slow backends')
-            if entry and not set(entry.skill_ids)<=set(plan.skill_ids):errors.append('Required ensemble component skills are missing')
-            if entry and context.task.validation_strategy not in entry.validation_strategies:
-                errors.append('Ensemble component has no verified support for the internal validation strategy')
-            if entry and context.task.weight_column and not entry.supports_weights:errors.append('Ensemble component cannot honor sample weights')
-            if infrastructure_overrides(component.get('model_params',{}), {}):errors.append('Ensemble component overrides infrastructure policy')
-    if plan.ensemble_sources:
-        from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy
-        names=[s.get('name') for s in plan.ensemble_sources]
-        if len(names)<2 or len(set(names))!=len(names) or set(names)!={s.get('name') for s in plan.ensemble_components}:
-            errors.append('Frozen ensemble sources must match two or three distinct declared components')
-        if plan.target_transform!=TargetTransform() or plan.weight_policy!=WeightPolicy() or plan.prediction_policy!=PredictionPolicy():
-            errors.append('Frozen-source ensembles keep policies inside each component; outer policies must be identity')
-        if plan.strategy!='single' or plan.search_space or plan.preprocessing:
-            errors.append('Frozen-source recipes require single execution and component-owned preprocessing')
-        if plan.model_params.get('method') not in {'mean','median','weighted','stack'}:
-            errors.append('Unsupported frozen-source ensemble recipe')
-        if plan.model_params.get('method')=='median' and 'classification' in context.task.task_type:
-            errors.append('Median is a regression-only recipe')
-        for source in plan.ensemble_sources:
-            cfg=source.get('config',{})
-            if cfg.get('ensemble_components') or cfg.get('ensemble_sources'):
-                errors.append('Recursive ensembles are not admitted')
-            if not source.get('candidate_id') or not source.get('experiment_id') or not source.get('code_hash'):
-                errors.append('Frozen ensemble source requires verified candidate/experiment/hash references')
     return ValidationReport(valid=not errors, errors=errors)
 
 
@@ -346,7 +153,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Do not repeat rejected_hypotheses marked blocked; propose a different approach. '
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
-                        'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage. '
+                        'based_on is a saved candidate_id; use based_on_hypothesis_id for hypothesis lineage. '
                         'Declare target_transform, weight_policy and prediction_policy separately from native model_params. '
                         'Runtime owns these operations; never ask the coder to apply them a second time.',
                         dict(state['payload'],lightweight=is_light(state),feedback=errors), HypothesisBatch, role_tools)
@@ -358,7 +165,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 ids=[h.hypothesis_id for h in batch.hypotheses]
                 if len(ids)!=len(set(ids)): raise ValueError('Duplicate hypothesis ID')
                 if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and not any(h.baseline for h in batch.hypotheses):
-                    raise ValueError('Round 1 requires a baseline')
+                    batch.hypotheses[0].baseline = True
                 if planning_mode == 'initial':
                     parent = next(h for h in batch.hypotheses if h.baseline).model_copy(deep=True)
                     parent.kind, parent.model_family = 'family', 'gradient_boosting'
@@ -367,7 +174,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'as the initial tabular baseline. Implement exactly required_tool_id with its own '
                         'native parameters and cheap fold-local preprocessing; preserve the canonical '
                         'task, feature availability, metric, folds and seed. No HPO in these initial fits.')
-                    diversity = ' The first cycle must retain diverse verified boosting models for later ensembles.'
+                    diversity = ' The first cycle must retain diverse boosting models for later ensembles.'
                     if not parent.rationale.endswith(diversity):
                         parent.rationale += diversity
                     batch = HypothesisBatch(hypotheses=[parent])
@@ -424,7 +231,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Describe required transforms in preprocessing, including column names and prediction '
                         'constraints. The runner executes the confirmed internal validation strategy; '
                         'budget all folds plus a mandatory full-train refit. Do not implement CV in candidate.fit. '
-                        'Native AutoML requires a verified validation_strategies entry matching the confirmed task. '
                         'Use strategy=optuna only for an explicitly declared HPO intervention; keep fixed ablations single. '
                         'Declare target_transform, weight_policy and prediction_policy as runtime policies, never native model_params. '
                         'Route custom search dimensions as policy_params.<policy>.<field>. '
@@ -452,15 +258,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                             raise ValueError('Unknown/unaccepted feature_set_id')
                         from .feature_contracts import FeatureSet
                         registered=FeatureSet.model_validate(registry[item.feature_set_id])
-                        if item.feature_set is not None and item.feature_set != registered:
-                            raise ValueError('Planner changed a registered feature definition')
                         item.feature_set=registered
                     elif item.feature_set is not None:
                         raise ValueError('Planner must select a registered feature_set_id')
                     if hypothesis.hypothesis_id in family_metadata:
                         parent, required_tool = family_metadata[hypothesis.hypothesis_id]
-                        if item.tool_id != required_tool:
-                            raise ValueError('Family variant requires tool_id='+required_tool)
                         item.search_group_id=parent.hypothesis_id
                         item.search_group_kind='family'
                         item.parent_hypothesis=parent
@@ -473,7 +275,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     if item.search_group_id != group_id:
                         emit('planning.normalized_group',dict(hypothesis_id=item.hypothesis.hypothesis_id,
                             requested_group_id=group_id,search_group_id=item.search_group_id))
-                    warnings.extend(normalize_champion_assignment(item, state['payload'].get('champion')))
                     actual_protocol=dict(strategy=str(context.task.validation_strategy),
                         folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
                     item.validation_protocol,metadata=normalize_protocol(item.validation_protocol,actual_protocol)
@@ -505,30 +306,15 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     normalized=normalize_cpu_hints(item)
                     if normalized:
                         emit('planning.normalized_resources',{'parameters':normalized,'cpus':item.cpus})
-                    if item.hypothesis.hypothesis_id!=hypothesis.hypothesis_id or item.hypothesis.baseline!=hypothesis.baseline:
-                        raise ValueError('Plan must preserve the hypothesis ID and baseline flag')
+                    if item.hypothesis.hypothesis_id != hypothesis.hypothesis_id:
+                        item.agent_notes['requested_hypothesis_id'] = item.hypothesis.hypothesis_id
+                        item.hypothesis.hypothesis_id = hypothesis.hypothesis_id
+                    item.hypothesis.baseline = hypothesis.baseline
                     if item.hypothesis.based_on and known_candidates is not None and item.hypothesis.based_on not in known_candidates:
-                        alias=item.hypothesis.based_on
-                        lineage={h.hypothesis_id for h in source} | set((candidate_hypotheses or {}).values())
-                        if alias not in lineage:
-                            raise ValueError('based_on must reference an existing verified candidate_id')
-                        matches=[key for key,value in (candidate_hypotheses or {}).items() if value==alias and key in known_candidates]
-                        item.hypothesis.based_on_hypothesis_id=alias
-                        item.hypothesis.based_on=matches[-1] if matches else None
-                        emit('planning.normalized_lineage',item.hypothesis)
-                    if probe_tool is not None:
-                        # Probe only the proposed backends, never the full heavy
-                        # registry. Forbidden initial plans must not trigger
-                        # expensive capability checks before rejection.
-                        tool=tools.get(item.tool_id)
-                        forbidden_initial=is_light(state) and (
-                            (tool and (tool.native_hpo or tool.cost_tag=='slow')))
-                        if not forbidden_initial:
-                            selected=[item.tool_id,*[c.get('tool_id') for c in item.ensemble_components]]
-                            for key in dict.fromkeys(selected):
-                                selected_tool=tools.get(key)
-                                if selected_tool and not selected_tool.available and selected_tool.reason=='adapter probe required':
-                                    for_hypothesis(hypothesis,probe_tool,key)
+                        alias = item.hypothesis.based_on
+                        matches = [key for key, value in (candidate_hypotheses or {}).items() if value == alias and key in known_candidates]
+                        item.hypothesis.based_on_hypothesis_id = alias
+                        item.hypothesis.based_on = matches[-1] if matches else None
                     report=for_hypothesis(hypothesis,validate_plan,item,context,tools,skills,worker_budget,lightweight=is_light(state),
                                          initial_experiment_seconds=initial_experiment_seconds,
                                          evaluation_reserve_seconds=evaluation_reserve_seconds)
@@ -544,14 +330,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         break
                     instructions=for_hypothesis(hypothesis,skills.load,[],context.task.task_type,role='plan_validator')
                     probes=[]
-                    if item.tool_id=='lightgbm' and any(word in ' '.join(item.preprocessing).lower() for word in ('categor','unseen')):
-                        try:
-                            probes.append(categorical_probe())
-                        except WorkerInfrastructureError:
-                            raise
-                        except Exception as error:
-                            probes.append(dict(probe_id='lightgbm_native_categorical_unseen_nan',status='unavailable',error_type=type(error).__name__))
-                        emit('planning.capability_probes',probes)
                     validating=True
                     report=for_hypothesis(hypothesis,generate,'plan_validator',
                         'min_delta is a legacy absolute comparison field, NOT the batched HPO continuation threshold. '
@@ -561,7 +339,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'review_scope describes this single-plan call; sibling plans are intentionally absent. '
                         'Use execution_contract for ownership: CPU/thread controls come from runtime FitContext, '
                         'so their absence from model_params is expected and is not a warning. '
-                        'Machine checks own family coverage, resource admission and execution fidelity. '
+                        'You decide methodological approval. Runtime only enforces technical boundaries and budgets. '
                         'Prioritize concrete plan-field contradictions and leakage. Optional improvements such '
                         'as circular encoding or rare-category pooling are not baseline defects without evidence. '
                         'Keep at most three distinct actionable warnings; do not limit real blocking issues. '
@@ -569,8 +347,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'implement every claim, with no implicit adapter behavior. The runner owns splits and HPO. '
                         'Require explicit operations and columns for changes such as treating numeric years as '
                         'categories. Single baseline search_space is for later HPO. '
-                        'Blocking issues must include rule_id, field, reason and source_quote in issues. '
-                        'Use task_contract for canonical task violations or holdout_training for a quoted instruction to train on external labels. '
+                        'Explain blocking issues in errors; issues and source citations are optional. '
                         'Unproven library incompatibilities are warnings. Runtime executes declared target/weight/output policies.',
                         dict(round_number=state['payload'].get('round_number',1),
                              planning_brief=state['payload'].get('planning_brief'),
@@ -589,13 +366,12 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                  family_coverage_owner='runtime',sibling_plans_in_payload=False),
                              execution_contract=dict(resource_owner='runtime',cpus=item.cpus,memory_gb=item.memory_gb,
                                  thread_source='FitContext.cpus',thread_params_required_in_model_params=False,
-                                 resource_enforcement='worker_admission_and_machine_execution_gate',
+                                 resource_enforcement='worker_admission',
                                  preprocessing_owner='preprocessing_agent',estimator_owner='coding_agent',
                                  policy_owner='runtime',validation_owner='runtime',refit_owner='runtime'),
                              capability_probes=probes,
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)
-                    report=ground_semantic_report(report,item,context)
                     warnings.extend(report.warnings)
                     if not report.valid or report.errors:
                         raise ValueError('; '.join(report.errors) or 'Semantic validator rejected the plan without an explanation')

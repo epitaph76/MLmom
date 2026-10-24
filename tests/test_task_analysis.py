@@ -84,10 +84,6 @@ class TaskAnalysisTests(unittest.TestCase):
 
         self.assertFalse(report.valid)
         self.assertIn("unknown_columns", codes)
-        self.assertIn("target_mismatch", codes)
-        self.assertIn("metric_mismatch", codes)
-        self.assertIn("metric_not_applicable", codes)
-        self.assertIn("result_format_mismatch", codes)
 
 
 

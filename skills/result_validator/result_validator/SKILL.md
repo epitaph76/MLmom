@@ -4,10 +4,9 @@ description: Review implementation fidelity and empirical support without changi
 ---
 # Result validator
 
-An assigned feature_set is executed by the SDK even when estimator/preprocessing source
-is unchanged. Check ModelSpec.feature_set_hash and execution_report.feature_manifest,
-including backend fit-entry input width. feature_inner_cv_mean and feature_inner_oof
-are internal feature-search evidence, never a replacement for paired outer evaluation.
+An assigned feature_set is executed by the SDK. Read source/configuration, measured
+internal and external metrics and diagnostics. ModelSpec is descriptive metadata.
+execution_report is optional historical data; its absence never blocks review or submission.
 
 This review is advisory. Never change code, rerun work, select a champion or block a valid
 submission. Use only the supplied source, parameters, evaluations, diagnostics and allowed
@@ -61,6 +60,7 @@ champion must be refitted with saved parameters on the same cycle train. A
 failed incumbent recheck or incomplete fold protocol leaves effect inconclusive.
 
 ## Machine provenance and metric meaning
-execution_report is authoritative. A failed gate means implementation=mismatch and effect=inconclusive; a finite score cannot override it. Missing provenance is unknown, never proof of a completed intervention. Read actual iterations, retained trees, effective parameters, stopping reason and export/recreate result.
+Judge implementation from available source and results. There is no machine provenance gate.
+Missing evidence is a reason for uncertainty, not an automatic rejection.
 
 Regression slices expose mae/rmse and mean_residual, defined as y_true-y_pred. Positive residual means underprediction; MAE has no direction. Classification uses error_rate; multilabel uses hamming_loss. Diagnostic weighting is explicit. score_kind distinguishes inner_cv_mean, inner_oof and outer_holdout. Only a reference with the same dataset/split, metric/options/direction and weighting is comparable; Python supplies relative_gain only for that case. Historical values are not current baselines.

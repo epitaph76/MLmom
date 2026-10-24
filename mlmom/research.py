@@ -84,7 +84,6 @@ class ReconnaissanceSession:
         self.observations.update({o['observation_id']:Observation.model_validate(o)
             for o in (store.get('reconnaissance_progress',key) or {}).get('observations',[])})
         progress = store.get('reconnaissance_progress',key) or {}
-        self.failed_saves = progress.get('failed_saves',{})
         self.unfinished = progress.get('unfinished_checks',[])
         tables = {}
         for name,path,role in [('train',train_path or files.train,'training'), ('test',files.test,'test_features'),
@@ -137,7 +136,7 @@ class ReconnaissanceSession:
         saved = self.store.get('confirmed_task','task')
         locked = self.context.task if self.context else TaskDefinition.model_validate(saved) if saved else None
         if locked:
-            if locked != task:
+            if locked.model_dump(exclude={'agent_notes'}) != task.model_dump(exclude={'agent_notes'}):
                 raise ValueError('The confirmed task is immutable')
             return dict(valid=True, task=locked.model_dump(mode='json'))
         report = TaskValidator().validate(self.profile, task)
@@ -166,50 +165,8 @@ class ReconnaissanceSession:
                          numbers: dict[str,float] | None = None, source_ref: str = '') -> dict:
         self._check_time()
         numbers = numbers or {}
-        fingerprint = hashlib.sha256(json.dumps([topic,description,rows,numbers,source_ref],sort_keys=True).encode()).hexdigest()
-        if self.failed_saves.get(fingerprint,0) >= 2:
-            raise ToolInputError('This observation failed twice. Change the evidence/fields or leave it unfinished.',
-                                 code='repeated_observation_error',hint='Do not repeat this save; continue with another supported finding.')
-        try:
-            return self._save_observation(topic,description,rows,numbers,source_ref)
-        except ValueError:
-            self.failed_saves[fingerprint] = self.failed_saves.get(fingerprint,0)+1
-            if self.failed_saves[fingerprint] == 2:
-                self.unfinished.append(f'Observation {topic!r} could not be verified from {source_ref}.')
-            self._persist()
-            raise
-
-    def _save_observation(self, topic, description, rows, numbers, source_ref):
-        result_rows = None
-        if source_ref == self.profile_ref:
-            # Profile facts already exist in the deterministic report. New numbers
-            # must occur in that evidence, rather than just naming its file.
-            evidence = self.profile.model_dump(mode='json')
-        elif source_ref.startswith('csv:'):
-            evidence = self.store.get('csv_result',source_ref[4:])
-            if evidence is None:
-                raise ToolInputError('Unknown CSV evidence',fields=[dict(field='source_ref',actual=source_ref)])
-            result_rows = evidence.get('total_rows')
-            # Result cardinality, duration, offsets and other metadata are not measurements.
-            evidence = evidence.get('rows', [{k:v for k,v in table.items() if k not in {'column_offset','columns_truncated','schema_only'}}
-                                             for table in evidence.get('tables',[])])
-        else:
-            raise ToolInputError('Use one exact supplied profile or CSV source_ref',fields=[dict(field='source_ref',actual=source_ref)])
-        values = []
-        def collect(value):
-            if isinstance(value,dict):
-                for item in value.values(): collect(item)
-            elif isinstance(value,list):
-                for item in value: collect(item)
-            elif type(value) in {int,float}: values.append(value)
-        collect(evidence)
-        invalid = [dict(field='numbers.'+key,actual=value) for key,value in numbers.items()
-                   if not math.isfinite(value) or value not in values]
-        if rows is not None and (type(rows) is not int or rows < 0 or rows not in values):
-            invalid.append(dict(field='rows',actual=rows))
-        if invalid:
-            raise ToolInputError('Measured numbers must occur exactly in the cited evidence',code='unverified_measurement',
-                fields=invalid,hint='Copy exact measurements from this source only. Omit rows for an aggregate without an explicit support count; use SQL COUNT(*) for measured support.')
+        evidence = self.store.get('csv_result', source_ref[4:]) if source_ref.startswith('csv:') else None
+        result_rows = evidence.get('total_rows') if evidence else None
         identity = 'obs-'+hashlib.sha256(json.dumps([topic,description,rows,numbers,source_ref],sort_keys=True).encode()).hexdigest()[:20]
         item = Observation(observation_id=identity,topic=topic,description=description,rows=rows,numbers=numbers,source_ref=source_ref,result_rows=result_rows)
         self.observations[identity] = item
@@ -218,7 +175,7 @@ class ReconnaissanceSession:
 
     def _persist(self):
         self.store.put('reconnaissance_progress',self.key,dict(observations=[o.model_dump(mode='json') for o in self.observations.values()],
-            failed_saves=self.failed_saves,unfinished_checks=self.unfinished))
+            unfinished_checks=self.unfinished))
 
     def reconcile(self, answer):
         rejected = []
@@ -226,7 +183,9 @@ class ReconnaissanceSession:
             if item.observation_id in self.observations and item == self.observations[item.observation_id]:
                 continue
             try:
-                self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
+                saved = self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
+                if item.agent_notes:
+                    self.observations[saved['observation_id']] = Observation.model_validate(dict(saved,agent_notes=item.agent_notes))
             except ValueError as exc:
                 rejected.append(f'Observation {item.observation_id}: {exc}')
         unfinished = list(dict.fromkeys(answer.unfinished_checks+self.unfinished+rejected))
@@ -375,12 +334,6 @@ def review_result(client,payload,skills,key,seconds):
     payload=dict(payload,source={name:dict(evidence_ref=f'source:{name}',characters=len(text)) for name,text in sources.items()},
                  evidence_refs=list(dict.fromkeys([*payload.get('evidence_refs',[]),*values])))
     review_tools=paged_evidence(values) if values else None
-    execution=payload.get('execution_report')
-    if execution and execution.get('status') != 'passed':
-        return ResultReview(implementation='mismatch',effect='inconclusive',
-            explanation='Machine execution gate rejected the experiment: '+'; '.join(execution.get('errors',[])))
-    if not execution:
-        return ResultReview(implementation='unknown',effect='inconclusive',explanation='No machine execution provenance was supplied.')
     from .evaluation import comparable_scores,relative_gain
     reference=payload.get('comparable_reference')
     comparable=comparable_scores(payload.get('evaluation',{}),reference)
@@ -396,12 +349,6 @@ def review_result(client,payload,skills,key,seconds):
                 'Use internal_validation for fold stability and OOF; smoke is synthetic and cannot establish full refit. '
                 'Missing metrics are unknown. Read source evidence through read_evidence when needed. '
                 'Never change code, champion selection or submission.',dict(payload,skills=skills),ResultReview,review_tools)
-        if not set(result.evidence_refs)<=set(payload.get('evidence_refs',[])):
-            raise ValueError('Unknown result evidence reference')
-        if (result.effect!='inconclusive' and not comparable) or result.implementation!='matches':
-            result=result.model_copy(update={'effect':'inconclusive',
-                'explanation':result.explanation+(' No comparable reference was available.' if not comparable else
-                    ' The intended intervention was not cleanly implemented.')})
         return result
     except (GlobalAPIError, WorkerInfrastructureError):
         raise

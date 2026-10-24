@@ -21,4 +21,4 @@ class TimeLimit:
 if context.timeouts_enabled:
     kwargs['callbacks'] = [TimeLimit()]
 ```
-export_model_params returns a deep copy of ALL configured params, replacing iterations with tree_count_ only for explicitly allowed early stopping. For fixed fitting retain the requested limit; runtime independently checks tree_count_, evaluation history and best iteration. Unknown early termination fails admission. Expose self.model (or named fitted_components for an ensemble).
+export_model_params returns a deep copy of ALL configured params, replacing iterations with tree_count_ only for explicitly allowed early stopping. For fixed fitting retain the requested limit; save/load must retain the learned estimator. No fitted-component audit is required.

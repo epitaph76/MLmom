@@ -56,7 +56,6 @@ def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_h
     import numpy as np
     import pandas as pd
     from mlmom.pipeline_contracts import TaskContext,ExperimentRun,CandidateVersion
-    from mlmom.execution import require_admitted
     from mlmom.inputs import read_table,features
     from mlmom.resources import SandboxManager,Budget
     from mlmom.pipeline_contracts import RunConfig
@@ -72,8 +71,6 @@ def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_h
         candidates={r[0]:json.loads(r[1]) for r in db.execute("SELECT id,body FROM objects WHERE kind='candidate'")}
         reconnaissance=[json.loads(r[0]) for r in db.execute("SELECT body FROM objects WHERE kind='reconnaissance'")]
     admitted=[run for run in experiments if run['status']=='completed']
-    for run in admitted:
-        require_admitted(ExperimentRun.model_validate(run),CandidateVersion.model_validate(candidates[run['candidate_id']]))
     if metric_name(context.task.primary_metric)!=metric_name(expected_metric):raise ValueError('Wrong primary metric')
     output=read_table(summary['submission']['path']);test=read_table(context.files.test)
     fmt=context.task.result_format
@@ -115,7 +112,7 @@ def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_h
     report=dict(status='passed',rows=len(output),primary_metric=expected_metric,completed_cycles=completed,
         outer_splits=len(split_ids),incumbent_rechecks=len(incumbent_rounds),generated_path=True,
         relocated_model_equal=True,submission_sha256=digest(Path(summary['submission']['path'])),
-        execution_fidelity_verified=True,verified_fits=len(admitted),final_full_refit=True,
+        completed_fits=len(admitted),final_full_refit=True,
         observation_handoff=handoff,observation_handoff_verified=handoff['verified'])
     write(replay/'report.json',report)
     return report

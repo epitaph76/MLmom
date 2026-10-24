@@ -55,7 +55,7 @@ class RunConfig(StrictModel):
     hypothesis_seconds: float = Field(210, gt=0)
     planner_seconds: float = Field(210, gt=0)
     validator_seconds: float = Field(210, gt=0)
-    coding_verification_seconds: float = Field(60, gt=0)
+    coding_verification_seconds: float = Field(60, gt=0)  # Legacy configuration; no mandatory smoke reserve.
     coding_direct_first: bool = True
     coding_tool_steps: int = Field(3, ge=1, le=12)
     planning_direct_first: bool = True
@@ -242,7 +242,7 @@ class SearchGroupPlan(StrictModel):
         return self
 
 
-class EnsembleProposal(StrictModel):
+class EnsembleProposal(AgentNarrative):
     component_experiment_ids: list[str] = Field(default_factory=list, max_length=3)
     rationale: str = Field(min_length=1,max_length=4000)
     skip: bool = False
@@ -267,7 +267,7 @@ class PlanBatch(AgentNarrative):
         return value
 
 
-class ValidationReport(StrictModel):
+class ValidationReport(AgentNarrative):
     valid: bool
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -275,6 +275,7 @@ class ValidationReport(StrictModel):
 
 
 class CandidateVersion(StrictModel):
+    agent_notes: dict[str, Any] = Field(default_factory=dict)
     feature_set_hash: str | None = None
     candidate_id: str
     hypothesis_id: str
@@ -415,7 +416,7 @@ class ToolResult(StrictModel):
     hint: str | None = None
 
 
-class Observation(StrictModel):
+class Observation(AgentNarrative):
     observation_id: str
     topic: str
     description: str
@@ -425,14 +426,14 @@ class Observation(StrictModel):
     source_ref: str
 
 
-class ResearchProposal(StrictModel):
+class ResearchProposal(AgentNarrative):
     description: str
     evidence_ids: list[str] = Field(default_factory=list)
     expected_effect: str
     verification: str
 
 
-class ReconnaissanceReport(StrictModel):
+class ReconnaissanceReport(AgentNarrative):
     status: Literal['completed', 'partial', 'unavailable'] = 'completed'
     observations: list[Observation] = Field(default_factory=list)
     proposals: list[ResearchProposal] = Field(default_factory=list)
@@ -478,7 +479,7 @@ class PlannerContextDraft(AgentNarrative):
     assumptions: list[str] = Field(default_factory=list)
 
 
-class ResultReview(StrictModel):
+class ResultReview(AgentNarrative):
     implementation: Literal['matches', 'partial', 'mismatch', 'unknown']
     effect: Literal['supported', 'not_supported', 'inconclusive']
     evidence_refs: list[str] = Field(default_factory=list)
@@ -486,7 +487,7 @@ class ResultReview(StrictModel):
     recommendations: list[str] = Field(default_factory=list)
 
 
-class PreprocessingSpec(StrictModel):
+class PreprocessingSpec(AgentNarrative):
     module: str = 'preprocessing.py'
     factory: str = 'create_preprocessor'
     description: str
@@ -494,7 +495,7 @@ class PreprocessingSpec(StrictModel):
     constraints: list[str] = Field(default_factory=list)
 
 
-class PreprocessingBundle(StrictModel):
+class PreprocessingBundle(AgentNarrative):
     source: str
     spec: PreprocessingSpec
 
@@ -517,7 +518,7 @@ class TrainingCheckpoint(StrictModel):
     weighting: str = 'unweighted'
 
 
-class TrainingDecision(StrictModel):
+class TrainingDecision(AgentNarrative):
     action: Literal['continue', 'stop', 'refit']
     reason: str
     next_params: list[dict[str, Any]] = Field(default_factory=list, max_length=5)

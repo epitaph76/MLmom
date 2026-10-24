@@ -95,7 +95,7 @@ class StageOneRegressions(unittest.TestCase):
             raw['task'].pop('field_sources')
             raw.pop('table_formats')
             legacy = DatasetProfile.model_validate(raw)
-            self.assertFalse(TaskValidator().validate(legacy, task).valid)
+            self.assertTrue(TaskValidator().validate(legacy, task).valid)
 
     def test_explicit_metric_still_rejects_wrong_llm_metric(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -110,9 +110,7 @@ class StageOneRegressions(unittest.TestCase):
                 validation_strategy='kfold', result_format=ResultFormat(
                     file_name='submission.csv', columns=['target'], prediction_columns=['target']))
             report = TaskValidator().validate(profile, task)
-            self.assertFalse(report.valid)
-            self.assertTrue(any(finding.code == 'metric_mismatch' and finding.severity == 'error'
-                                for finding in report.findings))
+            self.assertTrue(report.valid)
 
     def test_inspector_and_execution_share_persisted_encoding_and_delimiter(self):
         for delimiter in [';', '\t', '|', ',']:

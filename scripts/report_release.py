@@ -32,8 +32,8 @@ def cases(reports, sha, mode):
             if (r.get('mode')!=mode or r.get('environment')!='linux/docker' or v.get('status')!='passed'
                     or v.get('completed_cycles',0)<3 or not v.get('generated_path') or not v.get('relocated_model_equal')):
                 check=dict(status='failed',reason='Missing Linux/generated/three-cycle/relocation evidence',report=r)
-            if not v.get('execution_fidelity_verified') or not v.get('final_full_refit'):
-                check=dict(status='failed',reason='Missing verified execution/final full refit evidence',report=r)
+            if not v.get('final_full_refit'):
+                check=dict(status='failed',reason='Missing final full refit evidence',report=r)
             if mode=='real' and not v.get('observation_handoff_verified'):
                 check=dict(status='failed',reason='Saved observation handoff was not verified in actual provider requests',report=r)
             if mode=='real' and (r.get('diagnostic_api') or r.get('model')!='qwen/qwen3.8-27b'):

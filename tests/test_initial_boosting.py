@@ -145,8 +145,8 @@ class InitialPlanningTests(unittest.TestCase):
         result = build_planning_graph(StarterPlanner(), context, tools, Skills(), budget,
             planning_mode='initial', initial_max_workers=1).invoke({'payload': {'round_number': 1}})
         self.assertTrue(result['valid'], result)
-        self.assertEqual([p['tool_id'] for p in result['plans']], ['lightgbm', 'xgboost'])
-        self.assertEqual(result['skipped'][0]['tool_id'], 'catboost')
+        self.assertEqual([p['tool_id'] for p in result['plans']], list(BOOSTERS))
+        self.assertEqual(result['skipped'], [])
         self.assertEqual(result['plans'][0]['cpus'], budget.available_cpus)
         small = budget.model_copy(update=dict(available_cpus=2, available_memory_gb=2))
         self.assertEqual(initial_boosting_resources(small, 3, 3), dict(workers=2, cpus=1, memory_gb=1))
@@ -154,9 +154,9 @@ class InitialPlanningTests(unittest.TestCase):
     def test_failed_first_backend_does_not_discard_other_starters(self):
         class BrokenFirst(StarterPlanner):
             def generate(self, role, instruction, payload, schema, tools=None):
+                if role == 'plan_validator' and payload['required_tool_id'] == 'lightgbm':
+                    return schema(valid=False, errors=['The agent rejected this starter'])
                 result = super().generate(role, instruction, payload, schema, tools)
-                if role == 'planner' and payload['required_tool_id'] == 'lightgbm':
-                    result.plans[0].tool_id = 'sklearn'
                 return result
         context, tools, budget, _ = case()
         result = build_planning_graph(BrokenFirst(), context, tools, Skills(), budget,

@@ -27,9 +27,6 @@ def plan_ensemble(pipeline, state):
     if context.task.task_type not in SUPERVISED:
         return finish(plans=[], reason='unsupported_task_type')
     pool = component_pool(pipeline.store, state['round_number'])
-    pool = [row for row in pool if (tool:=pipeline.tools.get(row['plan']['tool_id'])) and
-            context.task.task_type in tool.task_types and
-            (tool.available or tool.reason=='adapter probe required')]
     if len(pool) < 2:
         return finish(plans=[], reason='fewer_than_two_compatible_components')
     snapshot = pipeline.budget.snapshot()
@@ -43,7 +40,7 @@ def plan_ensemble(pipeline, state):
             def read_component_history(offset: int=0, limit: int=12):
                 if offset<0 or not 1<=limit<=12:raise ValueError('Use offset>=0 and limit in 1..12')
                 return dict(components=[component_brief(row) for row in pool[offset:offset+limit]],total=len(pool))
-            role_tools.register('read_component_history',read_component_history,'Read a page of verified component metadata from completed cycles.')
+            role_tools.register('read_component_history',read_component_history,'Read a page of saved component metadata from completed cycles.')
             preview=pool[:12]
             champion_id=(state.get('champion') or {}).get('run',{}).get('experiment_id')
             anchor=next((row for row in pool if row['experiment_id']==champion_id),None)
@@ -53,7 +50,7 @@ def plan_ensemble(pipeline, state):
                 for attempt in range(pipeline.config.max_attempts):
                     try:
                         proposal = pipeline.client.generate('ensemble_agent',
-                            'Select two or three complementary verified SINGLE model experiments for one ensemble hypothesis. '
+                            'Select two or three complementary saved SINGLE model experiments for one ensemble hypothesis. '
                             'Use only supplied experiment IDs. No recursive ensembles. Consider diversity, evidence and cost; '
                             'historical scores with different split IDs are not comparable. Return skip=true with a reason '
                             'when no defensible composition exists. Return only component_experiment_ids, rationale and skip; '
@@ -89,7 +86,7 @@ def plan_ensemble(pipeline, state):
         progress = pipeline.store.get('ensemble_planning_progress',key) or {}
         graph = build_planning_graph(pipeline.client,context,pipeline.tools,pipeline.skills,snapshot,
             max_attempts=pipeline.config.max_attempts,max_candidates=1,lightweight=False,
-            probe_tool=pipeline.probe_ml_tool,evaluation_reserve_seconds=2*pipeline.config.prediction_seconds,
+            evaluation_reserve_seconds=2*pipeline.config.prediction_seconds,
             planner_seconds=pipeline.config.planner_seconds,validator_seconds=pipeline.config.validator_seconds,
             saved_progress=progress,save_progress=lambda p:pipeline.store.put('ensemble_planning_progress',key,p))
         result = graph.invoke(dict(payload=payload,hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]}),

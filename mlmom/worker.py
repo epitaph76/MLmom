@@ -16,22 +16,17 @@ from .execution_resources import execution_config
 
 def failure_result(error, root):
     """Keep complete debugging evidence on disk and send the repair role one defect."""
-    from .execution import FidelityError
     path = Path(root)/'traceback.log'
     path.write_text(''.join(traceback.format_exception(type(error),error,error.__traceback__)),encoding='utf-8')
     frames = traceback.extract_tb(error.__traceback__)
     authored = [frame for frame in frames if Path(frame.filename).name in {'candidate.py','preprocessing.py'}]
     frame = authored[-1] if authored else frames[-1] if frames else None
     source = dict(file=frame.filename,line=frame.lineno,function=frame.name) if frame else None
-    fidelity = isinstance(error,FidelityError)
-    hint = ('Repair the reported configuration, export or stopping defect; inspect execution_report_ref.' if fidelity else
-            'Use apply_patch on the existing source at error_details.source; retain unrelated working code.')
+    hint = 'Use apply_patch on the existing source at error_details.source; retain unrelated working code.'
     message = f'{type(error).__name__}: {str(error)[:1700]}'
     if source: message += f' [{Path(source["file"]).name}:{source["line"]}]'
-    result = dict(status='failed',error=message,error_code='execution_fidelity_failed' if fidelity else 'worker_runtime_error',
+    result = dict(status='failed',error=message,error_code='worker_runtime_error',
                   error_details=dict(type=type(error).__name__,source=source,hint=hint),traceback_ref=str(path))
-    if fidelity:
-        result.update(execution_report=error.report,execution_report_ref=error.path,stop_reason='execution_fidelity_failed')
     return result
 
 
@@ -106,7 +101,6 @@ def smoke(request, root):
     from .adapters import LibraryCandidate,load_adapter
     from .evaluation import checked_predictions
     from .persistence import tree_hash
-    from .execution import audit_fit, compare_roundtrip, FidelityError
     kind = request.get('task_type','regression')
     X,y = synthetic(kind)
     if request.get('feature_schema'):
@@ -161,36 +155,6 @@ def smoke(request, root):
     else:
         context.fit_rows=len(X)
         model.fit(X,y,context)
-    inspection_context = replace(context,validation_y=y.iloc[b]) if request.get('native_holdout') else context
-    report_path=root/'execution-report.json'
-    report=audit_fit(model,config.get('model_params',{}),config,inspection_context,report_path,stage='smoke')
-    frozen=report['exported_params']
-    frozen_config=dict(config,model_params=frozen,stopping_policy='fixed',component_stopping_policies={})
-    frozen_model=module.create_candidate(execution_config(frozen_config, request['worker_cpus'])) if module else LibraryCandidate(execution_config(frozen_config, request['worker_cpus']))
-    frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),stage='smoke_recreate',fit_id=uuid.uuid4().hex,
-                           time_limit_seconds=max(1,request['worker_seconds']*.25),fit_rows=len(X))
-    Path(frozen_context.work_dir).mkdir(parents=True,exist_ok=True)
-    frozen_model.fit(X,y,frozen_context)
-    recreated=audit_fit(frozen_model,frozen,frozen_config,frozen_context,root/'recreated-report.json',stage='smoke_recreate')
-    errors=compare_roundtrip(report,recreated)
-    if not request.get('native_holdout') and config.get('tool_id') not in {'flaml','autogluon','lightautoml'}:
-        left=np.asarray(model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}))
-        right=np.asarray(frozen_model.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}))
-        same=np.array_equal(left,right)
-        if not same and np.issubdtype(left.dtype,np.number) and np.issubdtype(right.dtype,np.number):
-            same=np.allclose(left,right,rtol=1e-6,atol=1e-8)
-        if not same:errors.append('export/recreate changes predictions with the same data and seed')
-    report['roundtrip']='failed' if errors else 'passed'
-    report['errors'].extend(errors)
-    report['status']='failed' if errors else 'passed'
-    from .persistence import atomic_json
-    atomic_json(report_path,report)
-    if errors:raise FidelityError(report,report_path)
-    (root/'frozen-model').mkdir(parents=True,exist_ok=True)
-    frozen_model.save(str(root/'frozen-model'))
-    frozen_loaded=module.load_candidate(str(root/'frozen-model')) if module else load_adapter(str(root/'frozen-model'))
-    checked_predictions(frozen_loaded.predict(X.iloc[:5],{'kind':request.get('prediction_kind','value')}),5,
-                        request.get('prediction_kind','value'))
     kinds = [request.get('prediction_kind','value')]
     for prediction in kinds: checked_predictions(model.predict(X.iloc[:5],{'kind':prediction}),5,prediction)
     (root/'model').mkdir(parents=True,exist_ok=True)
@@ -204,7 +168,7 @@ def smoke(request, root):
         if original.shape != after.shape or not np.array_equal(original,after):
             if not np.issubdtype(original.dtype,np.number) or not np.allclose(original,after):
                 raise ValueError('Model save/load changes predictions')
-    return {'status':'completed','execution_report':report,'execution_report_ref':str(report_path)}
+    return {'status':'completed'}
 
 
 def train(request, root):
@@ -223,17 +187,7 @@ def train(request, root):
     feature_mode = request.get('validation_scope') == 'feature'
     if feature_mode:
         from .splitting import feature_context
-        if (plan.strategy != 'single' or plan.search_space or plan.max_trials != 1 or
-                plan.ensemble_components or plan.ensemble_sources or plan.stopping_policy != 'fixed'):
-            raise ValueError('Feature evaluation requires one frozen estimator without HPO or early stopping')
         context = feature_context(context, request.get('feature_holdout_folds', 3))
-    from .registry import NATIVE_VALIDATION
-    if any(c.get('tool_id') in NATIVE_VALIDATION for c in plan.ensemble_components):
-        raise ValueError('Native AutoML ensemble components have no verified frozen refit protocol')
-    if not request.get('fixed') and plan.tool_id in NATIVE_VALIDATION:
-        if (plan.strategy != 'native' or context.task.validation_strategy not in NATIVE_VALIDATION[plan.tool_id]
-                or context.task.group_columns):
-            raise ValueError('Native internal validation protocol is not verified for this task')
     if tree_hash(Path(request['code_dir'])) != request['code_hash']: raise ValueError('Candidate hash mismatch')
     module = load_module(request['code_dir'])
     frame = read_table(request['train_path'],table_format=context.table_formats.get(request['train_path']))
@@ -285,11 +239,10 @@ def train(request, root):
         return decision
 
     def save_progress(model, params, score, reason):
-        from .execution import audit_fit
-        report_path=root/'execution-report.json'
-        report=audit_fit(model,params,dict(config,stopping_policy='fixed',component_stopping_policies={}),
-                         c_final,report_path,stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else 'full_refit',protocol_ref=protocol_ref)
-        params=report['exported_params']
+        from .execution import export_params
+        from .model_spec import model_spec
+        params = export_params(model, params)
+        spec = model_spec(config, params)
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
         artifact.mkdir(parents=True)
         model.save(str(artifact))
@@ -301,12 +254,11 @@ def train(request, root):
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
             validation_scope='feature' if feature_mode else 'model',
             oof_score_kind='feature_inner_oof' if feature_mode else 'inner_oof',
-            model_spec=report.get('model_spec'),
+            model_spec=spec,
             intervention=plan.intervention.model_dump(mode='json'),
             best_params=params,internal_score=score,trials=[t.model_dump(mode='json') for t in trials],stop_reason=reason,native_history_ref=history_ref,
             study_ref=search_result.get('study_ref'),hpo_batches=search_result.get('batches',[]),
-            full_refit=True,validation_protocol_ref=protocol_ref,execution_report=report,
-            execution_report_ref=str(report_path),score_kind=('not_applicable' if score is None else
+            full_refit=True,validation_protocol_ref=protocol_ref,score_kind=('not_applicable' if score is None else
                 'feature_inner_cv_mean' if feature_mode else 'inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean'),
             **{key:value for key,value in best_details.items() if key != 'model_spec'}))
 
@@ -324,11 +276,6 @@ def train(request, root):
         protocol = inner_protocol(frame,context,fraction=request.get('inner_fraction',.2),
             seed=request.get('seed',42)+1,outer_split_id=request.get('outer_split_id'),
             source_indices=request.get('outer_train_indices'))
-        if feature_mode and protocol != request.get('feature_protocol'):
-            raise ValueError('Feature evaluation differs from the frozen fold protocol')
-        if feature_mode and plan.feature_set and plan.feature_set.features:
-            from .feature_engineering import screen_features
-            screen_features(plan.feature_set, X, protocol['folds'])
         protocol_ref = str(root/'validation-protocol.json')
         protocol_path = Path(protocol_ref)
         if protocol_path.exists() and json.loads(protocol_path.read_text(encoding='utf-8')) != protocol:
@@ -383,25 +330,18 @@ def train(request, root):
                     c.fit_rows=len(a)
                     c.stage='inner_fold'
                     model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
-                    from .execution import audit_fit
-                    fit_report=audit_fit(model,params,trial_config,c,trial_root/f"fold-{fold['number']}-execution.json",
-                        stage='inner_fold',protocol_ref=protocol_ref)
                     prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
                     score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
                         groups=groups[b] if groups is not None else None,weights=weights[b] if weights is not None else None)
                     if time.time() >= until: raise TimeoutError('Internal fold exceeded validation deadline')
                     trial.fold_results.append(dict(number=fold['number'],score=score,status='completed',
-                        duration_seconds=time.monotonic()-fold_started,execution_status=fit_report['status'],
-                        execution_report_ref=str(trial_root/f"fold-{fold['number']}-execution.json"),
-                        actual_components={name:{key:item.get(key) for key in ('backend','completed_iterations','retained_trees','stopping_reason')}
-                                           for name,item in fit_report['components'].items()},
+                        duration_seconds=time.monotonic()-fold_started,
                         score_kind='feature_inner_fold' if feature_mode else 'inner_fold',weighting='sample_weight' if weights is not None else 'unweighted'))
                     trial.duration_seconds=time.monotonic()-t0
                     atomic_json(root/'trials.json',trials)
                     predictions.append(prediction);positions.extend(b.tolist())
-                    if holdout:selected_params=fit_report['exported_params']
-                if plan.strategy=='native' and not selected_params.get('__native_frozen'):
-                    raise ValueError('Native AutoML must export a frozen configuration for search-free refit')
+                    from .execution import export_params
+                    selected_params = export_params(model, params)
                 order=np.argsort(positions);indices=np.asarray(positions)[order]
                 combined=np.concatenate(predictions,axis=0)[order]
                 trial.oof_score=score_predictions(y.iloc[indices] if y is not None else None,combined,context,X=X.iloc[indices],
@@ -415,7 +355,8 @@ def train(request, root):
                 trial.score_std=float(np.std(scores)) if len(scores)>1 else None
                 trial.status='completed';trial.duration_seconds=time.monotonic()-t0
                 details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
-                details['model_spec']=fit_report.get('model_spec')
+                from .model_spec import model_spec
+                details['model_spec'] = model_spec(trial_config, selected_params)
                 trial_selection=dict(protocol=protocol,number=trial_number,score=score,params=selected_params,details=details)
                 atomic_json(trial_root/'selection.json',trial_selection)
                 if best_score is None or better(score,best_score,context.task.metric_direction):
@@ -428,9 +369,6 @@ def train(request, root):
                 return score
             except optuna.TrialPruned: raise
             except Exception as error:
-                from .execution import FidelityError
-                if isinstance(error,FidelityError):
-                    atomic_json(root/'last-fidelity-failure.json',error.report)
                 trial.status='failed';trial.score=None;trial.error=str(error)[:2000];trial.duration_seconds=time.monotonic()-t0
                 atomic_json(root/'trials.json',trials)
                 if plan.strategy!='optuna':control('failure',error=str(error)[:2000])
@@ -460,10 +398,6 @@ def train(request, root):
             atomic_json(root/'trials.json',trials)
             successful=[t for t in trials if t.status=='completed']
             if not successful:
-                failure_path=root/'last-fidelity-failure.json'
-                if failure_path.exists():
-                    from .execution import FidelityError
-                    raise FidelityError(json.loads(failure_path.read_text(encoding='utf-8')),failure_path)
                 raise ValueError('No successful internal trial: '+'; '.join(t.error or '' for t in trials)[-2500:])
             winner=(min if context.task.metric_direction=='minimize' else max)(successful,key=lambda t:t.score)
             chosen=json.loads((root/f'trial-{winner.number}'/'selection.json').read_text(encoding='utf-8'))

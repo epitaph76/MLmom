@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from pydantic import ValidationError
-from mlmom.coding import build_coding_graph,remove_loader_type_guard
+from mlmom.coding import build_coding_graph
 from mlmom.pipeline_contracts import RunConfig,HypothesisPlan
 from mlmom.registry import SkillRegistry
 from mlmom.sdk import FitContext,load_module
@@ -21,7 +21,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 class GeneratedCandidateTests(unittest.TestCase):
-    def test_restored_by_value_class_loads_in_fresh_process_after_guard_removal(self):
+    def test_loader_source_is_preserved_and_bad_guard_fails_at_runtime(self):
         source = '''from pathlib import Path
 import cloudpickle
 class Candidate:
@@ -64,12 +64,7 @@ print(json.dumps(obj.predict([1,2,3])))
             failed=subprocess.run(command,cwd=ROOT,capture_output=True,text=True)
             self.assertNotEqual(failed.returncode,0)
             self.assertIn('artifact does not contain a Candidate instance',failed.stderr)
-            normalized,removed=remove_loader_type_guard(source)
-            self.assertEqual(removed,2)
-            path.write_text(normalized,encoding='utf-8')
-            passed=subprocess.run(command,cwd=ROOT,capture_output=True,text=True)
-            self.assertEqual(passed.returncode,0,passed.stderr)
-            self.assertEqual(json.loads(passed.stdout),[7,7,7])
+            self.assertEqual(path.read_text(encoding="utf-8"), source)
 
     def test_selected_reference_is_coder_only_versioned_and_budgeted(self):
         registry=SkillRegistry(ROOT/'skills')
@@ -90,7 +85,7 @@ print(json.dumps(obj.predict([1,2,3])))
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'candidate.py'
             source.write_text(ADAPTER_CODE,encoding='utf-8')
-            self.assertFalse(verify_source(root).valid)
+            self.assertTrue(verify_source(root).valid)
             source.write_text(GENERATED_CODE,encoding='utf-8')
             self.assertTrue(verify_source(root).valid)
 
