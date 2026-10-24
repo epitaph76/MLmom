@@ -11,6 +11,7 @@ import uuid
 import copy
 from dataclasses import replace
 from pathlib import Path
+from .execution_resources import execution_config
 
 
 def failure_result(error, root):
@@ -139,9 +140,9 @@ def smoke(request, root):
         if request.get('code_hash') and tree_hash(Path(request['code_dir'])) != request['code_hash']:
             raise ValueError('Candidate hash mismatch')
         module = load_module(request['code_dir'])
-        model = module.create_candidate(copy.deepcopy(config))
+        model = module.create_candidate(execution_config(config, request['worker_cpus']))
     else:
-        model = LibraryCandidate(copy.deepcopy(config))
+        model = LibraryCandidate(execution_config(config, request['worker_cpus']))
         module = None
     import numpy as np
     groups = np.repeat(np.arange(12),5).astype(str) if kind == 'ranking' else None
@@ -165,7 +166,7 @@ def smoke(request, root):
     report=audit_fit(model,config.get('model_params',{}),config,inspection_context,report_path,stage='smoke')
     frozen=report['exported_params']
     frozen_config=dict(config,model_params=frozen,stopping_policy='fixed',component_stopping_policies={})
-    frozen_model=module.create_candidate(copy.deepcopy(frozen_config)) if module else LibraryCandidate(copy.deepcopy(frozen_config))
+    frozen_model=module.create_candidate(execution_config(frozen_config, request['worker_cpus'])) if module else LibraryCandidate(execution_config(frozen_config, request['worker_cpus']))
     frozen_context=replace(context,work_dir=str(root/'frozen'),started=time.monotonic(),stage='smoke_recreate',fit_id=uuid.uuid4().hex,
                            time_limit_seconds=max(1,request['worker_seconds']*.25),fit_rows=len(X))
     Path(frozen_context.work_dir).mkdir(parents=True,exist_ok=True)
@@ -311,7 +312,7 @@ def train(request, root):
 
     if request.get('fixed'):
         if fit_budget <= .2: raise TimeoutError('Original training deadline reached before fixed refit')
-        model = module.create_candidate(copy.deepcopy(config))
+        model = module.create_candidate(execution_config(config, request['worker_cpus']))
         c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
         c.fit_rows=len(X)
         c.stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else 'full_refit'
@@ -368,7 +369,7 @@ def train(request, root):
                     a,b=np.asarray(fold['train_indices']),np.asarray(fold['validation_indices'])
                     remaining=until-time.time()
                     if remaining <= .2: raise TimeoutError('Internal validation deadline reached')
-                    model = module.create_candidate(copy.deepcopy(trial_config))
+                    model = module.create_candidate(execution_config(trial_config, request['worker_cpus']))
                     holdout=protocol['strategy']=='holdout'
                     c=fit_context(context,request,work_dir=trial_root/f"fold-{fold['number']}",
                         X_valid=X.iloc[b] if holdout else None,
@@ -476,7 +477,7 @@ def train(request, root):
         if deadline-time.time() <= .2: raise TimeoutError('No time for mandatory full-train refit')
         if best_details.get('model_spec'):
             config=with_spec(config,best_details['model_spec'])
-        model = module.create_candidate(copy.deepcopy(dict(config,model_params=best_params)))
+        model = module.create_candidate(execution_config(dict(config,model_params=best_params), request['worker_cpus']))
         c_final=fit_context(context,request,work_dir=root/'refit-round',
             groups=fit_groups,weights=weights,seconds=deadline-time.time())
         c_final.fit_rows=len(X)

@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 from .contracts import StrictModel
+from .agent_contracts import AgentNarrative
 
 
 class FeatureSpec(StrictModel):
@@ -59,7 +60,7 @@ def feature_hash(value):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-class FeatureProposal(StrictModel):
+class FeatureProposal(AgentNarrative):
     action: Literal['add', 'remove', 'stop']
     rationale: str = Field(min_length=1, max_length=2000)
     features: list[FeatureSpec] = Field(default_factory=list, max_length=8)
@@ -94,10 +95,10 @@ class FeatureEvidence(StrictModel):
     duration_seconds: float = 0
 
 
-class FeatureExperimentPlan(StrictModel):
+class FeatureExperimentPlan(AgentNarrative):
     feature_set_id: str
     reference_feature_set_id: str
-    rationale: str = Field(min_length=1, max_length=2000)
+    rationale: str = Field(min_length=1, max_length=5000)
 
 
 class FeatureSession(StrictModel):

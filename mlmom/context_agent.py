@@ -145,6 +145,7 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
         ranked_findings=[dict(item,fact=known[item['finding_id']]) for item in selected],
         mandatory_findings=[item for item in catalog if item['priority']=='critical'],
         assumptions=draft.assumptions if draft else ['Context agent unavailable; use the complete original task.'],
+        agent_notes=draft.agent_notes if draft else {},
         reconnaissance_status=inputs['reconnaissance_status'],
         input_hash=digest, input_ref=str(directory/'input.json'),
         original_task_available_via='read_task',reason=error if draft is None else None)

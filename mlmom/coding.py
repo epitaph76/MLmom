@@ -104,11 +104,13 @@ def reuse_assignment(previous, plan):
     if not previous or not previous.get('plan') or not previous.get('preprocessing_spec'):
         return False, False
     old=previous['plan']
+    frozen_pre=(plan.change_kind=='single_change_ablation' and
+                not any(key.split('.')[0]=='preprocessing' for key in plan.intervention.changed_fields))
     same_pre=(old.get('preprocessing',[])==plan.preprocessing and old.get('tool_id')==plan.tool_id
               and bool(previous.get('dependencies_match')))
     pre_source=previous.get('files',{}).get('preprocessing.py','')
     # A preprocessor that reads model_params may change its behavior when they change.
-    if 'model_params' in pre_source and old.get('model_params')!=plan.model_params:
+    if not frozen_pre and 'model_params' in pre_source and old.get('model_params')!=plan.model_params:
         same_pre=False
     same_model=(same_pre and old.get('ensemble_components',[])==plan.ensemble_components
                 and set(old.get('model_params',{}))==set(plan.model_params)

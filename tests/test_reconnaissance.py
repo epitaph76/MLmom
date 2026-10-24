@@ -221,8 +221,14 @@ class ScoutingTests(unittest.TestCase):
 
     def test_follow_up_exposes_only_the_completed_round_training_rows(self):
         parent=self
+        skill_payloads={}
         class Client(OfflineLLM):
             def generate(self,role,instruction,payload,schema,tools=None):
+                if role=='reconnaissance_agent':
+                    cards=payload['skills']
+                    skill_payloads[payload['initial']]=[card['skill_id'] for card in cards]
+                    parent.assertEqual(skill_payloads[payload['initial']],['reconnaissance_agent','polars_sql'])
+                    parent.assertTrue(all(card['content'] and card['sha256'] for card in cards))
                 result=super().generate(role,instruction,payload,schema,tools)
                 if role=='reconnaissance_agent' and not payload['initial']:
                     query=tools.invoke('query_csv',{'sql':'SELECT COUNT(*) AS n FROM train'})
@@ -241,6 +247,7 @@ class ScoutingTests(unittest.TestCase):
             with patch.object(pd.DataFrame,'to_csv',side_effect=AssertionError('Existing train split must be reused')):
                 report=pipeline.scout('r1',{})
             self.assertEqual(report['status'],'completed',report)
+            self.assertEqual(set(skill_payloads),{True,False})
             self.assertTrue((pipeline.run_dir/'splits'/'r1'/'train.csv').is_file())
             self.assertEqual(train_path.read_bytes(),saved_train)
             self.assertFalse((pipeline.run_dir/'reconnaissance'/'r1'/'train.csv').exists())

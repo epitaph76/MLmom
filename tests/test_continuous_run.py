@@ -64,7 +64,7 @@ class ContinuousRunTests(unittest.TestCase):
             try:
                 self.assertIsNone(pipeline.analyze(state)['stop_reason'])
                 self.assertTrue(pipeline.can_retry_planning(state))
-                self.assertTrue(pipeline.can_retry_planning(dict(state, planning_attempt=1000)))
+                self.assertFalse(pipeline.can_retry_planning(dict(state, planning_attempt=1000)))
                 self.assertTrue(pipeline.can_retry_round(state))
                 pipeline.store.put('reconnaissance', 'r1000', {'status':'completed', 'observations':[]})
                 pipeline.context = None

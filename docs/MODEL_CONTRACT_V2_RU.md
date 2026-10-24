@@ -12,6 +12,20 @@ HypothesisPlan отдельно задаёт target_transform, weight_policy, pr
 feature_set_hash. Хеш конфигурации
 считается по полному ModelSpec.
 
+Число CPU-потоков (`n_jobs`, `nthread`, `num_threads`, `thread_count` и их
+поддерживаемые варианты) относится к ресурсам исполнения и не входит в
+`ModelSpec.backend_params` или хеш модели. Worker подставляет свою текущую
+CPU-квоту в существующие настройки потоков перед созданием кандидата: параллельное
+сравнение может использовать по 2 CPU, одиночный полный refit — все доступные 6.
+Параметры обучения, seed, device, политики и признаки остаются зафиксированными.
+Полный экспорт сохраняет фактически использованные настройки, а
+`execution-report.json.execution_resources` отдельно показывает выделенные CPU,
+заявленные/экспортированные потоки и проверенные параметры каждого компонента.
+Выход за CPU-квоту, неограниченное `-1` и попытка скрыть превышение изменением
+post-fit атрибутов отклоняются. CPU/RAM admission и изоляция workers сохраняются.
+Проверки: `tests/test_execution_resources.py` выполняет реальные refit на
+LightGBM, XGBoost и CatBoost с 2 и 6 CPU и проверяет одинаковый хеш модели.
+
 DSL-наборы, отдельная область feature-CV, фиксированный baseline и перенос признаков
 через HPO/refit описаны в [FEATURE_AGENT_RU.md](FEATURE_AGENT_RU.md). Существующие
 session с runtime contract 2 без feature_search_enabled продолжаются с отключённой

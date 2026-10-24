@@ -3,7 +3,7 @@
 Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
 
 <!-- skill-registry:start -->
-Всего карточек: 32; ready: 32; placeholder: 0.
+Всего карточек: 33; ready: 33; placeholder: 0.
 
 | Владелец | Карточки | Автоматический набор |
 |---|---|---|
@@ -15,13 +15,22 @@
 | plan_validator | validation | validation, metrics |
 | planner | planner | planner |
 | preprocessing_agent | categorical_encoding, feature_engineering, feature_selection, missing_values, numeric_transforms, preprocessing, preprocessing_core, schema_quality, temporal_group_structure, text_features | candidate_sdk, preprocessing, preprocessing_core |
-| reconnaissance_agent | reconnaissance_agent | reconnaissance_agent |
+| reconnaissance_agent | polars_sql, reconnaissance_agent | reconnaissance_agent, polars_sql |
 | result_validator | result_validator | result_validator |
 | shared | candidate_sdk, metrics | - |
 | training_agent | hpo | metrics, hpo |
 <!-- skill-registry:end -->
 
 COMMON.md входит в candidate_sdk. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Общие пакеты доступны ролям, но не загружаются всем автоматически. Карточка ensembles доступна coding_agent: blending и OOF stacking разрешены. Компоненты и meta-model реализуются собственным кодом кандидата с сохранением изоляции фолдов.
+
+Разведчик автоматически получает `polars_sql` при начальном анализе и повторной
+разведке. Карточка описывает SQLContext закреплённой версии Polars 1.26.0:
+схемы, NULL, агрегаты, группировку вычисленных бинов через подзапрос,
+многоколоночный DISTINCT, дубликаты, пересечение ключей и сравнение train/test.
+Все SQL-блоки из самой карточки выполняются через CSV worker в
+`tests/test_polars_sql_skill.py`; отдельная проверка подтверждает передачу обеих
+карточек в LLM-контекст и их включение в плоский ZIP. Новые инструкции применяются
+к новым запускам; уже работающий Docker использует сохранённую копию исходников.
 
 SkillRegistry.load(..., role=...) и list(role=...) применяются на LLM-границах. Внутренняя проверка совместимости и старые интеграции могут использовать административную загрузку без роли; общий каталог в LLM не передаётся. Лимит основных инструкций — 24 000 символов на роль, с примерами для кодирования — 48 000. COMMON включается в candidate_sdk и SHA256 один раз. Версии и хеши сохраняются в кандидатах.
 

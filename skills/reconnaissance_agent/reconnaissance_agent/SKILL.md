@@ -13,13 +13,8 @@ when the task explicitly requests prediction with known contemporaneous features
 
 Use list_tables (paginated schemas), preview_csv (selected columns/row windows),
 query_csv (read-only Polars 1.26 SQL), and read_task (long task pages).
-Only registered tables are available; no file functions or arbitrary paths.
-Example: SELECT facility_type, COUNT(*) AS n, AVG(site_eui) AS mean_target
-FROM train GROUP BY facility_type ORDER BY n DESC.
-Use correlate_csv for numeric relationships (CORR is absent in Polars 1.26 SQL),
-COUNT/AVG/STDDEV for distributions and CASE/IS NULL
-for missingness. Quote unusual column names. Tool responses are previews; a bounded
-response does not mean the calculation used only those rows. Check truncated flags.
+The automatically supplied polars_sql skill contains the pinned dialect basics,
+tested query patterns and error repairs. Apply it before issuing CSV queries.
 
 Choose checks based on evidence: missingness, duplicates, rare classes/categories,
 target tails, suspicious values, feature relationships and train/test shifts.
@@ -43,18 +38,3 @@ Use ONE exact source_ref per observation. numbers contains exact unrounded numer
 Errors name field/actual/hint. Repair those fields only. After two identical failed saves, mark that check unfinished; do not repeat it. Saved IDs are authoritative. Final observations are verified independently, and proposals with unresolved IDs are rejected independently; never fabricate evidence.
 
 confirm_task context includes allowed_metric_options from the runtime registry. Use only those keys; RMSE already includes a square root. Preserve IDs and every other task requirement during a repair. duplicate_policy=group_features enables grouping equal feature tuples in both inner and outer splits; allow keeps ordinary splitting. Never promise grouping when the confirmed policy is allow.
-
-Tested Polars 1.26 patterns (substitute existing column/table names):
-```sql
-SELECT bin, COUNT(*) AS n, AVG(target) AS average
-FROM (SELECT CASE WHEN x < 0 THEN 'low' ELSE 'high' END AS bin, target FROM train) AS b
-GROUP BY bin ORDER BY bin
-```
-```sql
-SELECT SUM(CASE WHEN x IS NULL THEN 1 ELSE 0 END) AS missing, COUNT(*) AS n FROM train
-```
-```sql
-SELECT 'train' AS source, COUNT(*) AS n FROM train
-UNION ALL SELECT 'test' AS source, COUNT(*) AS n FROM test
-```
-Avoid same-SELECT alias grouping, scalar subqueries, COUNT FILTER and ROW_NUMBER. UNION branches need identical aliases/types. correlate_csv.target is an exact column name, never LN(1+target) or another SQL expression. Simplify after an error; do not probe dialect features repeatedly. Full errors are artifacts; read the short hint.

@@ -1,0 +1,9 @@
+{
+  "skill_id": "polars_sql",
+  "version": "1.0.0",
+  "title": "Polars 1.26 SQL for CSV exploration",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

@@ -565,7 +565,7 @@ class Pipeline:
 
     def can_retry_planning(self,state):
         return ((self.config.max_rounds is None or state['round_number']<=self.config.max_rounds) and
-                (self.config.continuous or state.get('planning_attempt',0)+1<self.config.max_attempts) and
+                state.get('planning_attempt',0)+1<self.config.max_attempts and
                 self.budget.snapshot().research_seconds>=self.admission_cost())
 
     def prepare(self,plan,round_id,*,feedback=None, prior=None, coding_config=None):

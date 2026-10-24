@@ -14,6 +14,8 @@ from .agents import LLMUnavailable, StructuredOutputError, role_window
 from .tracing import bind, emit
 from .model_spec import normalize_protocol, constant_space, apply_overrides, Intervention
 from functools import lru_cache
+from .planning_assignments import normalize_champion_assignment, infrastructure_overrides, normalize_cpu_hints
+from .planning_retries import PlanningRejections
 
 
 @lru_cache(maxsize=1)
@@ -158,12 +160,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             if spec['type']=='int' and (type(low) is not int or type(high) is not int):errors.append(f'Integer search requires integer bounds: {name}')
         if 'log' in spec and type(spec['log']) is not bool:errors.append(f'Log flag must be boolean: {name}')
     if plan.strategy == 'optuna' and not plan.search_space: errors.append('Optuna requires a search space')
-    reserved={'n_jobs','num_threads','thread_count','num_cpus','num_gpus','device','device_type','task_type',
-              'pretrained','presets','hyperparameters','general_params','reader_params','estimator_list',
-              'time_budget','time_limit','timeout','gpu_ids','starting_points','__native_frozen','__ensemble_frozen',
-              'log_file_name','log_type'}
-    if tool and tool.native_hpo:reserved.add('max_iter')
-    if reserved & (set(plan.model_params)|set(plan.search_space)):
+    if infrastructure_overrides(plan.model_params, plan.search_space, native=bool(tool and tool.native_hpo)):
         errors.append('Model/search parameters attempt to override infrastructure or pretrained policy')
     if plan.tool_id=='statsmodels' and context.task.task_type!='regression':
         errors.append('The statsmodels OLS adapter supports single-output regression')
@@ -200,7 +197,7 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
             if entry and context.task.validation_strategy not in entry.validation_strategies:
                 errors.append('Ensemble component has no verified support for the internal validation strategy')
             if entry and context.task.weight_column and not entry.supports_weights:errors.append('Ensemble component cannot honor sample weights')
-            if reserved & set(component.get('model_params',{})):errors.append('Ensemble component overrides infrastructure policy')
+            if infrastructure_overrides(component.get('model_params',{}), {}):errors.append('Ensemble component overrides infrastructure policy')
     if plan.ensemble_sources:
         from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy
         names=[s.get('name') for s in plan.ensemble_sources]
@@ -262,6 +259,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
     def persist():
         if save_progress:save_progress(progress)
 
+    rejections = PlanningRejections(progress, persist, max_attempts)
+
     def is_light(state):
         return lightweight if lightweight is not None else state['payload'].get('round_number',1) == 1
 
@@ -314,6 +313,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
 
     def hypotheses(state):
         errors=[]
+        state['payload']['rejected_hypotheses'] = rejections.summaries()[-12:]
         for _ in range(max_attempts):
             try:
                 if state.get('hypotheses'):
@@ -330,6 +330,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'and simple fold-local preprocessing; reference skills provide implementation examples. '
                         'The runner performs the confirmed internal validation; candidate.fit must not repeat it. '
                         'Use supplied history; empty history is normal before the first fit. '
+                        'Do not repeat rejected_hypotheses marked blocked; propose a different approach. '
                         'After baseline, cite numeric observations or previous experiments in rationale and propose '
                         'a change in model logic or preprocessing. Parameter trials belong INSIDE a hypothesis. '
                         'based_on is a verified candidate_id only; use based_on_hypothesis_id for hypothesis lineage. '
@@ -337,6 +338,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Runtime owns these operations; never ask the coder to apply them a second time.',
                         dict(state['payload'],lightweight=is_light(state),feedback=errors), HypothesisBatch, role_tools)
                 if len(batch.hypotheses)>max_candidates: raise ValueError('Too many hypotheses for this round')
+                if batch.agent_notes:
+                    import copy
+                    for hypothesis in batch.hypotheses:
+                        hypothesis.agent_notes['batch'] = copy.deepcopy(batch.agent_notes)
                 ids=[h.hypothesis_id for h in batch.hypotheses]
                 if len(ids)!=len(set(ids)): raise ValueError('Duplicate hypothesis ID')
                 if (state['payload'].get('round_number',1)==1 or state['payload'].get('first_candidate_required')) and not any(h.baseline for h in batch.hypotheses):
@@ -372,8 +377,12 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
         from .search_groups import expand_families, collect_groups, configure_composite
         chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,
             'all' if planning_mode == 'initial' else planning_mode)
+        rejections.variants = {key: tool_id for key, (_, tool_id) in family_metadata.items()}
         for hypothesis in chosen:
-            feedback=[]
+            feedback=[rejections.record(hypothesis)['error']] if rejections.record(hypothesis) else []
+            if rejections.blocked(hypothesis):
+                rejected.append(dict(hypothesis_id=hypothesis.hypothesis_id, errors=feedback, exhausted=True))
+                continue
             for _ in range(max_attempts):
                 attempts+=1
                 validating=False
@@ -417,7 +426,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              feedback=feedback), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
                     item=batch.plans[0]
-                    requested_cpus = item.cpus
+                    if batch.agent_notes:
+                        import copy
+                        item.agent_notes['batch'] = copy.deepcopy(batch.agent_notes)
                     if initial_resources:
                         item.cpus = initial_resources['cpus']
                         item.memory_gb = initial_resources['memory_gb']
@@ -444,37 +455,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     if state['payload'].get('ensemble_sources'):
                         item=configure_composite(item,state['payload']['ensemble_sources'],
                                                  state['payload'].get('ensemble_weight_trials',15))
-                    champion=state['payload'].get('champion')
-                    if champion and item.hypothesis.based_on==champion['candidate_id']:
-                        digest=champion.get('configuration_hash')
-                        if item.base_config_hash and item.base_config_hash != digest:
-                            raise ValueError('base_config_hash differs from the authoritative Champion snapshot')
-                        item.base_config_hash=digest
-                        if item.change_kind=='single_change_ablation':
-                            import copy
-                            if item.tool_id != champion['plan']['tool_id']:
-                                raise ValueError('Single-change preprocessing ablation must retain Champion backend')
-                            item.model_params=copy.deepcopy(champion['model_params'])
-                            item.strategy='single';item.search_space={};item.max_trials=1
-                            old=champion['plan']
-                            policy_types={'target_transform':type(item.target_transform),'weight_policy':type(item.weight_policy),
-                                          'prediction_policy':type(item.prediction_policy)}
-                            for key,cls in policy_types.items():
-                                if key not in item.model_fields_set:
-                                    setattr(item,key,cls.model_validate(old.get(key,{})))
-                            fields=('preprocessing','target_transform','weight_policy','prediction_policy','ensemble_components','stopping_policy','feature_set_id')
-                            current=item.model_dump(mode='json')
-                            changed=[key for key in fields if current[key]!=old.get(key,current[key] if key=='stopping_policy' else
-                                {} if key in policy_types else []) and
-                                not (key in policy_types and current[key]==policy_types[key]().model_dump() and key not in old)]
-                            allowed={key.split('.')[0] for key in item.intervention.changed_fields}
-                            if allowed and set(changed)-allowed:
-                                raise ValueError('Undeclared ablation changes: '+', '.join(sorted(set(changed)-allowed)))
-                            if len(changed)>1:
-                                raise ValueError('Single-change ablation modifies multiple policy/feature groups: '+', '.join(changed))
-                            item.intervention.changed_fields=changed
-                    elif item.change_kind=='single_change_ablation':
-                        raise ValueError('Single-change ablation requires based_on=current Champion candidate_id')
+                    warnings.extend(normalize_champion_assignment(item, state['payload'].get('champion')))
                     actual_protocol=dict(strategy=str(context.task.validation_strategy),
                         folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
                     item.validation_protocol,metadata=normalize_protocol(item.validation_protocol,actual_protocol)
@@ -490,6 +471,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.intervention.kind='ablation'
                     elif item.strategy=='optuna':
                         item.intervention.kind='hpo'
+                    elif item.intervention.kind=='ablation':
+                        item.intervention.kind='model_change'
                     item.intervention.base_candidate_id=item.hypothesis.based_on
                     if not item.intervention.operations:
                         item.intervention.operations=list(item.preprocessing)
@@ -501,10 +484,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.intervention.success_conditions=['Improve the paired primary metric; no causal claim without a comparable control']
                     if not item.intervention.rejection_conditions:
                         item.intervention.rejection_conditions=['Violation of the declared intervention or its subgroup constraints']
-                    normalized=[]
-                    for name in ('n_jobs','num_threads','thread_count','num_cpus'):
-                        if item.model_params.get(name)==item.cpus or (initial_resources and item.model_params.get(name)==requested_cpus):
-                            item.model_params.pop(name);normalized.append(name)
+                    normalized=normalize_cpu_hints(item)
                     if normalized:
                         emit('planning.normalized_resources',{'parameters':normalized,'cpus':item.cpus})
                     if item.hypothesis.hypothesis_id!=hypothesis.hypothesis_id or item.hypothesis.baseline!=hypothesis.baseline:
@@ -581,10 +561,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     progress['accepted'][hypothesis.hypothesis_id]=item.model_dump(mode='json');persist()
                     break
                 except StructuredOutputError as error:
-                    if not validating:
-                        feedback=[str(error)]
+                    feedback=[str(error)]
+                    blocked=rejections.reject(hypothesis,error)
+                    if not validating and not blocked:
                         continue
-                    rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':[str(error)]})
+                    rejected.append(dict(hypothesis_id=hypothesis.hypothesis_id,errors=feedback,exhausted=blocked))
                     break
                 except (GlobalAPIError, WorkerInfrastructureError):
                     raise
@@ -595,7 +576,17 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     feedback=[str(error)]
                     progress['proposed'].pop(hypothesis.hypothesis_id,None)
                     progress['accepted'].pop(hypothesis.hypothesis_id,None);persist()
+                    if rejections.reject(hypothesis,error):
+                        rejected.append(dict(hypothesis_id=hypothesis.hypothesis_id,errors=feedback,exhausted=True))
+                        break
             else: rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':feedback})
+        if not accepted and chosen and all(rejections.blocked(h) for h in chosen):
+            # The next outer attempt asks for fresh ideas, retaining rejection history.
+            progress['hypotheses'] = None
+            for h in chosen:
+                progress['proposed'].pop(h.hypothesis_id, None)
+            persist()
+            emit('planning.hypotheses_exhausted', {'rejections': rejections.summaries()})
         # A rejected alternative never discards an already accepted baseline.
         if planning_mode == 'initial' and accepted and not any(p['hypothesis']['baseline'] for p in accepted):
             # A failed first backend must not discard the other valid starters.

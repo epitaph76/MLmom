@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 
 from .persistence import atomic_json
+from .execution_resources import (is_thread_parameter, model_parameters,
+                                  thread_settings, thread_budget_errors)
 
 
 COUNT_KEYS = {'iterations','n_estimators','num_iterations','num_boost_round','epochs'}
@@ -36,18 +38,20 @@ def _missing(expected, exported, prefix='model_params'):
         elif isinstance(value,dict):
             if not isinstance(exported[key],dict): errors.append(f'Export changes object {path}')
             else: errors.extend(_missing(value,exported[key],path))
-        elif key not in COUNT_KEYS and value != exported[key]:
+        elif key not in COUNT_KEYS and not is_thread_parameter(key) and value != exported[key]:
             errors.append(f'Export changes {path}: {value!r} -> {exported[key]!r}')
     return errors
 
 
-def complete_export(model, requested):
+def complete_export(model, requested, *, cpus=None):
     export = getattr(model,'export_model_params',None)
     exported = export() if callable(export) else copy.deepcopy(requested)
     if not isinstance(exported,dict): raise ValueError('export_model_params() must return a complete JSON object')
     # JSON is the actual persistence boundary; never accept NaN or opaque objects.
     exported = json.loads(json.dumps(exported,allow_nan=False))
     errors = _missing(requested,exported)
+    if cpus is not None:
+        errors.extend(thread_budget_errors(exported, cpus, 'exported_params'))
     if errors: raise ValueError('; '.join(errors))
     return exported
 
@@ -190,10 +194,12 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                   code_hash=config.get('_code_hash'),
                   exported_params=None,components={},errors=[],roundtrip='not_checked',
                   validation_protocol_ref=protocol_ref,timeouts_enabled=context.timeouts_enabled,
-                  seed=context.seed,cpus=context.cpus)
+                  seed=context.seed,cpus=context.cpus,
+                  execution_resources=dict(allocated_cpus=context.cpus,
+                      declared_threads=thread_settings(requested), exported_threads={}, components={}))
     try:
         try:
-            exported = complete_export(model,requested)
+            exported = complete_export(model,requested,cpus=context.cpus)
         except (ValueError,TypeError) as exc:
             report['errors'].append(str(exc))
             # Inspection is independent: a bad export must not hide a one-tree fit.
@@ -205,6 +211,7 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                     if isinstance(value,dict):exported=value
                 except (ValueError,TypeError):pass
         report['exported_params'] = exported
+        report['execution_resources']['exported_threads'] = thread_settings(exported)
         components = fitted_components(model)
         if config.get('ensemble_components') and not callable(getattr(model,'fitted_components',None)):
             raise ValueError('Ensembles must implement fitted_components() for every component and meta learner')
@@ -218,7 +225,7 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
             from .feature_contracts import feature_hash
             if spec.get('feature_set_hash') != feature_hash(config.get('feature_set')):
                 report['errors'].append('ModelSpec.feature_set_hash differs from the assigned definition')
-            if spec['backend_params'] != exported:
+            if spec['backend_params'] != model_parameters(exported):
                 report['errors'].append('ModelSpec.backend_params differs from exported backend parameters')
             report['model_spec'] = spec
             if spec.get('feature_set_hash'):
@@ -296,6 +303,8 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
                                   steps_per_epoch=trace['steps_per_epoch'],inspection='verified')
                     actual['actual_params'].update(trace['params'])
             native = actual['actual_params']
+            report['execution_resources']['components'][name] = thread_settings(native)
+            report['errors'].extend(thread_budget_errors(native, context.cpus, name))
             declaration = next((entry for entry in declared if entry.get('name',entry.get('tool_id'))==top_name),{})
             expected_backend=declaration.get('tool_id') if declared else config.get('tool_id')
             frozen=exported.get('__native_frozen',{})
@@ -317,7 +326,7 @@ def audit_fit(model, requested, config, context, path, *, stage, protocol_ref=No
             policy = policies.get(name,policies.get(top_name,config.get('stopping_policy','fixed')))
             actual['stopping_policy'] = policy
             for key,value in expected.items():
-                if key in COUNT_KEYS: continue
+                if key in COUNT_KEYS or is_thread_parameter(key): continue
                 canonical = ALIASES.get(key,key)
                 present=key in native or canonical in native
                 observed = native.get(key,native.get(canonical))
@@ -399,7 +408,7 @@ def compare_roundtrip(first, second):
         other = after[name]
         if actual['backend'] != other['backend']: errors.append(f'{name}: export/recreate changes backend')
         for key,value in actual['actual_params'].items():
-            if key not in COUNT_KEYS and key in other['actual_params'] and not _equal(value,other['actual_params'][key]):
+            if key not in COUNT_KEYS and not is_thread_parameter(key) and key in other['actual_params'] and not _equal(value,other['actual_params'][key]):
                 errors.append(f'{name}.{key}: export/recreate changes effective parameter')
         if actual['completed_iterations'] != other['completed_iterations'] and actual['stopping_reason'] not in {'early_stopping','iteration_limit_best_model_selection'}:
             errors.append(f'{name}: export/recreate changes actual iterations')

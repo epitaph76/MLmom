@@ -4,8 +4,9 @@ from __future__ import annotations
 import copy
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from .contracts import StrictModel
+from .execution_resources import model_parameters, restore_thread_settings
 
 CONTRACT_VERSION = 2
 
@@ -38,6 +39,11 @@ class ModelSpec(StrictModel):
     preprocessing_hash: str | None = None
     feature_set_hash: str | None = None
 
+    @field_validator('backend_params', mode='before')
+    @classmethod
+    def separate_execution_resources(cls, value):
+        return model_parameters(value) if isinstance(value, dict) else value
+
 
 class Intervention(StrictModel):
     kind: Literal['baseline', 'model_change', 'ablation', 'hpo', 'single_configuration'] = 'model_change'
@@ -67,7 +73,8 @@ def with_spec(config, spec):
     spec = ModelSpec.model_validate(spec).model_dump(mode='json')
     if spec['feature_set_hash'] != feature_hash(config.get('feature_set')):
         raise ValueError('Frozen ModelSpec differs from the feature definition')
-    return dict(config, model_params=spec['backend_params'], **{key: spec[key] for key in POLICIES})
+    params = restore_thread_settings(spec['backend_params'], config.get('model_params', {}))
+    return dict(config, model_params=params, **{key: spec[key] for key in POLICIES})
 
 
 def frozen_plan(plan, run):

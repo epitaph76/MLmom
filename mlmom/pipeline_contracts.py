@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import Field, model_validator
 from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
+from .agent_contracts import AgentNarrative
 from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy, Intervention
 from .feature_contracts import FeatureSpec, FeatureSet, FeatureEvidence, FeatureSession
 
@@ -155,7 +156,7 @@ class BudgetSnapshot(StrictModel):
     spent_seconds: float
 
 
-class Hypothesis(StrictModel):
+class Hypothesis(AgentNarrative):
     hypothesis_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
     description: str
     rationale: str
@@ -167,11 +168,11 @@ class Hypothesis(StrictModel):
     family_tools: list[str] = Field(default_factory=list, max_length=3)
 
 
-class HypothesisBatch(StrictModel):
+class HypothesisBatch(AgentNarrative):
     hypotheses: list[Hypothesis] = Field(min_length=1, max_length=2)
 
 
-class HypothesisPlan(StrictModel):
+class HypothesisPlan(AgentNarrative):
     feature_set_id: str | None = None
     feature_set: FeatureSet | None = None
     contract_version: Literal[2] = 2
@@ -189,8 +190,8 @@ class HypothesisPlan(StrictModel):
     search_space: dict[str, dict[str, Any]] = Field(default_factory=dict)
     cost_tag: Literal['fast', 'medium', 'slow'] = 'fast'
     time_limit_seconds: float = Field(300, gt=0)
-    cpus: int = Field(2, ge=1)
-    memory_gb: float = Field(4, gt=0)
+    cpus: int = Field(2, ge=1, strict=True)
+    memory_gb: float = Field(4, gt=0, allow_inf_nan=False)
     max_trials: int = Field(20, ge=1, le=1000)
     patience_trials: int | None = Field(5, ge=1)
     min_delta: float = Field(0, ge=0, description='Legacy absolute comparison threshold; NOT the HPO continuation threshold. Batched search uses RunConfig.hpo_gain_threshold; keep min_delta=0 to retain every improvement.')
@@ -207,6 +208,21 @@ class HypothesisPlan(StrictModel):
     search_group_kind: Literal['single', 'family', 'ensemble'] = 'single'
     parent_hypothesis: Hypothesis | None = None
     ensemble_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_plan_labels(cls, value):
+        if not isinstance(value, dict):return value
+        value = dict(value)
+        label = value.get('change_kind')
+        if isinstance(label, str) and label in {'baseline', 'model_change', 'hpo', 'single_configuration', 'ablation'}:
+            value['change_kind'] = 'single_change_ablation' if label == 'ablation' else 'experiment'
+            value['agent_notes'] = dict(value.get('agent_notes', {}), original_change_kind=label)
+        if isinstance(value.get('preprocessing'), str):
+            value['preprocessing'] = [value['preprocessing']]
+        if isinstance(value.get('intervention'), str):
+            value['intervention'] = {'operations': [value['intervention']]}
+        return value
 
 
 class SearchGroupPlan(StrictModel):
@@ -240,8 +256,15 @@ class EnsembleProposal(StrictModel):
         return self
 
 
-class PlanBatch(StrictModel):
+class PlanBatch(AgentNarrative):
     plans: list[HypothesisPlan] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode='before')
+    @classmethod
+    def accept_single_plan(cls, value):
+        if isinstance(value, dict) and 'plans' not in value and 'hypothesis' in value and 'tool_id' in value:
+            return {'plans': [value]}
+        return value
 
 
 class ValidationReport(StrictModel):
@@ -436,23 +459,23 @@ class ReconnaissanceReport(StrictModel):
         return value
 
 
-class TaskDetail(StrictModel):
-    meaning: str = Field(min_length=1, max_length=600)
-    source_quote: str = Field(min_length=1, max_length=1200)
+class TaskDetail(AgentNarrative):
+    meaning: str = Field(min_length=1)
+    source_quote: str = Field(min_length=1)
 
 
-class RankedFinding(StrictModel):
+class RankedFinding(AgentNarrative):
     finding_id: str
     priority: Literal['critical', 'high', 'medium', 'low']
-    rationale: str = Field(min_length=1, max_length=600)
-    planner_action: str = Field(min_length=1, max_length=600)
+    rationale: str = Field(min_length=1)
+    planner_action: str = Field(min_length=1)
 
 
-class PlannerContextDraft(StrictModel):
-    task_summary: str = Field(min_length=1, max_length=4000)
-    task_details: list[TaskDetail] = Field(default_factory=list, max_length=20)
-    ranked_findings: list[RankedFinding] = Field(default_factory=list, max_length=24)
-    assumptions: list[str] = Field(default_factory=list, max_length=12)
+class PlannerContextDraft(AgentNarrative):
+    task_summary: str = Field(min_length=1)
+    task_details: list[TaskDetail] = Field(default_factory=list)
+    ranked_findings: list[RankedFinding] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
 
 class ResultReview(StrictModel):

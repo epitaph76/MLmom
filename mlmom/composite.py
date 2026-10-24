@@ -43,8 +43,9 @@ class FrozenEnsemble:
 
     def _fit_base(self, source, X, y, context, *, indices=None, tag='full', final=False):
         from .execution import audit_fit
+        from .execution_resources import execution_config
         module, config = self._base(source)
-        model = module.create_candidate(config)
+        model = module.create_candidate(execution_config(config, context.cpus))
         take = lambda value: value if indices is None or value is None else np.asarray(value)[indices]
         c = replace(context, groups=take(context.groups), sample_weight=take(context.sample_weight),
             validation_X=None, validation_y=None, validation_groups=None, validation_weight=None,

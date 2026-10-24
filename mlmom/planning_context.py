@@ -27,7 +27,7 @@ def profile_summary(profile):
 
 
 def plan_summary(plan):
-    return {key:plan[key] for key in ('hypothesis','tool_id','skill_ids','model_params','preprocessing',
+    return {key:plan[key] for key in ('hypothesis','tool_id','skill_ids','model_params','preprocessing','agent_notes',
         'strategy','search_space','execution_mode','prediction_kind','contract_version','target_transform',
         'weight_policy','prediction_policy','intervention','ensemble_components','stopping_policy',
         'search_group_id','search_group_kind','parent_hypothesis','ensemble_sources','feature_set_id','feature_set') if key in plan}

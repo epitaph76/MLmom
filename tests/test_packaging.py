@@ -32,7 +32,8 @@ from mlmom.resources import SandboxManager
 runtime=Path(mlmom.__file__).resolve().parent.parent
 assert runtime.parent==Path(sys.argv[1]).resolve()
 registry=SkillRegistry(runtime/'skills')
-assert len(registry.list())==32
+assert len(registry.list())==33
+assert [s['skill_id'] for s in registry.load([], 'regression', role='reconnaissance_agent')]==['reconnaissance_agent','polars_sql']
 catalog={s['skill_id'] for s in registry.technique_catalog('multiclass_classification')}
 assert {'categorical_encoding','missing_values','preprocessing_core','imbalance'}<=catalog
 assert registry.owners['imbalance']=='coding_agent'
