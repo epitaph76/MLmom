@@ -196,7 +196,7 @@ class ReconnaissanceSession:
 
     def run(self):
         from .data_inspector import build_llm_context
-        from .metric_contracts import metric_capabilities
+        from .metric_contracts import metric_capabilities, metric_catalog
         text = Path(self.files.task).read_text(encoding='utf-8-sig')
         saved = self.store.get('confirmed_task','task')
         original_steps = getattr(self.client,'max_steps',None)
@@ -218,6 +218,7 @@ class ReconnaissanceSession:
                              observation_ids=[o['observation_id'] for o in report.get('observations',[])],
                              evidence_ref=f'previous_report:{i}') for i,report in enumerate(self.previous_reports)],
                          allowed_metric_options=metric_capabilities(),
+                         supported_metrics=metric_catalog(),
                          task_schema=TaskDefinition.model_json_schema()), ReconnaissanceReport,self.tools)
             if not self.context and not self.store.get('confirmed_task','task'):
                 raise ValueError('Reconnaissance did not confirm a valid task')

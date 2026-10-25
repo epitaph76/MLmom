@@ -608,7 +608,8 @@ class Pipeline:
         from .concurrency import AssignmentClient
         graph = build_coding_graph(AssignmentClient(self.client,self._cancel),workspace=workspace,store=self.store,plan=plan,plan_ref=plan_ref,
             skill_data=skills,tools=self.tools,context=self.context,sandbox=self.sandbox,budget=self.budget,
-            config=coding_config or self.config,round_id=round_id,previous=previous,runtime_feedback=feedback,preprocessing_skills=preprocessing_skills)
+            config=coding_config or self.config,round_id=round_id,previous=previous,runtime_feedback=feedback,
+            preprocessing_skills=preprocessing_skills,skill_registry=self.skills)
         output = graph.invoke({'payload':dict(plan=plan.model_dump(mode='json'),task=self.context.task.model_dump(mode='json'),
             features=self.context.feature_columns,classes=self.context.classes,skills=skills,previous=previous,
             execution_context=execution_context(plan)),

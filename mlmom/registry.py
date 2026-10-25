@@ -27,11 +27,11 @@ DEFINITIONS = [
     ('catboost','catboost','catboost','1.2.8',MULTI+['ranking'],'medium',False,True,True),
     ('lightgbm','lightgbm','lightgbm','4.6.0',MULTI+['ranking'],'fast',False,True,True),
     ('xgboost','xgboost','xgboost','2.1.4',MULTI+['ranking'],'medium',False,True,True),
-    ('flaml','flaml','flaml','2.3.6',SUPERVISED,'medium',True,False,False),
+    ('flaml','flaml','flaml','2.3.6',SUPERVISED,'medium',True,True,False),
     ('autogluon','autogluon.tabular','autogluon.tabular','1.3.1',SUPERVISED,'slow',True,False,False),
     ('lightautoml','lightautoml','lightautoml','0.4.2',SUPERVISED,'slow',True,False,False),
     ('statsmodels','statsmodels','statsmodels','0.14.0',['regression'],'fast',False,False,False),
-    ('torch','torch','torch','2.5.1',MULTI,'slow',False,False,False),
+    ('torch','torch','torch','2.5.1',MULTI,'slow',False,True,False),
 ]
 
 
@@ -51,7 +51,8 @@ def installed_tools() -> dict[str, MLToolSpec]:
             + (['cluster','anomaly_score'] if tool=='sklearn' else []), skill_ids=[tool],
             cost_tag=cost, native_hpo=native, supports_weights=weights, supports_groups=groups,
             supports_patience=not native, adapter='generated_candidate',
-            validation_strategies=[] if native else ['holdout','kfold','stratified_kfold','group_kfold'])
+            validation_strategies=['holdout'] if native else
+                ['holdout','kfold','stratified_kfold','group_kfold'])
     return result
 
 

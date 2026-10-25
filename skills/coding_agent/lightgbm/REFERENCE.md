@@ -1,25 +1,84 @@
-> Role boundary: the SDK supplies already transformed X and validation_X. Any feature cleaning/encoding in the standalone API excerpts below belongs to the preprocessing agent; omit it from model code. Use preprocessing_spec for category indices/dtypes. Persist only estimator and output/target state; SDK persists preprocessing.
+# Estimator-only lightgbm reference
 
-# Direct LightGBM implementation reference
+Runnable for single-target regression and binary/multiclass classification; numeric matrices or preprocessed DataFrames with stable categorical dtypes.
+The SDK owns preprocessing and target/weight/output policies. Save inference state only.
 
-Implement these operations in your own Candidate. Numeric Year_Factor is not categorical automatically; add exact columns required by the hypothesis.
 ```python
-X = X.copy().replace([np.inf, -np.inf], np.nan)
-category_columns = [c for c in X if not pd.api.types.is_numeric_dtype(X[c])]
-# If planned: category_columns += ['Year_Factor']
-self.categories = {c: X[c].dropna().astype(str).unique().tolist() for c in category_columns}
-for c, levels in self.categories.items():
-    X[c] = pd.Categorical(X[c].map(lambda v: str(v) if pd.notna(v) else np.nan), categories=levels)
-cls = LGBMClassifier if 'classification' in context.task_type else LGBMRegressor
-self.model = cls(**(dict(n_estimators=300, verbosity=-1, random_state=context.seed) | self.params | dict(n_jobs=context.cpus)))
-kwargs = {'sample_weight': context.sample_weight} if context.sample_weight is not None else {}
-# Transform internal validation using the SAME category levels.
-# Exact RMSE: metric='None', eval_metric='rmse', eval_set=[(valid, context.validation_y)],
-# callbacks=[early_stopping(50, first_metric_only=True, verbose=False)].
-# Macro F1: custom sklearn.metrics.f1_score callback, average='macro'. Truth is encoded:
-# map truth and prediction using TRAIN label ordering. Respect validation_weight.
-self.model.fit(X, y, **kwargs)
-# export_model_params: deep-copy ALL self.params; only for permitted early stopping
-# replace frozen['n_estimators'] with measured best_iteration_ (>0). Never return a count-only patch.
+from pathlib import Path
+import copy
+import cloudpickle
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from lightgbm import LGBMRegressor, LGBMClassifier, early_stopping
+
+class Candidate:
+    def __init__(self, config):
+        self.config = copy.deepcopy(config)
+        self.params = dict(config.get('model_params', {}))
+
+    def fit(self, X, y, context):
+        self.classification = context.task_type in {'binary_classification','multiclass_classification'}
+        if context.task_type not in {'regression','binary_classification','multiclass_classification'}:
+            raise ValueError('Adapt this single-target reference to the assigned task')
+        self.classes = list(context.classes)
+        self.encoder = LabelEncoder().fit(context.classes) if self.classification else None
+        target = self.encoder.transform(np.asarray(y)) if self.encoder is not None else y
+        self.params = dict(n_estimators=300, verbosity=-1, random_state=context.seed) | self.params
+        params = dict(self.params, n_jobs=context.cpus, device_type='cpu')
+        scorer = context.validation_scorer
+        self.use_stopping = (self.config.get('stopping_policy') == 'early_stopping'
+                             and context.validation_X is not None and scorer is not None)
+        self.stopping_info = dict(mode='primary_metric' if self.use_stopping else 'fixed',
+            reason='SDK original-scale primary metric' if self.use_stopping else
+                   'Fixed fit: requested fixed policy or no exact holdout scorer', metric=context.metric)
+        kwargs = {'sample_weight':context.sample_weight} if context.sample_weight is not None else {}
+        if self.use_stopping:
+            params['metric'] = 'None'
+            labels = self.encoder.transform(np.asarray(context.validation_y)) if self.encoder is not None else context.validation_y
+            def primary(truth, prediction):
+                return 'primary', scorer(self.output(prediction, scorer.kind), scorer.kind), context.direction == 'maximize'
+            kwargs.update(eval_set=[(context.validation_X, labels)], eval_metric=primary,
+                          callbacks=[early_stopping(50, first_metric_only=True, verbose=False)])
+            if context.validation_weight is not None:
+                kwargs['eval_sample_weight'] = [context.validation_weight]
+        cls = LGBMClassifier if self.classification else LGBMRegressor
+        self.model = cls(**params)
+        self.model.fit(X, target, **kwargs)
+        return self
+
+    def output(self, values, kind):
+        values = np.asarray(values)
+        if not self.classification:
+            return values.ravel()
+        if kind == 'label':
+            codes = (values >= .5).astype(int) if values.ndim == 1 else values.argmax(axis=1)
+            return self.encoder.inverse_transform(codes)
+        if values.ndim == 1:
+            values = np.column_stack([1-values, values])
+        return values[:, self.encoder.transform(self.classes)]
+
+    def predict(self, X, prediction_spec):
+        kind = prediction_spec['kind']
+        if self.classification:
+            return self.output(self.model.predict_proba(X), kind)
+        return self.model.predict(X)
+
+    def export_model_params(self):
+        params = copy.deepcopy(self.params)
+        if self.use_stopping and self.model.best_iteration_ > 0:
+            params['n_estimators'] = int(self.model.best_iteration_)
+        else:
+            params['n_estimators'] = int(self.model.n_estimators_)
+        return params
+
+    def save(self, artifact_dir):
+        (Path(artifact_dir)/'candidate.pkl').write_bytes(cloudpickle.dumps(self))
+
+def create_candidate(config):
+    return Candidate(config)
+
+def load_candidate(artifact_dir):
+    return cloudpickle.loads((Path(artifact_dir)/'candidate.pkl').read_bytes())
 ```
-Persist columns, category levels, model and classes. Refit without validation uses selected tree count. Align probability columns to context.classes. Row bagging requires subsample_freq>0. Multioutput wrappers are serial; ranking sorts X/y/weights/groups together and uses contiguous query sizes. Requested clipping needs explicit train-derived bounds and predict code.
+
+The fit callback is transient; never retain the scorer or FitContext. CV/refit uses fixed counts. For ranking and multioutput, implement the separate group/per-target path described in SKILL.md. Row sampling needs subsample_freq > 0.

@@ -124,6 +124,11 @@ def run_search(objective, *, directory, identity, space, direction, seed, max_tr
         if control_id in state['applied_controls']:
             state.pop('pending_control', None)
             return
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        selected = study.best_trial if completed else None
+        details = dict(details, sampled_params=dict(selected.params) if selected else {},
+            best_trial_number=selected.number if selected else None,
+            best_selection_ref=selected.user_attrs.get('selection_ref') if selected else None)
         state['pending_control'] = dict(kind=kind, details=details)
         persist()
         details = dict(details, trials=state['trials'], remaining_seconds=remaining(),

@@ -1,6 +1,6 @@
 # Generated candidate persistence
 
-Runtime v7 preserves facts without an additional fit. Example of an observed submission:
+Runtime v8 preserves facts without an additional fit. Example of an observed submission:
 ```python
 from mlmom.execution_facts import FitExecutionFacts
 
@@ -35,7 +35,7 @@ Store only inference state, not FitContext or X/y. Native predictors referencing
 
 Search-group identity is controller state. PlannerPlan has no membership fields;
 HypothesisPlan adds a derived read-only execution view. FitContext.groups contains
-row-level validation groups and must not be confused with search_group_id.
+training-row grouping IDs and must not be confused with search_group_id.
 
 Duration history is advisory. The scheduler admits actual CPU/RAM leases and uses
 explicit deadlines; it does not sum source HPO wall times to refuse an ensemble.
@@ -63,3 +63,9 @@ class RatioFeatures:
 def create_features(config):
     return RatioFeatures()
 ```
+
+Validation callbacks receive context.validation_scorer; its kind is the evaluator's required
+representation. Pass raw estimator predictions to scorer(predictions, kind); the SDK handles
+target/output policies once. Never serialize that callable or FitContext. In Python untimed
+remaining_seconds is infinity; JSON checkpoint budgets use null. TrainingCheckpoint separates
+sampled_params from effective_configuration and full exported best_params.

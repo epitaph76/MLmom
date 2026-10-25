@@ -1,16 +1,19 @@
 ---
 name: torch
-description: Train a compact CPU tabular MLP with PyTorch 2.5.1 when data size and budget justify it when appropriate for the confirmed task.
+description: Train a compact weighted CPU PyTorch 2.5.1 MLP on prepared dense data.
 ---
 # PyTorch 2.5.1
 
-Prefer boosting for small/category-heavy data. A small reference baseline uses hidden_size (64), epochs (20), lr (.001), batch_size (256). The model is Linear-ReLU-Linear on dense scaled OHE, without validation patience or sample weights. Generate other layers/loss policies explicitly when planned.
+The complete REFERENCE.md uses a dense Linear-ReLU-Linear baseline with hidden_size, epochs, lr,
+batch_size and patience_epochs. Estimate tensor memory; set torch threads from context.cpus.
+Single-label classification uses encoded long targets and CrossEntropyLoss on logits; multilabel
+uses BCEWithLogitsLoss, regression MSE. Sample weights apply to per-row losses.
 
-Start width 32-128, batch 128-512 and bounded epochs. Estimate dense arrays/tensor copies. Set torch threads from context; keep loaders serial and check remaining_seconds inside minibatches only when context.timeouts_enabled.
+Optional stopping calls context.validation_scorer under eval/no_grad, restores a copied best
+state_dict and exports the selected epoch count. Otherwise train fixed epochs and record why.
+Check remaining_seconds only when timeouts_enabled. No outer or internal HPO loop belongs here.
 
-Single-label classification uses encoded long targets and raw logits with CrossEntropyLoss, no prior softmax. Binary/multilabel can use float targets with BCEWithLogitsLoss; regression uses MSE/MAE. Apply softmax/sigmoid only at inference; map labels/output columns back to the SDK.
-
-Custom stopping monitors internal validation in eval/no_grad, deep-copies/restores the best state_dict and exports the selected epoch count for fixed refit. Predict in bounded batches. Persist architecture, state_dict, preprocessing and label mapping; load on CPU only from this solution's trusted artifacts. No external checkpoints.
-
-Implement the training loop directly, respecting context.cpus and optional deadlines.
-Optional export_model_params can retain selected iterations for later refit; no optimizer hooks are required.
+Predict in bounded CPU batches; softmax/sigmoid apply only for classification inference.
+Persist architecture, label mapping and state_dict. Load weights with map_location='cpu' and
+weights_only=True from this solution's artifacts. Do not pickle FitContext, validation closures
+or optimizer state. No external checkpoints or downloads.

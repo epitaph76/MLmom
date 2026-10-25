@@ -1,4 +1,6 @@
-# Факты исполнения и наследование — runtime v7
+# Факты исполнения и наследование — runtime v8 (основа v7)
+
+Дополнения v8: [конфигурация checkpoint, scorer и инструменты](SKILL_CONTRACTS_V8_RU.md).
 
 SDK/worker записывает `FitExecutionFacts(version=1)` сразу после успешного candidate fit,
 до предсказания. Каждая запись имеет fit_id, stage, trial/fold, split, доступный estimator,
@@ -66,6 +68,6 @@ baseline передаются раздельно: улучшение полно�
 
 Replay вызывает только роли и чтение evidence; sandbox/обучение моделей не создаётся.
 Входы, ответы, чтения ссылок и ошибки API сохраняются. Недоступный API означает incomplete.
-Новые исполнения используют session runtime_contract_version=7. Старые каталоги не
+Новые исполнения используют session runtime_contract_version=8. Старые каталоги не
 перезаписываются, inference artifacts сохраняются; ModelSpec v2 и FeatureSet v1 не меняются.
 Это тесты разработки, без новых обязательных проверок перед каждым экспериментом.

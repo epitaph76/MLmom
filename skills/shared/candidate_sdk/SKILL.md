@@ -4,7 +4,7 @@ description: Fold-local preprocessing, estimators and reproducible ModelSpec exp
 ---
 # Candidate SDK
 
-Runtime v7 records FitExecutionFacts. execution_context separates config/facts/scores
+Runtime v8 records FitExecutionFacts and complete selected checkpoint configurations. execution_context separates config/facts/scores
 from historical prose. Missing manifests are unknown; candidate APIs are unchanged.
 
 candidate.py exports create_candidate(config) and load_candidate(artifact_dir).
@@ -16,8 +16,8 @@ SDK appends feature programs/DSL once, with fold train labels and saved transfor
 
 FitContext provides task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds,
 remaining_seconds, timeouts_enabled, classes, groups, sample_weight, validation_X/y,
-validation_groups/weight and work_dir. Use attributes. Threads use context.cpus.
-Enforce deadlines only when timeouts_enabled; remaining_seconds=null means unbounded time. Native search budgets use time_limit_seconds; never pass infinity to a library. Workers receive no outer labels or LLM keys.
+validation_groups/weight, validation_scorer and work_dir. Use attributes. Threads use context.cpus.
+Python FitContext.remaining_seconds is infinity when timeouts_enabled=false. JSON agent budgets use null instead. Inspect timeouts_enabled before deadline checks. Native search budgets use time_limit_seconds; never pass infinity to a library. Workers receive no outer labels or LLM keys.
 
 Optional export_model_params returns finite JSON; otherwise refit uses executed parameters.
 No fitted_components, audit or export/recreate requirement. check_source checks syntax/factories;
@@ -28,4 +28,11 @@ Stacking uses OOF base predictions and fold-local preprocessing; fit_stack recei
 and create_preprocessor. Persist wrapped bases/meta learner; stack predict also takes raw X.
 CatBoost after_iteration returns True to continue and False to stop.
 
-Search-group metadata is controller-owned/read-only; FitContext.groups means validation rows.
+Search-group metadata is controller-owned; FitContext.groups contains training-row grouping IDs.
+
+The optional validation_scorer(predictions, kind) accepts raw estimator predictions and scores
+the original-scale primary metric with metric options and validation weights. Its kind attribute
+names the required prediction representation. SDK applies declared output/target policies once.
+Preprocessors, feature programs and base OOF fits receive no scorer. Never persist a scorer or
+FitContext. Use an exact callback when supported; otherwise fit fixed iterations and describe why
+in optional stopping_info. This metadata is descriptive and never an execution gate.

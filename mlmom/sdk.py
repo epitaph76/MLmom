@@ -44,6 +44,7 @@ class FitContext:
     fold_number: int | None = None
     component_name: str | None = None
     parent_fit_id: str | None = None
+    validation_scorer: Any = None
     @property
     def remaining_seconds(self):
         if not self.timeouts_enabled:
@@ -60,6 +61,50 @@ class Candidate(Protocol):
 class Preprocessor(Protocol):
     def fit_transform(self, X, y, context: FitContext): ...
     def transform(self, X): ...
+
+
+class ValidationScorer:
+    """Score only the supplied internal holdout, retaining its original target scale."""
+    def __init__(self, context):
+        if context.validation_y is None or context.task_context is None:
+            raise ValueError('Validation scoring requires an internal holdout and TaskContext')
+        self.context = copy.deepcopy(context.task_context)
+        self.y = copy.deepcopy(context.validation_y)
+        self.X = copy.deepcopy(context.validation_X)
+        self.groups = copy.deepcopy(context.validation_groups)
+        self.weights = copy.deepcopy(context.validation_weight)
+        from .evaluation import prediction_kind
+        self.kind = prediction_kind(context.metric, context.task_type)
+        self.metric, self.direction = context.metric, context.direction
+
+    def __call__(self, predictions, kind):
+        from .evaluation import prediction_kind, score_predictions
+        expected = prediction_kind(self.context.task.primary_metric, self.context.task.task_type)
+        if kind != expected:
+            raise ValueError(f'Validation metric requires {expected}, received {kind}')
+        return score_predictions(self.y, predictions, self.context, X=self.X,
+                                 groups=self.groups, weights=self.weights)
+
+
+class PolicyValidationScorer:
+    """Convert raw estimator output through SDK policies exactly once before scoring."""
+    def __init__(self, scorer, policy):
+        self.scorer, self.policy = scorer, policy
+        for name in ('kind', 'metric', 'direction'):
+            if hasattr(scorer, name):
+                setattr(self, name, getattr(scorer, name))
+
+    def __call__(self, predictions, kind):
+        return self.scorer(self.policy.inverse(predictions, kind), kind)
+
+
+def validation_scorer(context):
+    """Build the optional scorer for direct SDK callers, as well as worker fits."""
+    if context.validation_scorer is not None:
+        return context.validation_scorer
+    if context.validation_y is not None and context.task_context is not None:
+        return ValidationScorer(context)
+    return None
 
 
 class PolicyCandidate:
@@ -87,7 +132,11 @@ class PolicyCandidate:
         self.apply_policy=not context.runtime_policies_applied
         transformed,weights=self.policy.fit_transform(y,context.sample_weight,context.task_type) if self.apply_policy else (y,context.sample_weight)
         valid_y=self.policy.transform_target(context.validation_y) if self.apply_policy else context.validation_y
-        context = replace(context, sample_weight=weights, validation_y=valid_y,runtime_policies_applied=True)
+        scorer = validation_scorer(context)
+        if scorer is not None and self.apply_policy:
+            scorer = PolicyValidationScorer(scorer, self.policy)
+        context = replace(context, sample_weight=weights, validation_y=valid_y,
+                          validation_scorer=scorer,runtime_policies_applied=True)
         self.estimator.fit(X, transformed, context)
         return self
 
@@ -141,8 +190,12 @@ class PreparedCandidate:
             self.stack_policy=PolicyState(self.config)
             self.stack_apply_policy=not context.runtime_policies_applied
             transformed,weights=self.stack_policy.fit_transform(y,context.sample_weight,context.task_type) if self.stack_apply_policy else (y,context.sample_weight)
+            scorer = validation_scorer(context)
+            if scorer is not None and self.stack_apply_policy:
+                scorer = PolicyValidationScorer(scorer, self.stack_policy)
             stack_context=replace(context,sample_weight=weights,runtime_policies_applied=True,
-                validation_y=self.stack_policy.transform_target(context.validation_y) if self.stack_apply_policy else context.validation_y)
+                validation_y=self.stack_policy.transform_target(context.validation_y) if self.stack_apply_policy else context.validation_y,
+                validation_scorer=scorer)
             fit_stack(X, transformed, stack_context, self.create_preprocessor)
             return self
         try:
@@ -153,7 +206,7 @@ class PreparedCandidate:
                 from .feature_engineering import FeatureAugmentingPreprocessor
                 self.preprocessor = FeatureAugmentingPreprocessor(self.preprocessor, self.config['feature_set'])
             train_context = replace(context, validation_X=None, validation_y=None,
-                                    validation_groups=None, validation_weight=None)
+                                    validation_groups=None, validation_weight=None, validation_scorer=None)
             values = self.preprocessor.fit_transform(X, y, train_context)
             self.base_width = values.shape[1]
             if values.shape[0] != len(X):
@@ -203,6 +256,10 @@ class PreparedCandidate:
     def native_history(self):
         export = getattr(self.estimator, 'native_history', None)
         return export() if export else None
+
+    @property
+    def stopping_info(self):
+        return getattr(self.estimator, 'stopping_info', None)
 
     def save(self, artifact_dir):
         import cloudpickle

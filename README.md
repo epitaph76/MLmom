@@ -2,7 +2,9 @@
 
 Агентский pipeline для табличных ML-задач: условие и CSV → обучение и сравнение моделей →
 `submission.csv`. Текущая версия сохраняет агентскую систему и технический минимум
-проверок, введённый в `codex/agent-first-minimal-checks`. Runtime v7 сохраняет факты fit,
+проверок, введённый в `codex/agent-first-minimal-checks`. Runtime v8 согласует скиллы,
+полный контекст HPO, MCC, точные validation-метрики и инструменты ролей:
+[контракт и проверка v8](docs/SKILL_CONTRACTS_V8_RU.md). Runtime v7 сохраняет факты fit,
 наследует конфигурацию champion и передаёт общий контекст ролям: [контракт и replay diamonds](docs/EXECUTION_FACTS_RU.md).
 Введённая в v6 поддержка охватывает
 исполняемые Python-признаки с обучаемым состоянием; DSL остаётся необязательной

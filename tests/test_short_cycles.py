@@ -33,7 +33,10 @@ class ShortCycleTests(unittest.TestCase):
         class Direct(Coder):
             max_steps=12
             def generate(self,*args):
-                assert args[-1] is None
+                if args[0]=='preprocessing_agent':
+                    assert {'read_skills','inspect_api','check_preprocessing'} <= set(args[-1].tools)
+                else:
+                    assert args[-1] is None
                 assert self.max_steps==3
                 return super().generate(*args)
         with tempfile.TemporaryDirectory() as tmp:

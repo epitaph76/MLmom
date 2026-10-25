@@ -13,7 +13,7 @@ After first valid submission, strategy=optuna uses the shared runner. fit trains
 
 One persistent study per implementation, data split, metric and space. Defaults: batches of 5, an agent-assigned initial trial budget (default 15); time deadlines apply only when enabled. The default programmatic policy continues only after >=0.5% relative primary-metric improvement per batch. Smaller improvements still update the best checkpoint. min_delta=0 is correct; it is not the batched hpo_gain_threshold. Trials and batch decisions persist immediately; resume keeps the original deadline. HPO batches do NOT create new hypotheses or coder calls.
 
-Use narrow spaces: LightGBM num_leaves 15-63/min_child_samples 10-80; CatBoost depth 4-8/l2_leaf_reg 1-20; learning_rate .025-.15. Search only actual constructor parameters, never CPU/GPU/deadlines/private frozen keys. Export selected tree counts for fixed refit. Stop on plateau and propose a logic/preprocessing change from diagnostics.
+Use narrow spaces: LightGBM num_leaves 15-63/min_child_samples 10-80; CatBoost depth 4-8/l2_leaf_reg 1-20; learning_rate .025-.15. Search actual estimator parameters or explicit policy_params.<policy>.<field> SDK routes, never CPU/GPU/deadlines/private frozen keys. Export selected tree counts for fixed refit. Stop on plateau and propose a logic/preprocessing change from diagnostics.
 
 Native AutoML uses strategy=native, patience_trials=null; no outer Optuna. Preserve first submission, final reserve and time for later cycles.
 
@@ -25,3 +25,10 @@ A null remaining_seconds means no deadline; use actual trial/fold durations and 
 Family baselines can be reused from their measured internal protocol before outer evaluation.
 CPU thread allocations are execution settings. Source-owned defaults added by an optional
 export do not by themselves change the original assignment; changed fixed learning knobs do.
+
+Checkpoint.sampled_params contains Optuna choices only. effective_configuration and
+execution_context.current_configuration contain the complete selected configuration, including
+unchanged parameters, SDK programs and routed policies. best_params contains full selected
+estimator parameters, including saved export values such as selected iteration counts.
+Without a successful trial, observed execution remains unknown. Read these supplied facts;
+do not request another fit to reconstruct configuration. Policy routes are not estimator kwargs.

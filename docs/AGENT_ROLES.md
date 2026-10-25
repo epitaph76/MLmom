@@ -12,7 +12,7 @@
 | preprocessing_agent | Пишет preprocessing.py с fit_transform/transform и сериализуемым состоянием |
 | coding_agent | Пишет candidate.py с fit/predict/save и create_candidate/load_candidate |
 | training_agent | Получает checkpoints после initial fit, пакета HPO или ошибки; выбирает continue/stop/refit |
-| feature_agent | Предлагает изменения DSL-признаков и получает измеренные внутренние результаты |
+| feature_agent | Исследует разрешённый train через CSV tools, пишет Python-программы признаков или DSL и получает внутренние результаты |
 | ensemble_agent | Выбирает сохранённые компоненты для ансамблей |
 | result_validator | Даёт рекомендательную оценку реализации и измеренного эффекта |
 
@@ -50,7 +50,7 @@ Planner возвращает PlannerPlan без search_group_id/search_group_kin
 HypothesisPlan с производными полями для scheduler/store. Историческое происхождение
 эксперимента остаётся в based_on/based_on_hypothesis_id. Ошибки отдельного рецепта
 ансамбля сохраняются в ensemble_recipe_failed; остальные выбранные рецепты продолжаются.
-Версия групп введена в v4; текущая session runtime_contract_version=7.
+Версия групп введена в v4; текущая session runtime_contract_version=8.
 Детали: [CONTROLLER_GROUPS_RU.md](CONTROLLER_GROUPS_RU.md).
 
 ## Длительности и замены признаков v5
@@ -74,3 +74,15 @@ transform(X). DSL необязателен, лимита 16 колонок не�
 исторического baseline и мнений reviewer. Полные планы наследуют champion до review;
 удаление признаков задаётся явно. Ссылки evidence формируются из читаемых материалов.
 Подробности и replay diamonds: [EXECUTION_FACTS_RU.md](EXECUTION_FACTS_RU.md).
+
+## Согласованные скиллы и контракты v8
+
+TrainingCheckpoint разделяет sampled_params и полную effective_configuration выбранного
+trial; best_params включает сохранённые параметры refit. MCC поддерживается для single-label
+классификации. Опциональный validation_scorer считает primary metric на исходной шкале,
+с опциями и весами; preprocessing, feature programs и внутренние base OOF не получают его.
+Preprocessing Agent читает свои карточки, inspect_api и может проверить собственный модуль
+без estimator. Feature Agent исследует только зарегистрированный train своего цикла;
+усечённый профиль дополнен пагинацией и читаемыми source_ref. read_query_result читает
+строки/столбцы полных сохранённых результатов, read_evidence — страницы metadata. Подробности:
+[SKILL_CONTRACTS_V8_RU.md](SKILL_CONTRACTS_V8_RU.md). Для v8 нужен новый run directory.

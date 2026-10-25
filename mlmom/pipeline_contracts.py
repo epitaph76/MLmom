@@ -543,6 +543,8 @@ class PreprocessingSpec(AgentNarrative):
     description: str
     output: Literal['dataframe', 'dense', 'sparse']
     constraints: list[str] = Field(default_factory=list)
+    categorical_features: list[str | int] = Field(default_factory=list,
+        description='Native categorical names for DataFrame output, or indices for matrix output.')
 
 
 class PreprocessingBundle(AgentNarrative):
@@ -557,6 +559,8 @@ class TrainingCheckpoint(StrictModel):
     plan: dict[str, Any]
     trials: list[dict[str, Any]] = Field(default_factory=list)
     best_params: dict[str, Any] = Field(default_factory=dict)
+    sampled_params: dict[str, Any] = Field(default_factory=dict)
+    effective_configuration: dict[str, Any] | None = None
     best_score: float | None = None
     remaining_seconds: float | None = Field(None, ge=0)
     timeouts_enabled: bool = True

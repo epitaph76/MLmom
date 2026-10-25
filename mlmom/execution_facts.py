@@ -11,7 +11,7 @@ from pydantic import Field
 from .contracts import StrictModel
 
 
-RUNTIME_CONTRACT_VERSION = 7
+RUNTIME_CONTRACT_VERSION = 8
 
 
 class FitExecutionFacts(StrictModel):
@@ -39,6 +39,7 @@ class FitExecutionFacts(StrictModel):
     code_hash: str | None = None
     preprocessing_hash: str | None = None
     reason: str | None = None
+    stopping: dict[str, Any] | None = None
 
 
 def read_fit_facts(root):
@@ -66,6 +67,13 @@ def record_fit(model, config, context):
     except Exception:actual_config = config
     if not isinstance(actual_config,dict):actual_config=config
     facts.preprocessing_hash = actual_config.get('_preprocessing_hash', facts.preprocessing_hash)
+    try:
+        info = getattr(model, 'stopping_info', None)
+        if isinstance(info, dict):
+            json.dumps(info, allow_nan=False)
+            facts.stopping = copy.deepcopy(info)
+    except Exception:
+        pass
     try:
         facts.parameters = copy.deepcopy(actual_config.get('model_params', {}))
         facts.parameter_source = 'executed_config'
@@ -136,9 +144,15 @@ def observed_execution(facts, experiment_id=None, related_fits=None):
 def execution_context(plan, run=None, evaluation=None, *, candidate=None, related_fits=None):
     """A lossless current configuration, scoped measurements and explicitly historical prose."""
     from .execution_contract import execution_contract
-    from .model_spec import frozen_plan
+    from .model_spec import frozen_plan, apply_overrides
     from .pipeline_contracts import HypothesisPlan, ExperimentRun
     raw_run = run.model_dump(mode='json') if hasattr(run, 'model_dump') else (run or {})
+    if not raw_run.get('experiment_id'):
+        if raw_run.get('effective_configuration'):
+            plan = raw_run['effective_configuration']
+        elif raw_run.get('sampled_params') or raw_run.get('best_params'):
+            base = plan.model_dump(mode='json') if hasattr(plan, 'model_dump') else plan
+            plan = apply_overrides(base, raw_run.get('sampled_params') or raw_run['best_params'])
     try:
         plan = plan if isinstance(plan, HypothesisPlan) else HypothesisPlan.model_validate(plan)
         effective = frozen_plan(plan, ExperimentRun.model_validate(raw_run)) if raw_run.get('experiment_id') else plan
@@ -149,8 +163,6 @@ def execution_context(plan, run=None, evaluation=None, *, candidate=None, relate
         # Legacy/minimal training checkpoints remain valid control inputs.
         current = copy.deepcopy(plan.model_dump(mode='json') if hasattr(plan,'model_dump') else plan)
         contract, difference = None, raw_run.get('configuration_diff', {})
-    if raw_run.get('best_params') and not raw_run.get('experiment_id'):
-        current['model_params'] = raw_run['best_params']
     history = current.pop('hypothesis', None)
     # Narrative annotations never define the model that was executed.
     current.pop('agent_notes', None)

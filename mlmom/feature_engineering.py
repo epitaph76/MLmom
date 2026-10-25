@@ -167,7 +167,8 @@ class FeatureAugmentingPreprocessor:
         allowed = getattr(context.task_context, 'feature_columns', X.columns)
         validate_features(self.features.definition, allowed)
         from dataclasses import replace
-        feature_context = replace(context, validation_X=None, validation_y=None, validation_groups=None, validation_weight=None)
+        feature_context = replace(context, validation_X=None, validation_y=None, validation_groups=None,
+                                  validation_weight=None, validation_scorer=None)
         extra = self.features.fit_transform(X, y, feature_context)
         return self.append(self.base.fit_transform(X, y, context), extra)
 

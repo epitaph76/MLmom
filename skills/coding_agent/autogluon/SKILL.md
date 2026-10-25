@@ -1,15 +1,21 @@
 ---
 name: autogluon
-description: Use restricted CPU AutoGluon Tabular 1.3.1 when multiple model families fit the search and refit budget.
+description: Use explicit non-pretrained AutoGluon Tabular 1.3.1 families and portable frozen refit.
 ---
 # AutoGluon 1.3.1
 
-The generated native path currently has no verified validation protocols in the capability metadata. Treat this as uncertainty, not a Python admission veto. The planner and validator must assess the actual proposed implementation, internal validation and frozen refit; report real failures for repair.
+Regression/binary/multiclass use strategy=native and patience_trials=null. Restrict the reference
+to GBM/CAT/XGB/RF/XT, CPU resources, fit_strategy=sequential and no native weighted ensemble.
+Mapped objectives are RMSE, MAE, macro-F1, accuracy, AUC and log-loss. The complete reference is
+unweighted, with identity policies/default metric options. Other objectives/policies need an
+exact custom recipe or a direct fixed estimator; installed upstream support alone is not proof.
+validation_strategies lists measured protocols; an empty list is not an automatic refusal.
 
-Only regression/binary/multiclass; strategy='native', patience_trials=null. Mapped metrics: rmse, mae, f1_macro, accuracy, roc_auc, log_loss. Prefer direct boosting on short budgets. Allowed model families: GBM/CAT/XGB/RF/XT; native weighted ensembles require a proven frozen ensemble export/refit; the current reference fits individual families.
+Export selected family, hyperparameters and hyperparameters_fit, including trained counts.
+Frozen fitting selects that configuration, disables new early-stop selection and calls refit_full.
+Avoid bagging/stacking under small budgets, Ray and quality/foundation presets. A supported
+memory_limit is soft; keep headroom.
 
-The generated candidate implements hyperparameters, time_limit, num_cpus, num_gpus=0, label/path and internal tuning_data. Do not duplicate reserved settings in model_params. Verified fit_strategy='sequential' and memory_limit below worker allocation may be fit options; memory_limit is soft. Avoid bagging/stacking under tight limits, parallel Ray, quality presets and pretrained/foundation families.
-
-Align predict_proba DataFrame columns to context.classes. Keep the reserved target name out of X. Native leaderboard is diagnostic; the runner owns comparison.
-
-Keep exported __native_frozen family/params. Fixed refit fits that family then refit_full, without family search. The predictor references native files: save must clone them into artifact_dir and load rebases paths. A pickle pointing at work_dir is insufficient; check moved artifact predictions.
+Use transformed DataFrames, a collision-free label column and supplied tuning_data. Align
+predict_proba columns to context.classes. Before save remove cached fit data, clone predictor
+files into artifact_dir, then rebase with TabularPredictor.load after relocation.

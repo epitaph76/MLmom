@@ -4,15 +4,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn import metrics as m
-from .task_validator import _normalise_metric
+from .metric_contracts import canonical_metric, metric_errors
 from .pipeline_contracts import EvaluationResult, TaskContext
 
 
 def metric_name(name: str) -> str:
-    value = _normalise_metric(name)
-    return {'macro_f1': 'f1_macro', 'micro_f1': 'f1_micro', 'weighted_f1': 'f1_weighted',
-            'auc': 'roc_auc', 'mean_squared_error': 'mse', 'mean_absolute_error': 'mae',
-            'r2_score': 'r2', 'mean_average_precision': 'map'}.get(value, value)
+    return canonical_metric(name)
 
 
 def prediction_kind(metric: str, task_type: str) -> str:
@@ -23,7 +20,7 @@ def prediction_kind(metric: str, task_type: str) -> str:
         return 'ranking_score'
     if task_type == 'clustering':
         return 'cluster'
-    if 'classification' in task_type:
+    if 'classification' in task_type or task_type == 'anomaly_detection':
         return 'label'
     return 'value'
 
@@ -55,6 +52,9 @@ def checked_predictions(value, rows: int, kind: str, *, classes=None):
 
 def score_predictions(y, prediction, context: TaskContext, *, X=None, groups=None, weights=None) -> float:
     name = metric_name(context.task.primary_metric)
+    errors = metric_errors(name, context.task.task_type, context.metric_options)
+    if errors:
+        raise ValueError('; '.join(errors))
     kind = prediction_kind(name, context.task.task_type)
     n = len(X) if y is None else len(y)
     p = checked_predictions(prediction, n, kind, classes=context.classes)
@@ -152,6 +152,8 @@ def score_predictions(y, prediction, context: TaskContext, *, X=None, groups=Non
         result = getattr(m, name + '_score')(y, p, **opts)
     elif name in {'accuracy', 'balanced_accuracy'}:
         result = getattr(m, name + '_score')(y, p, **opts)
+    elif name == 'mcc':
+        result = m.matthews_corrcoef(np.asarray(y).ravel(), np.asarray(p).ravel(), **opts)
     else:
         raise ValueError(f'Unsupported metric: {name}')
     result = float(result)

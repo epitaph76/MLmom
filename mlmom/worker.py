@@ -57,13 +57,13 @@ def watchdog(request):
 
 
 def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, groups=None, weights=None, validation_groups=None, validation_weight=None, seconds=None):
-    from .sdk import FitContext
+    from .sdk import FitContext, ValidationScorer
     work_dir=Path(work_dir)/uuid.uuid4().hex[:8]
     work_dir.mkdir(parents=True,exist_ok=True)
     allowance = max(.1,seconds or request['worker_seconds']*.8)
     if not request.get('timeouts_enabled',True):
         allowance = request.get('plan',{}).get('time_limit_seconds',allowance)
-    return FitContext(task_type=context.task.task_type,metric=context.task.primary_metric,
+    result = FitContext(task_type=context.task.task_type,metric=context.task.primary_metric,
         direction=context.task.metric_direction,seed=request.get('seed',42),
         cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=allowance,classes=context.classes,
@@ -72,6 +72,9 @@ def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, group
         timeouts_enabled=request.get('timeouts_enabled',True),
         execution_facts_dir=request.get('_execution_facts_dir'),
         outer_split_id=request.get('outer_split_id') or ('all-train' if request.get('phase') in {'final','submission'} else None))
+    if y_valid is not None:
+        result.validation_scorer = ValidationScorer(result)
+    return result
 
 
 def write_predictions(model, X, kinds, root):
@@ -101,6 +104,59 @@ def synthetic(kind):
         X,y = make_regression(n_samples=60,n_features=4,n_targets=2 if kind=='multioutput_regression' else 1,random_state=4)
         if kind=='ranking':y=np.tile(np.arange(5),12)
     return pd.DataFrame(X,columns=['x','z','v','w']), pd.DataFrame(y) if np.asarray(y).ndim==2 else pd.Series(y)
+
+
+def check_preprocessing(request, root):
+    """Optional isolated preprocessor check; never used as an admission condition."""
+    import cloudpickle
+    import numpy as np
+    import pandas as pd
+    from scipy import sparse
+    from .sdk import FitContext, _execute_module
+    kind=request.get('task_type','regression')
+    X,y=synthetic(kind)
+    rng=np.random.default_rng(42)
+    if request.get('feature_schema'):
+        columns={}
+        for column in request['feature_schema']:
+            semantic=column['semantic_type']
+            if semantic in {'categorical','text'}:
+                values=np.resize(['synthetic_a','synthetic_b','synthetic_c'],len(X)).astype(object)
+            elif semantic=='boolean':values=np.arange(len(X))%2==0
+            elif semantic=='datetime':values=pd.date_range('2020-01-01',periods=len(X))
+            else:values=rng.uniform(1,10,len(X))
+            columns[column['name']]=values
+        X=pd.DataFrame(columns)
+    X.index=np.arange(len(X))+100
+    if y is not None:y.index=X.index
+    classes=request.get('classes',[])
+    if classes and 'classification' in kind and kind!='multilabel_classification':
+        y=pd.Series([classes[i%len(classes)] for i in range(len(X))],index=X.index)
+    for name in X:
+        if pd.api.types.is_numeric_dtype(X[name]) and not pd.api.types.is_bool_dtype(X[name]):
+            X.loc[X.index[0],name]=np.nan
+    probe=X.iloc[:3].copy()
+    for name in probe.select_dtypes(include='object'):
+        probe.loc[:,name]='previously_unseen'
+    source=root/'preprocessing.py'
+    source.write_text(request['source'],encoding='utf-8')
+    module=_execute_module(source,'mlmom_precheck_'+uuid.uuid4().hex)
+    pre=module.create_preprocessor(request.get('config',{}))
+    context=FitContext(kind,'rmse','minimize',42,request['worker_cpus'],request['worker_memory_gb'],
+        request['worker_seconds'],classes=classes,work_dir=str(root),
+        timeouts_enabled=request.get('timeouts_enabled',True))
+    values=pre.fit_transform(X.copy(),y,context)
+    if values.shape[0]!=len(X):raise ValueError('Preprocessing changed training row count')
+    before=pre.transform(probe.loc[:,list(reversed(probe.columns))])
+    after=cloudpickle.loads(cloudpickle.dumps(pre)).transform(probe)
+    if before.shape[0]!=len(probe) or after.shape!=before.shape:
+        raise ValueError('Preprocessing changed inference rows or output schema')
+    dense=lambda value:value.toarray() if sparse.issparse(value) else np.asarray(value)
+    pd.testing.assert_frame_equal(pd.DataFrame(dense(before)),pd.DataFrame(dense(after)))
+    if isinstance(values,pd.DataFrame) and not values.index.equals(X.index):
+        raise ValueError('Preprocessing changed training index/order')
+    return dict(status='completed',training_shape=list(values.shape),prediction_shape=list(before.shape),
+                portable_equal=True,unseen_values_checked=True,shuffled_columns_checked=True)
 
 
 def smoke(request, root):
@@ -248,9 +304,28 @@ def train(request, root):
         for record in details.get('trials',[]):
             if record.get('origin')=='baseline': control_trials[record['number']]=imported_metadata(record)
         checkpoint_index=details.get('new_trials',len([t for t in trials if t.origin!='baseline']))
+        sampled = dict(details.get('sampled_params', details.get('best_params', {}))) if plan.strategy=='optuna' else {}
+        effective = apply_overrides(plan.model_dump(mode='json'), sampled)
+        selected_score = details.get('best_score', best_score)
+        selected_number = details.get('best_trial_number')
+        selected_ref = details.get('best_selection_ref')
+        if selected_ref is None and selected_number is not None:
+            selected_ref = root/f'trial-{selected_number}'/'selection.json'
+        if selected_ref is not None and Path(selected_ref).is_file():
+            selected = json.loads(Path(selected_ref).read_text(encoding='utf-8'))
+            if selected.get('details', {}).get('model_spec'):
+                effective = with_spec(effective, selected['details']['model_spec'])
+            else:
+                effective['model_params'] = selected['params']
+        elif plan.strategy!='optuna' and selected_score is not None:
+            if best_details.get('model_spec'):
+                effective = with_spec(effective, best_details['model_spec'])
+            else:
+                effective['model_params'] = dict(best_params)
         checkpoint=TrainingCheckpoint(checkpoint_id=f'{stage}-{checkpoint_index}',stage=stage,
             plan=plan.model_dump(mode='json'),trials=list(control_trials.values()),
-            best_params=details.get('best_params',best_params),best_score=details.get('best_score',best_score),
+            best_params=effective['model_params'],best_score=selected_score,sampled_params=sampled,
+            effective_configuration=effective if selected_score is not None else None,
             remaining_seconds=max(0.,min(details.get('remaining_seconds',fit_budget),fit_budget-(time.monotonic()-started))) if timed else None,
             timeouts_enabled=timed, spent_seconds=details.get('spent_seconds',time.monotonic()-started),
             trial_limit=request.get('hpo_max_trials'),
@@ -513,6 +588,7 @@ def main():
             result = dict(status='completed', runtime=worker_runtime(Path(__file__).resolve().parents[1]),
                           versions=runtime_versions())
         elif action in {'smoke','probe'}: result = smoke(request,root)
+        elif action=='check_preprocessing': result = check_preprocessing(request,root)
         elif action=='train': result = train(request,root)
         elif action=='feature_profile':
             from .feature_search import feature_profile

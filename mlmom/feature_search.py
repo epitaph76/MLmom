@@ -91,7 +91,11 @@ def feature_runtime_info():
     return dict(interface='create_features(config) -> fit_transform(X,y,context), transform(X)',
         implementations=['python', 'optional_dsl'], feature_count_limit=None,
         installed_libraries=installed, fitting_scope='current training fold only',
-        transform_has_labels=False, persistence='cloudpickle state with the model')
+        transform_has_labels=False, persistence='cloudpickle state with the model',
+        fit_context=dict(access='dataclass attributes',fields=['task_type','metric','direction','seed',
+            'cpus','memory_gb','time_limit_seconds','timeouts_enabled','remaining_seconds','classes',
+            'groups','sample_weight','work_dir'],validation_data='absent',
+            untimed_python_remaining='infinity; inspect timeouts_enabled before deadline arithmetic'))
 
 
 def prepare_initial_proposal(p, planning_brief):
@@ -114,7 +118,10 @@ def prepare_initial_proposal(p, planning_brief):
             train_path=str(train_path)),p.run_dir/'feature_search'/'early-profile',
             seconds=p.config.reconnaissance_query_seconds,cpus=min(2,p.budget.cpus),memory_gb=min(2.,p.budget.memory_gb))
         if profile.get('status') != 'completed': raise ValueError(profile.get('error') or 'Feature profile unavailable')
+        from .role_tools import feature_data_tools
+        role_tools = feature_data_tools(p, train_path, 'initial')
         payload = dict(task=feature_task_view(p.context.task), train_profile=profile['profile'],
+            train_evidence_refs=role_tools.evidence_refs,
             dictionary_metadata=dictionary_metadata(p.context), task_description=Path(p.files.task).read_text(encoding='utf-8-sig'),
             current_feature_set=FeatureSet(feature_set_id='empty').model_dump(mode='json'), history=[],
             phase='proposal_before_baseline', remaining_configurations=p.config.feature_max_configurations,
@@ -122,7 +129,7 @@ def prepare_initial_proposal(p, planning_brief):
             skill_instructions=p.skills.load([],p.context.task.task_type,role='feature_agent'))
         with role_window(p.client,'feature_agent','initial:0',p.config.feature_agent_seconds):
             proposal = p.client.generate('feature_agent',FEATURE_PROMPT+' No fitted model or OOF evidence exists yet; '
-                'propose a testable feature intervention from train-only facts, or stop.',payload,FeatureProposal)
+                'propose a testable feature intervention from train-only facts, or stop.',payload,FeatureProposal,role_tools)
         p.store.put('feature_proposal','0',proposal,immutable=True)
         emit('feature.proposal_prepared',dict(session_id='initial',proposal=proposal.model_dump(mode='json')))
     except (GlobalAPIError, WorkerInfrastructureError):
@@ -146,7 +153,10 @@ def feature_profile(request):
             finite = pd.to_numeric(values, errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
             item['range'] = [float(finite.min()), float(finite.max())] if len(finite) else None
         columns.append(item)
-    report = dict(rows=len(X), columns=columns, residual_slices=[],
+    report = dict(rows=len(X), columns=columns,total_columns=len(X.columns),
+                  columns_truncated=len(X.columns)>len(columns),column_offset=0,
+                  remaining_columns_via='list_tables(table="train", offset=...)',residual_slices=[],
+                  residual_columns_considered=min(30,len(X.columns)),residual_columns_truncated=len(X.columns)>30,
                   error_weighting='unweighted', residual_scope='feature_inner_oof')
     if request.get('oof_ref'):
         if context.task.task_type not in {'regression','multioutput_regression','binary_classification',
@@ -371,6 +381,8 @@ def run_feature_session(pipeline, baseline, split, train_path):
             draft = p.store.get('feature_proposal', proposal_key)
             try:
                 if draft is None:
+                    from .role_tools import feature_data_tools
+                    role_tools = feature_data_tools(p, train_path, session_id)
                     profile_root = directory / ('profile-' + key)
                     if (profile_root / 'result.json').exists():
                         profile = json.loads((profile_root / 'result.json').read_text(encoding='utf-8'))
@@ -383,6 +395,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                     if profile.get('status') != 'completed':
                         raise ValueError('Train-only feature profile is unavailable')
                     payload = dict(task=feature_task_view(context.task),
+                        train_evidence_refs=role_tools.evidence_refs,
                         execution_context=execution_context(baseline.plan,baseline.run),
                         feature_runtime=feature_runtime_info(), frozen_model=spec,
                         base_preprocessing=(p.store.get('preprocessing', Path(baseline.candidate.plan_ref).stem) or {}).get('spec'),
@@ -399,7 +412,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                         skill_instructions=p.skills.load([], context.task.task_type, role='feature_agent'))
                     with role_window(p.client, 'feature_agent', session_id + ':' + key,
                                      min(p.config.feature_agent_seconds,p.budget.snapshot().research_seconds)):
-                        draft = p.client.generate('feature_agent', FEATURE_PROMPT, payload, FeatureProposal).model_dump(mode='json')
+                        draft = p.client.generate('feature_agent', FEATURE_PROMPT, payload, FeatureProposal,role_tools).model_dump(mode='json')
                     p.store.put('feature_proposal', proposal_key, draft, immutable=True)
                 proposal = FeatureProposal.model_validate(draft)
                 session.proposal_calls += 1

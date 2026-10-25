@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import json
+from .metric_contracts import normalise_metric, metric_errors
 
 from .contracts import (
     DatasetProfile,
@@ -28,31 +28,7 @@ _SUPERVISED_TYPES = {
 }
 
 def _normalise_metric(value: str | None) -> str:
-    text = (value or "").strip().lower()
-    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
-    aliases = {
-        "root_mean_squared_error": "rmse",
-        "root_mean_square_error": "rmse",
-        "mean_absolute_percentage_error": "mape",
-        "area_under_roc_curve": "roc_auc",
-        "roc_auc_score": "roc_auc",
-        "balanced_accuracy_score": "balanced_accuracy",
-        "average_precision_score": "average_precision",
-        "mean_squared_logarithmic_error": "msle",
-        "root_mean_squared_logarithmic_error": "rmsle",
-        "root_mean_squared_log_error": "rmsle",
-        "symmetric_mean_absolute_percentage_error": "smape",
-        "f1_score": "f1",
-        "f1_macro": "macro_f1",
-        "f1_micro": "micro_f1",
-        "f1_weighted": "weighted_f1",
-        "mean_absolute_error": "mae",
-        "mean_squared_error": "mse",
-        "r2_score": "r2",
-        "mean_average_precision": "map",
-        "mean_reciprocal_rank": "mrr",
-    }
-    return aliases.get(text, text)
+    return normalise_metric(value)
 
 
 class TaskValidator:
@@ -76,6 +52,11 @@ class TaskValidator:
                 add('missing_target', 'A supervised task needs target columns.', 'target_columns')
             if not task.primary_metric or task.metric_direction == MetricDirection.UNKNOWN:
                 add('missing_metric', 'Metric and optimization direction are required.', 'primary_metric')
+            elif task.task_type != TaskType.UNKNOWN:
+                for message in metric_errors(task.primary_metric, task.task_type, task.metric_options):
+                    add('unsupported_metric', message, 'primary_metric')
+                if _normalise_metric(task.primary_metric)=='mcc' and task.metric_direction!=MetricDirection.MAXIMIZE:
+                    add('invalid_metric_direction', 'MCC must be maximized.', 'metric_direction')
             try:
                 json.dumps(task.metric_options, allow_nan=False)
             except (TypeError, ValueError):

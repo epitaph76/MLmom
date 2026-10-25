@@ -49,9 +49,10 @@ class FrozenEnsemble:
         take = lambda value: value if indices is None or value is None else np.asarray(value)[indices]
         c = replace(context, groups=take(context.groups), sample_weight=take(context.sample_weight),
             validation_X=None, validation_y=None, validation_groups=None, validation_weight=None,
+            validation_scorer=None,
             runtime_policies_applied=False, fit_rows=len(X),
             fit_id=uuid.uuid4().hex, parent_fit_id=context.fit_id, component_name=source['name'],
-            started=time.monotonic(), time_limit_seconds=max(.1, context.remaining_seconds),
+            started=time.monotonic(), time_limit_seconds=max(.1, context.remaining_seconds if context.timeouts_enabled else context.time_limit_seconds),
             work_dir=str(Path(context.work_dir)/source['name']/tag))
         Path(c.work_dir).mkdir(parents=True, exist_ok=True)
         model.fit(X, y, c)

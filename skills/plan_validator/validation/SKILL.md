@@ -31,3 +31,8 @@ Group membership is read-only controller metadata. Diagnose internal inconsisten
 do not request agent-authored group IDs or reject independent recipes for them.
 Historical durations are advisory, not technical refusal criteria; study wall time
 does not price one refit. Review methodology against actual deadlines and resources.
+
+validation_strategies contains verified reference protocols, not an exhaustive admission
+table; empty native metadata is uncertainty. FLAML holdout supports supplied weights.
+Assess original-scale stopping/native objectives under target/output policies. A fixed fit
+with an explicit exact-callback limitation is valid. Do not demand an auxiliary audit.

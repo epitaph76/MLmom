@@ -1,6 +1,6 @@
 {
   "skill_id": "hpo",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "title": "Bounded hyperparameter search",
   "status": "ready",
   "task_types": [],

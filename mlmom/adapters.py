@@ -430,7 +430,8 @@ class LibraryCandidate:
         original_model=self.model
         from dataclasses import replace
         self.context = replace(context, groups=None, sample_weight=None, validation_X=None,
-                               validation_y=None, validation_groups=None, validation_weight=None, task_context=None)
+                               validation_y=None, validation_groups=None, validation_weight=None,
+                               validation_scorer=None, task_context=None)
         try:
             if self.tool=='autogluon':
                 # Predictor pickles refer to external model files: bundle them in

@@ -46,6 +46,11 @@ Without an export, the runner reuses the executed trial parameters. No fitted_co
 or estimator audit is required. check_source validates syntax/interfaces; run_smoke_check is an
 optional tool to exercise a synthetic fit/predict/save/load. Real runtime errors return for repair.
 stopping_policy and component_stopping_policies in the plan define whether early stopping is allowed.
+context.validation_scorer(predictions, kind), when present, scores raw estimator predictions on the
+original target scale with SDK policies, primary options and validation weights applied exactly once.
+Its kind attribute specifies value/label/probability. Use exact primary-metric callbacks; when the
+chosen recipe cannot do this, train fixed iterations and explain the fallback in optional stopping_info.
+Never persist FitContext, validation_scorer or callbacks capturing validation rows with the estimator.
 context.timeouts_enabled controls time callbacks: when false do not add deadline callbacks.
 CatBoost callback after_iteration returns True to CONTINUE, False to STOP. Never invert it.
 Prediction kinds: value, label, probability in context.classes order, cluster, ranking_score,
@@ -78,6 +83,11 @@ never validation data. Fit all vocabularies, imputers, feature statistics on X o
 encoding produce group-safe OOF training encodings; transform uses train-fitted inference maps.
 Preserve rows and order. Implement planned categories, missingness, text and feature operations.
 The spec declares dataframe, dense or sparse output, feature semantics and backend constraints.
+Set categorical_features to output column names (DataFrame) or indices (matrix) for native categories.
+CatBoost takes stable strings; LightGBM takes train-derived category dtype/codes; XGBoost native
+categories require stable category dtype and enable_categorical in the model. These are distinct formats.
+You can read your role's cards, inspect_api and optionally check_preprocessing(source). These tools
+do not impose a smoke requirement. A plan's profile is incomplete when it advertises truncation.
 Use only installed allowed libraries and X/y/context; no files, network or environment access.
 Planned train-only feature selectors may be fitted; do not train the predictive estimator or change y.
 State must be cloudpickle serializable. No import-time training. Support unseen categories,
@@ -144,12 +154,18 @@ class CodingState(TypedDict, total=False):
 
 
 def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, tools, context,
-                       sandbox, budget, config, round_id, previous=None, runtime_feedback=None, preprocessing_skills=None):
+                       sandbox, budget, config, round_id, previous=None, runtime_feedback=None,
+                       preprocessing_skills=None,skill_registry=None):
+    preprocessing_skills = list(preprocessing_skills or [])
     workspace = Workspace(workspace,revision_dir=store.root/'source_revisions'/round_id/plan.hypothesis.hypothesis_id,
                           writable=lambda name:name != 'preprocessing.py' and not name.startswith('components/'))
     pre_workspace = Workspace(workspace.root,revision_dir=workspace.revision_dir,
                               writable=lambda name:name == 'preprocessing.py')
     budget_key=f'{round_id}-{plan.hypothesis.hypothesis_id}'
+    prior_cards = store.get('preprocessing_skill_usage',budget_key) or {}
+    for card in prior_cards.get('cards',[]):
+        if card['skill_id'] not in {s['skill_id'] for s in preprocessing_skills}:
+            preprocessing_skills.append(card)
     reuse_pre,reuse_estimator=reuse_assignment(previous,plan)
     if (reuse_pre or reuse_estimator) and not runtime_feedback and not (workspace.root/'candidate.py').is_file():
         for name,source in previous['files'].items():
@@ -216,7 +232,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                      base_execution_context=previous.get('execution_context') if previous else None,
                      feature_schema=schema,skills=preprocessing_skills or [],feedback=state.get('errors',[]),
                      runtime_feedback=runtime_feedback,previous_spec=saved['spec'] if saved else None,
-                     previous={'source':path.read_text(encoding='utf-8'),'sha256':file_hash(path)} if repairing else None),CodePatch if repairing else PreprocessingBundle,None)
+                     previous={'source':path.read_text(encoding='utf-8'),'sha256':file_hash(path)} if repairing else None),
+                CodePatch if repairing else PreprocessingBundle,pre_tools)
             remember_notes('preprocessing_agent', bundle)
             if repairing:
                 pre_workspace.apply_patches([p.model_dump() for p in bundle.patches])
@@ -286,6 +303,41 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
         return sandbox.run(dict(action='inspect_api',module=module,symbol=symbol),
             store.root/'checks'/f'api-{time.time_ns()}',seconds=seconds,memory_gb=plan.memory_gb,cpus=plan.cpus)
     role_tools.register('inspect_api',inspect_api,'Inspect an installed library class/function signature and documentation in a bounded subprocess.')
+
+    from .tools import ToolSet
+    from .registry import SkillRegistry
+    pre_tools = ToolSet()
+    def registry():
+        return skill_registry or SkillRegistry(Path(__file__).resolve().parent.parent/'skills')
+    pre_tools.register('list_skills',lambda:registry().list(role='preprocessing_agent'),
+                       'List preprocessing and shared instruction packages.')
+    def read_preprocessing_skills(skill_ids: list[str]) -> list[dict]:
+        cards = registry().load(skill_ids,context.task.task_type,role='preprocessing_agent',
+                                include_references=True,max_chars=48000)
+        merged = {s['skill_id']:s for s in preprocessing_skills}
+        merged.update({s['skill_id']:s for s in cards})
+        if sum(len(s['content']) for s in merged.values())>48000:
+            raise ValueError('Selected skills exceed context budget')
+        preprocessing_skills[:] = merged.values()
+        store.put('preprocessing_skill_usage',budget_key,{'cards':preprocessing_skills})
+        return [s for s in cards if not skill_ids or s['skill_id'] in skill_ids]
+    pre_tools.register('read_skills',read_preprocessing_skills,'Read selected preprocessing/shared cards and references, retaining their actual hashes with the candidate.')
+    pre_tools.register('inspect_api',inspect_api,'Inspect the installed API signature and documentation in a worker.')
+    def read_preprocessing_source() -> dict:
+        from .persistence import file_hash
+        path=pre_workspace.root/'preprocessing.py'
+        return dict(source=pre_workspace.read_file('preprocessing.py'),sha256=file_hash(path)) if path.is_file() else {}
+    pre_tools.register('read_preprocessing_source',read_preprocessing_source,'Read the current preprocessing source only, when repairing.')
+    def check_preprocessing(source: str | None=None) -> dict:
+        if source is None:
+            source=pre_workspace.read_file('preprocessing.py')
+        return sandbox.run(dict(action='check_preprocessing',source=source,config=plan.model_dump(mode='json'),
+            task_type=context.task.task_type,**smoke_schema),
+            store.root/'checks'/f'preprocessing-{time.time_ns()}',
+            seconds=min(config.smoke_seconds,remaining()) if config.timeouts_enabled else remaining(),
+            memory_gb=min(plan.memory_gb,budget.memory_gb),cpus=min(plan.cpus,budget.cpus))
+    pre_tools.register('check_preprocessing',check_preprocessing,
+        'Optional synthetic fit/transform/portable-state check of supplied preprocessing source; no estimator or real data.')
 
     def generate(state):
         attempts = state.get('attempts',0)+1

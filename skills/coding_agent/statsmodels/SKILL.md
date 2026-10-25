@@ -1,11 +1,17 @@
 ---
 name: statsmodels
-description: Fit a small interpretable single-output OLS regression baseline with statsmodels 0.14.0.
+description: Fit a modest-width statsmodels 0.14.0 single-output OLS baseline.
 ---
 # statsmodels 0.14.0
 
-Only single-output regression. Prefer small approximately linear tables with modest numeric/OHE width. Use Ridge or boosting for collinearity/nonlinearity; avoid huge dense OHE and quadratic feature-memory costs.
+Use direct OLS on already prepared finite numeric/OHE values; add the same intercept at fit and
+predict. model_params target OLS.fit, not its constructor. OLS has no sample_weight argument:
+the runnable reference rejects weights explicitly; implement WLS only when that is the assignment.
+Do not clean features or fit an encoder again.
 
-Generate direct calls to sm.OLS(y, sm.add_constant(values, has_constant='add')).fit(**model_params) after common preprocessing. Parameters target OLS.fit, not its constructor: no missing or estimator-selector keys. OLS has no sample_weight argument; reject weighted tasks rather than discard weights.
+Prefer modest, approximately linear tables. Ridge/boosting are alternatives for collinearity
+or nonlinear hypotheses; avoid huge dense designs and quadratic feature-memory costs.
+Never use missing='drop' to silently remove rows. Compare the actual requested metric.
 
-Custom code imputes/encodes train-only and adds the same intercept at fit/predict. Keep arrays finite; missing='drop' must not silently remove rows. Persist preprocessing and fitted results. Check rank deficiency and compare the requested metric on the runner split; interpretation alone does not establish predictive gain.
+REFERENCE.md implements factories, fit/predict/save/load and optional full parameter export.
+Portable results remove cached training data while retaining prediction coefficients.

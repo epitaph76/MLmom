@@ -1,15 +1,21 @@
 ---
 name: lightautoml
-description: Use LightAutoML 0.4.2 through the restricted untuned tabular lgb/cb preset and supported objective mappings.
+description: Use LightAutoML 0.4.2 untuned tabular learners with explicit objectives and fixed refit.
 ---
 # LightAutoML 0.4.2
 
-The generated native path currently has no verified validation protocols in the capability metadata. Treat this as uncertainty, not a Python admission veto. Assess the actual generated implementation, objective, internal validation and frozen refit rather than inferring support from installation.
+Use strategy=native, patience_trials=null for regression/binary/multiclass. Objectives must match
+the task: RMSE/AUC/log-loss. Task('reg') defaults to MSE upstream; REFERENCE.md supplies an explicit
+RMSE callable. A matching name alone does not prove the native objective is correct.
+validation_strategies describes measured recipes; unverified is not a Python admission veto.
 
-Only regression/binary/multiclass; strategy='native', patience_trials=null. Supported metrics are rmse/roc_auc/log_loss but uses Task defaults: regression RMSE, binary AUC, multiclass cross-entropy. Require an exact task/metric match; an accepted name alone does not imply correct optimization.
+The complete unweighted reference selects one explicit untuned lgb or cb learner with fixed
+num_trees/defaults, preventing blend-weight reselection on refit. Broader multi-learner presets
+need their own frozen component/weight implementation. No *_tuned algorithms or outer Optuna.
+The reference requires identity policies/default options during native selection; use an exact
+custom recipe or a direct fixed estimator for other combinations.
 
-The generated candidate implements timeout, cpu_limit, memory_limit, gpu_ids='', general_params={'use_algos':[['lgb','cb']]} and reader_params cv=3/seed. Never override them, add *_tuned algorithms or nest Optuna. Leave memory headroom: preset memory management is limited. No text/pretrained pipelines.
-
-fit_predict uses target roles and internal valid_data. Keep service columns/reserved target out of X. predict(X).data gives scores; binary one-column probability expands to [1-p,p]. Inverse-map encoded labels.
-
-Keep exported __native_frozen for fixed-preset refit. Its training-as-validation path fits fixed learners on allowed rows; this in-sample report is never an evaluation score. Persist all fitted inference state and check reload. Reject unsupported objectives or excessive startup cost.
+Pass supplied valid_data and target roles; keep service columns out of X. predict(X).data gives
+scores; expand binary one-column probabilities and inverse-map labels. Set cpu_limit/memory_limit
+and gpu_ids=''. Frozen train-as-validation only satisfies the preset API; its score is not evidence.
+Persist inference state; no text/pretrained pipeline is included.

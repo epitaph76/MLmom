@@ -18,3 +18,8 @@ Save observations with descriptions, optional numbers/support and source referen
 Python retains them without matching every number to a source result. Be precise, distinguish
 measured facts from proposed experiments, and preserve uncertainty/unfinished investigations.
 Proposals and their evidence links are optional advisory material. Do not fabricate measurements.
+
+supported_metrics enumerates executable names, aliases, task scopes and options.
+confirm_task checks that contract. MCC is available for binary/multiclass label predictions
+with optional sample weights and direction=maximize. Preserve an unsupported requested metric
+as an explicit unresolved requirement; never replace it with a convenient proxy.

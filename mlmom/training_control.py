@@ -62,7 +62,8 @@ def decide(client, checkpoint, skills, *, seconds=30):
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
                 dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills,
                      execution_context=execution_context(checkpoint.plan,dict(execution_facts=checkpoint.execution_facts,
-                         best_params=checkpoint.best_params,internal_score=checkpoint.best_score,
+                         best_params=checkpoint.best_params,sampled_params=checkpoint.sampled_params,
+                         effective_configuration=checkpoint.effective_configuration,internal_score=checkpoint.best_score,
                          score_kind=checkpoint.score_kind,split_id=checkpoint.outer_split_id,
                          validation_protocol_ref=checkpoint.validation_protocol_ref))), TrainingDecision, None)
         return validate_decision(answer, checkpoint)

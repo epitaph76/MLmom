@@ -1,13 +1,20 @@
 ---
 name: flaml
-description: Run bounded native FLAML 2.3.6 search and refit the frozen selected configuration in generated candidate code.
+description: Run FLAML 2.3.6 native holdout search and weighted frozen refit.
 ---
 # FLAML 2.3.6
 
-Use strategy='native', patience_trials=null for regression/binary/multiclass. Mappings: rmse, mae, f1_macro -> macro_f1, roc_auc, accuracy, log_loss. Verify task/metric compatibility, especially multiclass AUC. Upstream ranking/forecasting is outside the supported task contract.
+Use strategy=native and patience_trials=null for regression/binary/multiclass. The complete
+REFERENCE.md uses explicit holdout, estimator_list=['lgbm','extra_tree'], max_trials as max_iter,
+ensemble=False and retrain_full=False. Native CV/grouped selection is not verified by this
+recipe; do not invent a holdout or reduce the confirmed folds. Empty capability metadata is
+uncertainty, not an automatic experiment veto.
 
-The generated candidate must implement AutoML.fit, internal X_val/y_val, time_budget, n_jobs, seed, logs and estimator_list=['lgbm','rf','extra_tree']. max_trials maps to max_iter. Do not duplicate reserved options in model_params, add families or wrap FLAML in outer search. Inspect the pinned API before extra options.
+Pass sample_weight in search/refit and sample_weight_val in validation. The transient custom
+objective calls context.validation_scorer for original-scale metrics/options/class order, including
+MCC. FLAML minimizes the returned loss; maximize metrics use its negative. Keep the original
+primary score in history. Library budgets must be finite.
 
-Only explicit holdout is verified in the generated path. Reuse supplied validation with eval_method=holdout, ensemble=False and retrain_full=False. Do not select native CV or grouped native validation; upstream capabilities do not establish support here. Native history exposes trial log/best config. Native loss may be 1-score; the runner reports the original metric.
-
-Keep exported __native_frozen estimator/config and historical loss. Fixed refit uses retrain_from_log on permitted train rows, not new AutoML.fit search. Persist complete inference state. Prefer a direct booster if native startup cannot fit the budget.
+Export __native_frozen estimator/config/loss. Fixed refit uses retrain_from_log(train_full=True)
+with current weights and no new search. Save only the underlying inference estimator, never
+AutoML, FitContext or callback closures. No ranking/forecasting path is supplied here.

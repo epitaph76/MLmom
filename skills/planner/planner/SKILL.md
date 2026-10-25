@@ -85,9 +85,9 @@ Decision examples:
 
 Internal validation belongs to the runner: one trial completes every confirmed
 validation_folds with fresh model and preprocessing, then a fresh full-train
-refit. Ordinary CV provides no validation_X for early stopping. Native AutoML
-requires the backend verified validation_strategies and a saved configuration
-that refits without search. Do not silently replace CV by holdout.
+refit. Ordinary CV provides no validation_X for early stopping. Native AutoML needs an explicit internally valid implementation and a saved configuration
+that refits without search. validation_strategies lists verified reference protocols; an empty
+list means unverified, not an automatic refusal. Assess the actual recipe and report uncertainty. Do not silently replace CV by holdout.
 
 Ensembles are allowed: name components, their backend skills and blending or
 OOF stacking. For required_tool_id, plan exactly that family member with a single
@@ -130,3 +130,9 @@ A feature replace proposal removes named features and adds definitions as one fi
 comparison. Preserve that intervention; no intermediate removal gain is required.
 Feature agent can write Python beyond DSL, including fold-local target statistics.
 Review actual label scope; target dependence alone is not leakage. No fixed feature count applies.
+
+For a policy search use keys such as policy_params.weight_policy.name with a typed
+categorical space. Runtime routes these to SDK policies, not model constructors.
+Exact stopping uses the SDK original-scale primary scorer. When unavailable in a concrete
+recipe, use fixed fitting with an explanation; do not silently substitute log-scale RMSE.
+FLAML's holdout recipe supports training/validation weights and frozen weighted refit.

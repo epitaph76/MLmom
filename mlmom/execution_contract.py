@@ -26,6 +26,8 @@ def execution_contract(plan):
         resource_enforcement='worker_admission', preprocessing_owner='preprocessing_agent',
         time_admission='Actual remaining deadlines and explicit limits; historical durations are advisory',
         estimator_owner='coding_agent', policy_owner='runtime', validation_owner='runtime', refit_owner='runtime',
+        validation_scorer='Optional internal-holdout primary scorer; original scale/options/weights; absent in preprocessing/features/OOF base fits',
+        training_checkpoint_configuration='Complete selected configuration, separate from Optuna sampled_params; no additional fit',
         feature_owner='SDK FeatureAugmentingPreprocessor',
         feature_implementations='Agent Python programs with fit_transform(X,y,context)/transform(X); optional DSL shortcuts',
         feature_target_access='Current training fold y only; target-derived training columns use cross-fitting/exclusion; transform never receives labels',

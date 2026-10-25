@@ -6,8 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from mlmom.pipeline import Pipeline
-from mlmom.pipeline_contracts import RunConfig
+from mlmom.pipeline_contracts import RunConfig, EvaluationResult
 from mlmom.persistence import ExperimentStore
+
+
+def evaluation(experiment_id):
+    return EvaluationResult(experiment_id=experiment_id, split_id='fixture-split',
+        dataset_hash='fixture-data', score_kind='outer_holdout', metric='rmse',
+        direction='minimize', score=1, diagnostics=dict(mean_residual=0)).model_dump(mode='json')
 
 
 class RotatingHoldoutTests(unittest.TestCase):
@@ -26,7 +32,7 @@ class RotatingHoldoutTests(unittest.TestCase):
                 round_results=[dict(candidate=dict(candidate_id='new'),plan={},
                     run=dict(experiment_id='r2-new',incumbent=False,trials=[],duration_seconds=1,
                         stop_reason='completed',best_params={},internal_score=1),
-                    evaluation=dict(score=1,diagnostics=dict(mean_residual=0)))])
+                    evaluation=evaluation('r2-new'))])
             try:
                 pipeline.analyze(state)
                 self.assertFalse(pipeline.store.get('cycle','r2')['completed'])
@@ -60,7 +66,7 @@ class RotatingHoldoutTests(unittest.TestCase):
                     round_results=[dict(candidate=dict(candidate_id='new'),plan={},
                         run=dict(experiment_id='r1-new',incumbent=False,trials=[],duration_seconds=1,
                             stop_reason='completed',best_params={},internal_score=1),
-                        evaluation=dict(score=1,diagnostics=dict(mean_residual=0)))])
+                        evaluation=evaluation('r1-new'))])
                 state.update(state_changes)
                 try:
                     result=pipeline.analyze(state)

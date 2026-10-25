@@ -69,3 +69,9 @@ preprocessing_agent, sampling, target transforms и thresholds — coding_agent.
 В planner добавлен явный формат search_space; ансамбли разрешены и доступны
 в каталоге техник. Роль context_agent остаётся подключённой; её альтернативный
 прямой путь пока исследован только локальным сравнением входов.
+
+## Согласование v8
+
+Полные checkpoint configurations, MCC, original-scale scorer, новые инструменты ролей и
+проверенные estimator-only примеры описаны в [SKILL_CONTRACTS_V8_RU.md](SKILL_CONTRACTS_V8_RU.md).
+ready означает готовый пакет инструкций; поддержку конкретного исполнения подтверждают отдельные тесты.

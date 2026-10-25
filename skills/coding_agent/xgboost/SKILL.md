@@ -1,15 +1,19 @@
 ---
 name: xgboost
-description: Train regularized CPU histogram boosters and query rankers with the pinned XGBoost 2.1.4 API.
+description: Use the pinned CPU XGBoost 2.1.4 API for histogram models and query rankers.
 ---
 # XGBoost 2.1.4
 
-Generate CPU hist code with an explicit representation: fitted OHE or native categorical dtype. Persist the target LabelEncoder and use serial multioutput wrappers. Implement internal-validation early stopping and frozen iteration count when planned. REFERENCE.md gives pinned-API examples; do not assume category recoding from newer versions.
+Use CPU hist with preprocessing-fitted OHE or stable native pandas category levels and
+enable_categorical=True. Do not assume category recoding from newer releases. Encode single-label
+targets contiguously and preserve the mapping. Native categorical models use JSON/UBJSON.
 
-Start learning_rate .03-.1, max_depth 3-8, min_child_weight 1-10, subsample/colsample_bytree .7-1, reg_lambda 1-10. Bound stock n_estimators. Custom code sets early_stopping_rounds/eval_metric in the constructor, passes internal eval_set to fit, and disables stopping on validation-free refit. Export best_iteration+1 as n_estimators. sklearn predict uses best_iteration; native Booster needs iteration_range.
+REFERENCE.md contains a complete single-target candidate. Early stopping/eval_metric/callbacks
+belong in the constructor in 2.1.4. Custom metrics must accept sample_weight; maximize/minimize
+must match the primary direction. Use the SDK scorer or fixed fitting, and freeze best_iteration+1
+only when stopping actually ran. Remove stopping callbacks for validation-free fixed refit.
+Optional exports retain all parameters; do not duplicate SDK output or target policies.
 
-Native categories use pandas category, enable_categorical=True and identical train-derived vocabularies/codes. Native serialization needs JSON/UBJSON plus transforms/class metadata. Encode single-label y contiguously; inverse-map labels and align probabilities.
-
-Ranking needs sorted qid and joint permutation of X/y/metadata. Ranking weights are per-query: the stock adapter forwards sample_weight unchanged, so weighted ranking needs a compatible custom path or rejection. Preserve prediction row order.
-
-export_model_params returns ALL model parameters and output/target options. For permitted early stopping freeze the measured selected round count, preserving every other setting. Return the selected parameters when useful for refit. No fitted-estimator audit or export/recreate check is performed.
+Ranking needs sorted qid and joint metadata permutation. Native ranker weights are per-query;
+row weights require an explicit compatible conversion or a different recipe. Multioutput wrappers
+are serial. Threads use context.cpus. Typical max_depth is 3-8 and learning_rate .03-.1.

@@ -32,3 +32,15 @@ Use action=replace with remove names and new programs/features for one atomic re
 Runtime measures the final set against the current accepted set with the same model/folds;
 removal alone need not improve. Choose feature count against actual CPU/RAM. Legacy
 action=add with both lists is read as replace. Stop changes nothing.
+
+Use list_tables, preview_csv, query_csv and correlate_csv to investigate the registered
+train table from this cycle only. read_evidence pages saved query responses, including prior
+responses in this feature session. read_query_result pages full saved tabular results by
+row_offset/column_offset, using only a returned source_ref. There is no outer holdout/test table.
+Profile columns_truncated/total_columns describe incomplete summaries; paginate list_tables
+or request an aggregate for omitted columns. SQL uses Polars 1.26: measure composite keys with
+SELECT COUNT(*) FROM (SELECT DISTINCT key_a, key_b FROM train) AS keys.
+Cite returned source_ref values for measured coverage/ambiguity. Do not embed full-training
+target maps from research into a program: all learned maps and cross-fitting are fit-local.
+feature_runtime.fit_context documents dataclass attributes, groups, weights, seed and resources.
+No validation_scorer or validation labels are available to feature programs.

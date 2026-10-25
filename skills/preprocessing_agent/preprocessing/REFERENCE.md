@@ -3,6 +3,8 @@
 Adapt to the planner; dense OHE is inappropriate for wide text. The model coder receives the declared dense output.
 
 ```python
+MLMOM_PREPROCESSOR_V1 = True
+
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -55,3 +57,9 @@ text_pipe = Pipeline([('text',FunctionTransformer(text_values,validate=False)),
 # sparse_threshold=1.0 preserves sparse concatenation; do not call toarray on wide text.
 ```
 For native tree categories, persist train-derived levels and transform all later frames identically. Numeric Year_Factor needs an explicit cast if planned. An imputer that fills NaN contradicts a hypothesis preserving native missing routing. The SDK fits declared target/weight/output policies and applies inverses and clipping; preprocessing.py and candidate.py must not duplicate those policies. The generic preprocessing is a reference, not mandatory behavior.
+
+Declare categorical_features as output names or indices when returning native categories.
+The coding graph adds MLMOM_PREPROCESSOR_V1 automatically; retain it when running this
+standalone source through the SDK module loader.
+The numeric/OHE example is deliberately dense; add planned scaling/text branches explicitly.
+Optional check_preprocessing(source) tests this module without requiring candidate.py.

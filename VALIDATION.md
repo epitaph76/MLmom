@@ -1,4 +1,36 @@
-# Проверка ветки с минимальными проверками
+# Приёмка скиллов и runtime v8 — 25.10.2026
+
+Ветка: `codex/skill-contracts-v8`; исходный commit:
+`7ad10668c87de56f0dfb0684d2de3b90a959c6be`.
+Подробный отчёт R01–R11, область рецептов и ограничения:
+[SKILL_CONTRACTS_V8_RU.md](docs/SKILL_CONTRACTS_V8_RU.md).
+
+| Проверка | Итог |
+|---|---|
+| Регрессионное покрытие | 399 tests: 398 passed, 1 штатный Linux-only skip |
+| Метод | Полный discovery + 59 успешных затронутых тестов после исправлений |
+| Первичный discovery | 0 errors, 1 failure: старое ожидание отсутствия preprocessor tools; исправлено |
+| Исходные fixture errors | Все 6 устранены; assertions rotating holdout сохранены |
+| Карточки / references | Проверены 33 / 11; minor versions повышены у 19 пакетов |
+| Реальные библиотеки | 41 основной сценарий + 3 export-count edge cases; все подтверждены |
+| Docker | Существующий mlmom-ml:test, актуальные исходники, network=none, CPU-only |
+| Живые роли | Feature, preprocessing, Training, plan validator; 13 HTTP attempts из 20 |
+| API usage | 88 589 prompt + 5 365 completion = 93 954 total tokens |
+| Документация / ZIP / секреты | Проверено; плоский ZIP содержит ровно 3 корневых файла |
+| Graphify | Обновлён локально в code-only режиме |
+
+Машиночитаемая сводка: `artifacts/skill-contracts-v8/acceptance.json`.
+Первоначальные ошибки, отдельные повторы и полный журнал discovery сохранены рядом.
+Результат не выдаёт первый discovery за полностью успешный: итог учитывает последующий
+успешный повтор его единственного failure и остальных затронутых модулей.
+
+Финальный архив: `dist/mlmom-skill-contracts-v8-accepted.zip`, 231 186 байта.
+SHA-256: `8a501badb80ff66137724285448419bc4dea824f3bb62094a0e66e8172196575`.
+Промежуточный архив, исходный аудит и старые runs сохранены. Новые исполнения требуют
+нового каталога для runtime contract 8. Методологическое одобрение остаётся агентским;
+estimator-аудиты, provenance gates и обязательный smoke не добавлялись.
+
+# Историческая проверка ветки с минимальными проверками
 
 Ветка: `codex/agent-first-minimal-checks`. Исходное состояние, включая прежние локальные
 изменения: `78f5409`. Правила ветки: [MINIMAL_CHECKS_RU.md](docs/MINIMAL_CHECKS_RU.md).

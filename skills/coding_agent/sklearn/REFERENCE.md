@@ -54,3 +54,8 @@ def create_candidate(config):
 def load_candidate(artifact_dir):
     return cloudpickle.loads((Path(artifact_dir) / 'candidate.pkl').read_bytes())
 ```
+
+SDK policies and registered feature programs are applied outside this estimator. Use a
+compatible preprocessor for a different estimator; constructor selectors must be explicitly
+implemented. Optional exact stopping for an estimator that supports it uses validation_scorer;
+this ExtraTrees reference is fixed and has no callback or validation data to persist.

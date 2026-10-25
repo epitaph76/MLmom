@@ -49,3 +49,8 @@ AST-проверки исходника не являются песочнице
 
 Навигация: `mlmom/pipeline.py` — оркестрация, `mlmom/worker.py` — исполнение,
 `mlmom/sdk.py` — интерфейс и композиция. Граф зависимостей: [GRAPHIFY.md](docs/GRAPHIFY.md).
+
+Runtime v8 использует единый каталог исполнимых метрик, полный выбранный checkpoint HPO
+и опциональный original-scale validation_scorer. Feature CSV tools ограничены текущим train;
+preprocessing tools доступны независимо от model coder. Справочники содержат исполняемые
+estimator-only примеры. [Контракт и проверки v8](docs/SKILL_CONTRACTS_V8_RU.md).

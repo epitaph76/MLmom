@@ -116,6 +116,27 @@ def csv_worker(request, root):
     cache.mkdir(parents=True, exist_ok=True)
     specs = request['tables']
     operation = request['operation']
+    if operation == 'result_page':
+        # The controller resolves this path from its role-scoped saved references.
+        full = pl.scan_parquet(request['result_path'])
+        names = full.collect_schema().names()
+        offset, column_offset, limit = request['row_offset'], request['column_offset'], request['rows']
+        if offset < 0 or column_offset < 0 or not 1 <= limit <= 100:
+            raise ValueError('Use non-negative offsets and 1..100 rows')
+        columns = names[column_offset:column_offset+20]
+        total = full.select(pl.len()).collect().item()
+        preview = full.select(columns).slice(offset,limit).collect().to_dicts() if columns else []
+        answer = dict(status='completed',columns=columns,total_columns=len(names),total_rows=total,
+            row_offset=offset,column_offset=column_offset,artifact_ref=request['result_path'],
+            rows=[{key:_json_value(value) for key,value in row.items()} for row in preview],
+            cells_truncated=any(isinstance(v,str) and len(v)>1000 for row in preview for v in row.values()))
+        while len(json.dumps(answer,ensure_ascii=False)) > 31000 and answer['rows']:
+            answer['rows'].pop()
+        next_row = offset+len(answer['rows'])
+        answer.update(next_row_offset=next_row if columns and next_row<total else None,
+            next_column_offset=column_offset+len(columns) if column_offset+len(columns)<len(names) else None,
+            truncated=next_row<total or column_offset+len(columns)<len(names) or answer['cells_truncated'])
+        return answer
     if operation == 'schema':
         table = request.get('table')
         if table is not None and table not in specs:
