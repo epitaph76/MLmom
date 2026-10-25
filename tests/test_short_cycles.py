@@ -11,7 +11,7 @@ from tests.test_planning_limits import case, Store, ClockBudget, Sandbox, Coder,
 
 
 class ShortCycleTests(unittest.TestCase):
-    def test_selected_fit_budget_leaves_real_coding_window(self):
+    def test_actual_remaining_time_is_not_divided_by_estimates_or_target_cycles(self):
         context,tools,_,plan=case();plan.time_limit_seconds=300
         budget=ClockBudget();budget.elapsed=780
         config=RunConfig(timeouts_enabled=True,total_seconds=180,final_reserve_seconds=20,coding_seconds=60,
@@ -19,7 +19,7 @@ class ShortCycleTests(unittest.TestCase):
         pipeline=object.__new__(Pipeline);pipeline.config=config;pipeline.budget=budget
         pipeline.store=SimpleNamespace(list=lambda *a,**kw:[])
         allocation=pipeline.allocated_fit_seconds(plan,1)
-        self.assertLess(allocation,30);plan.time_limit_seconds=allocation
+        self.assertEqual(allocation,120);plan.time_limit_seconds=allocation
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);store=Store(root);sandbox=Sandbox(budget);client=Coder(budget,20)
             result=build_coding_graph(client,workspace=root/'work',store=store,plan=plan,plan_ref=root/'plan.json',

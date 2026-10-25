@@ -7,6 +7,9 @@ import signal
 import subprocess
 import sys
 import time
+import threading
+from functools import wraps
+from concurrent.futures import CancelledError
 from pathlib import Path
 from dataclasses import dataclass, field
 import psutil
@@ -14,6 +17,14 @@ from .persistence import atomic_json
 from .pipeline_contracts import BudgetSnapshot, RunConfig
 from .time_policy import UNBOUNDED_SECONDS, timeouts_enabled
 from .process_identity import process_identity, process_matches
+
+
+def synchronized(function):
+    @wraps(function)
+    def call(self, *args, **kwargs):
+        with self.lock:
+            return function(self, *args, **kwargs)
+    return call
 
 
 class ResourceUnavailable(ValueError):
@@ -116,6 +127,7 @@ def terminate_tree(pid: int):
 
 @dataclass
 class Job:
+    lock: object = field(default_factory=threading.RLock,init=False,repr=False)
     process: subprocess.Popen
     directory: Path
     started: float
@@ -153,6 +165,7 @@ class Job:
         if self.reason and self.process.poll() is None: terminate_tree(self.process.pid)
         return self.process.poll()
 
+    @synchronized
     def finish(self):
         if self.result is not None: return self.result
         self.process.wait()
@@ -192,6 +205,10 @@ class Job:
 
 class SandboxManager:
     def __init__(self, *, budget=None, max_workers=3,timeouts_enabled=None):
+        self.lock = threading.RLock()
+        self.closed = False
+        self.wait_callback = None
+        self.priority_waiters = 0
         self.jobs = []
         self.budget = budget
         self.timeouts_enabled = getattr(budget,'timeouts_enabled',False) if timeouts_enabled is None else timeouts_enabled
@@ -200,11 +217,13 @@ class SandboxManager:
     def __enter__(self):return self
     def __exit__(self,*args):self.close()
 
+    @synchronized
     def reap(self):
         # Cache results before releasing leases; the controller may consume them later.
         for job in self.jobs:
             if not job.released and job.poll() is not None: job.finish()
 
+    @synchronized
     def available(self):
         self.reap()
         active = [job for job in self.jobs if not job.released]
@@ -212,6 +231,7 @@ class SandboxManager:
                     memory_gb=self.memory_gb-sum(j.memory_gb for j in active),
                     workers=self.max_workers-len(active))
 
+    @synchronized
     def can_start(self, *, cpus, memory_gb):
         free = self.available()
         return free['workers'] > 0 and cpus <= free['cpus'] and memory_gb <= free['memory_gb']
@@ -230,7 +250,9 @@ class SandboxManager:
             deadline -= self.budget.reserve
         return max(0., deadline-self.budget.now())
 
+    @synchronized
     def start(self, request: dict, directory: Path, *, seconds: float, memory_gb: float, cpus: int):
+        if self.closed: raise CancelledError('Controller stopped')
         seconds = min(seconds, self.time_left(request)) if self.timeouts_enabled else UNBOUNDED_SECONDS
         free = self.available()
         if seconds <= 0 or cpus < 1 or memory_gb <= 0 or not self.can_start(cpus=cpus,memory_gb=memory_gb):
@@ -292,19 +314,35 @@ class SandboxManager:
         if limits['cpus'] > self.cpus or limits['memory_gb'] > self.memory_gb:
             raise ResourceUnavailable('Worker request exceeds run capacity')
         until = time.monotonic()+min(limits['seconds'],self.time_left(request)) if self.timeouts_enabled else UNBOUNDED_SECONDS
-        while not self.can_start(cpus=limits['cpus'],memory_gb=limits['memory_gb']):
-            if time.monotonic() >= until: raise ResourceUnavailable('Worker admission deadline reached')
-            time.sleep(.05)
-        limits['seconds'] = min(limits['seconds'],until-time.monotonic())
-        job = self.start(request,directory,**limits)
+        priority = request.get('phase') in {'submission','final'} or request.get('action')=='predict'
+        if priority:
+            with self.lock: self.priority_waiters+=1
+        try:
+            while True:
+                if self.closed: raise CancelledError('Controller stopped')
+                if self.wait_callback: self.wait_callback()
+                if time.monotonic() >= until: raise ResourceUnavailable('Worker admission deadline reached')
+                with self.lock:
+                    if (priority or not self.priority_waiters) and self.can_start(cpus=limits['cpus'],memory_gb=limits['memory_gb']):
+                        allocated = dict(limits,seconds=min(limits['seconds'],until-time.monotonic()))
+                        job = self.start(request,directory,**allocated)
+                        break
+                time.sleep(.05)
+        finally:
+            if priority:
+                with self.lock: self.priority_waiters-=1
         while job.poll() is None:
+            if self.closed: raise CancelledError('Controller stopped')
+            if self.wait_callback: self.wait_callback()
             self.reap()
             time.sleep(.05)
         result = job.finish()
         require_worker_infrastructure(result, directory)
         return result
 
+    @synchronized
     def close(self):
+        self.closed = True
         # Stop every process before parsing artifacts or invoking logging callbacks.
         for job in self.jobs:
             if job.process.poll() is None:

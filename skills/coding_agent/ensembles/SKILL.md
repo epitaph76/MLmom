@@ -8,9 +8,11 @@ With ensemble_sources, use SDK FrozenEnsemble(config, Path(__file__).resolve().p
 in create_candidate; load_candidate calls FrozenEnsemble.load(artifact_dir).
 Import from mlmom.sdk and pathlib. Do not generate preprocessing.py or change bundled
 components. The SDK owns raw-input composition, fold-local policies, OOF and persistence.
+For mean, optional weights/component_weights are fixed nonnegative component weights;
+absent weights give the equal mean. They are applied without OOF or weight search.
 The remaining instructions apply to manually composed candidates without ensemble_sources.
 
-Use when diverse models have complementary errors. plan.ensemble_components contains at least two {'tool_id': ..., 'model_params': {...}} entries; model_params.method is 'blend' or 'stack'. Select component library skills. Implement create_candidate/load_candidate in candidate.py with installed libraries and mlmom.sdk; do not import runtime adapters.
+Use when diverse models have complementary errors. plan.ensemble_components contains at least two {'tool_id': ..., 'model_params': {...}} entries; model_params.method explicitly selects mean, median, weighted or stack. Only selected recipes run. mean/median do not use OOF or weight_trials; weighted/stack use fold-local OOF. Select component library skills; implement with installed libraries and mlmom.sdk.
 
 Blend values or probabilities aligned to context.classes, never class labels.
 Weights are fixed or learned on internal OOF data. Meta learners use OOF predictions;
@@ -29,4 +31,6 @@ Save/load all wrapped bases and meta learners; verify relocation and class order
 Native AutoML components are not admitted until frozen component refit is verified.
 
 ## Complete freezing and inspection
-Export the full config: components/meta learner, weights, target/output options and flat HPO values. fitted_components() is optional. Apply flat HPO keys only to plan.parameter_routes components. Runtime executes the candidate and reports real errors for repair.
+When export_model_params is implemented, retain the full config: components/meta learner, weights, target/output options and flat HPO values. Apply flat HPO keys only to plan.parameter_routes components.
+
+Implement the controller-bound recipe; search-group membership is not a model or row-group setting.

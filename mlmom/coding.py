@@ -81,7 +81,7 @@ Planned train-only feature selectors may be fitted; do not train the predictive 
 State must be cloudpickle serializable. No import-time training. Support unseen categories,
 missing values, empty text, and stable feature order. The SDK owns fitting and persistence.
 When feature_set is assigned, implement only the base preprocessing: the SDK appends the
-trusted DSL features afterwards. Never implement, duplicate or suppress these DSL operations.
+registered Python feature programs or DSL columns afterwards. Do not duplicate or suppress them.
 During repair retain previous_spec unless the output interface must change.
 '''
 
@@ -159,9 +159,9 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             store.put('agent_notes', budget_key, saved)
 
     def coding_capacity():
-        # Preserve a complete selected fit and prediction window, including
-        # when previous experiments increase the final-training reserve.
-        return max(0.,budget.snapshot().research_seconds-plan.time_limit_seconds-2*config.prediction_seconds)
+        # The remaining research deadline already excludes the final reserve.
+        # A requested fit limit is not a forecast to subtract before generation.
+        return max(0.,budget.snapshot().research_seconds)
 
     window=store.get('coding_budget',budget_key)
     if window is None:

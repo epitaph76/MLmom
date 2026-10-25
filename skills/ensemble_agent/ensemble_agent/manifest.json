@@ -1,1 +1,9 @@
-{"skill_id":"ensemble_agent","version":"1.0.0","title":"Ensemble composition agent","status":"ready","task_types":[],"ml_tools":[],"dependencies":[]}
+{
+  "skill_id": "ensemble_agent",
+  "version": "1.0.3",
+  "title": "Ensemble composition agent",
+  "status": "ready",
+  "task_types": [],
+  "ml_tools": [],
+  "dependencies": []
+}

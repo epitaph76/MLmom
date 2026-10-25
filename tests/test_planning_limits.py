@@ -94,11 +94,11 @@ class PlanningLimitTests(unittest.TestCase):
         p.strategy='native';p.patience_trials=None
         self.assertTrue(validate_plan(p,context,tools,Skills(),budget).valid)
 
-    def test_evaluation_reserve_is_protected(self):
+    def test_requested_time_and_prediction_estimates_do_not_refuse_a_plan(self):
         context,tools,budget,plan=case()
         budget.research_seconds=80
         self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=20).valid)
-        self.assertFalse(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=21).valid)
+        self.assertTrue(validate_plan(plan,context,tools,Skills(),budget,evaluation_reserve_seconds=10000).valid)
 
     def test_ensemble_plan_probes_only_selected_backends(self):
         class SelectedPlanner(Planner):
@@ -230,16 +230,16 @@ class CodingBudgetTests(unittest.TestCase):
                 skill_data=[],tools=tools,context=context,sandbox=sandbox,budget=budget,
                 config=RunConfig(timeouts_enabled=True,prediction_seconds=5),round_id='r1').invoke({'payload':{}})
             self.assertTrue(result['valid']);self.assertEqual(sandbox.calls,[])
-            self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1885)
+            self.assertEqual(store.get('coding_budget','r1-base')['deadline'],1900)
 
-    def test_increased_final_reserve_protects_fit_and_prediction_during_repair(self):
+    def test_exhausted_research_deadline_blocks_repair(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);store=Store(root);budget=ClockBudget();sandbox=Sandbox(budget)
             context,tools,_,plan=case();client=Coder(budget,250)
             kwargs=dict(workspace=root/'workspace',store=store,plan=plan,plan_ref=root/'plan.json',skill_data=[],
                         tools=tools,context=context,sandbox=sandbox,budget=budget,config=RunConfig(timeouts_enabled=True),round_id='r1')
             first=build_coding_graph(client,**kwargs).invoke({'payload':{}})
-            self.assertTrue(first['valid']);budget.extra_reserve=400
+            self.assertTrue(first['valid']);budget.extra_reserve=650
             second=build_coding_graph(client,**kwargs,runtime_feedback='Repair').invoke({'payload':{}})
             self.assertFalse(second['valid']);self.assertEqual(client.calls,1);self.assertEqual(len(sandbox.calls),0)
 

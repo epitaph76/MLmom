@@ -17,7 +17,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--downloads', type=Path, default=Path.home() / 'Downloads')
+    parser.add_argument('--solution-archive', type=Path)
+    parser.add_argument('--completed-cycles', type=int, default=0, help='0 leaves cycle count unrestricted')
+    parser.add_argument('--seconds', type=int, default=10800)
     args = parser.parse_args()
+    if args.completed_cycles < 0 or args.seconds < 120:
+        raise ValueError('completed-cycles must be nonnegative and seconds at least 120')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     runtime = output / 'runtime'
@@ -28,6 +33,10 @@ def main():
     for name in ['solution.py', 'requirements.txt']:
         shutil.copyfile(ROOT / name, runtime / name)
     package(ROOT, output / 'mlmom-solution.zip')
+    if args.solution_archive:
+        if file_hash(args.solution_archive) != file_hash(output / 'mlmom-solution.zip'):
+            raise ValueError('Current runtime differs from the selected solution ZIP')
+        shutil.copyfile(args.solution_archive, output / 'mlmom-solution.zip')
     inputs = []
     for name, filename in [
         ('regression', 'Регрессия-20261020T130119Z-1-001.zip'),
@@ -52,19 +61,19 @@ def main():
                 (task / name_in_zip).write_bytes(archive.read(name_in_zip))
         inputs.append(dict(case=name, archive=filename, archive_sha256=file_hash(archive_path),
                            task_hashes={p.name: file_hash(p) for p in task.iterdir() if p.is_file()}))
-    config = RunConfig(timeouts_enabled=False, profile='platform', total_seconds=3540,
-        final_reserve_seconds=600, first_submission_seconds=600, experiment_seconds=810,
-        initial_experiment_seconds=120, coding_seconds=300, prediction_seconds=45,
-        smoke_seconds=30, max_rounds=None, plateau_rounds=None, cycle_full_refit=True,
-        target_completed_rounds=0, fixed_outer_split=False,
-        initial_boosting_sweep=True, max_workers=3, reserve_cpus=2, reserve_memory_gb=2, llm_timeout_seconds=300,
-        hypothesis_seconds=210, planner_seconds=210, validator_seconds=210)
+    config = RunConfig(timeouts_enabled=True, profile='platform',total_seconds=args.seconds-60,
+        final_reserve_seconds=min(1800,(args.seconds-60)*.25),
+        max_rounds=None, plateau_rounds=None, cycle_full_refit=True,
+        target_completed_rounds=args.completed_cycles, fixed_outer_split=False,
+        initial_boosting_sweep=False, max_workers=3, preparation_workers=3,
+        reserve_cpus=1, reserve_memory_gb=1)
     atomic_json(output / 'config.json', config)
     atomic_json(output / 'input_manifest.json', dict(inputs=inputs,
         solution_zip_sha256=file_hash(output / 'mlmom-solution.zip'),
         runtime_hashes={p.relative_to(runtime).as_posix(): file_hash(p)
                         for p in runtime.rglob('*') if p.is_file()},
-        seconds_per_task=3600, order=['regression', 'multiclass']))
+        seconds_per_task=args.seconds, target_completed_rounds=args.completed_cycles,
+        order=['regression', 'multiclass']))
     print(json.dumps(dict(output=str(output), runtime_files=len(list(runtime.rglob('*.py'))),
                           solution_zip_bytes=(output / 'mlmom-solution.zip').stat().st_size)))
 

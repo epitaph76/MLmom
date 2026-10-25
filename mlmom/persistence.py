@@ -49,6 +49,7 @@ class ExperimentStore:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self.closed = False
         self.db = sqlite3.connect(self.root / 'experiments.sqlite3', check_same_thread=False)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('CREATE TABLE IF NOT EXISTS objects (kind TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(kind,id))')
@@ -57,11 +58,15 @@ class ExperimentStore:
 
     def put(self, kind: str, key: str, value: Any, *, immutable: bool = False) -> None:
         body = dumps(value)
-        with self.lock, self.db:
-            old = self.db.execute('SELECT body FROM objects WHERE kind=? AND id=?', (kind, key)).fetchone()
-            if immutable and old and old[0] != body:
-                raise ValueError(f'Attempt to overwrite immutable {kind}:{key}')
-            self.db.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?)', (kind, key, body))
+        with self.lock:
+            if self.closed:
+                from concurrent.futures import CancelledError
+                raise CancelledError('Controller store closed')
+            with self.db:
+                old = self.db.execute('SELECT body FROM objects WHERE kind=? AND id=?', (kind, key)).fetchone()
+                if immutable and old and old[0] != body:
+                    raise ValueError(f'Attempt to overwrite immutable {kind}:{key}')
+                self.db.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?)', (kind, key, body))
 
     def get(self, kind: str, key: str) -> dict | None:
         with self.lock:
@@ -82,4 +87,6 @@ class ExperimentStore:
         emit('runtime.'+kind,value,object_id=key)
 
     def close(self):
-        self.db.close()
+        with self.lock:
+            self.closed = True
+            self.db.close()

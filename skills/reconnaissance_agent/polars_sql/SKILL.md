@@ -132,6 +132,43 @@ FROM train
 
 ## Functions and recovery
 
+For UNION, select the exact same named columns in the same order and cast incompatible
+values explicitly. SELECT * across different aggregates does not align schemas:
+
+```sql
+SELECT 'train' AS source, CAST(COUNT(*) AS INT) AS n FROM train
+UNION ALL
+SELECT 'test' AS source, CAST(COUNT(*) AS INT) AS n FROM test
+```
+
+JOIN conditions use equality between identifiers. Calculate expressions in derived
+tables before joining; do not put COALESCE, inequality or OR expressions in ON:
+
+```sql
+SELECT COUNT(*) AS overlapping_bins
+FROM (
+    SELECT DISTINCT CASE WHEN x < 0 THEN 'negative' ELSE 'nonnegative' END AS bin
+    FROM train WHERE x IS NOT NULL
+) AS tr
+INNER JOIN (
+    SELECT DISTINCT CASE WHEN x < 0 THEN 'negative' ELSE 'nonnegative' END AS bin
+    FROM test WHERE x IS NOT NULL
+) AS te ON tr.bin = te.bin
+```
+
+An integer flag is not a Boolean predicate. Compare it explicitly with its intended
+value; do not pass an integer series as a filter mask:
+
+```sql
+SELECT COUNT(*) AS nonzero FROM train WHERE x <> 0
+```
+
+Missing columns and aliases require schema inspection, not guesses. list_tables exposes
+the actual names and dtypes for each table; an outer SELECT can only reference columns
+projected by its inner SELECT. Test features need not contain the training target.
+Repeated identical failed requests return their saved error; change or simplify the
+operation using the concrete error and current schema before executing again.
+
 Use COUNT, SUM, AVG, MIN, MAX, MEDIAN and STDDEV for basic distributions. For
 Pearson correlation use correlate_csv with existing numeric column names and an
 exact target column name; CORR is unavailable in the pinned SQL dialect. Do not

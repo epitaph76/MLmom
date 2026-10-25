@@ -54,7 +54,7 @@ class NativeValidationTests(unittest.TestCase):
             (code/'preprocessing.py').write_text(PREPROCESSING_CODE,encoding='utf-8')
             result=manager.run(dict(action='train',code_dir=str(code),code_hash=tree_hash(code),
                 context=context.model_dump(mode='json'),plan=plan.model_dump(mode='json'),train_path=str(root/'train.csv')),
-                root/'train',seconds=40,memory_gb=3,cpus=1)
+                root/'train',seconds=40,memory_gb=min(3.,manager.memory_gb),cpus=1)
             self.assertEqual(result['status'],'completed',result)
             self.assertTrue(result['full_refit'])
             self.assertIn('__native_frozen',result['best_params'])

@@ -10,7 +10,8 @@ from .feature_contracts import FeatureSpec, FeatureSet, FeatureEvidence, Feature
 
 
 class RunConfig(StrictModel):
-    initial_boosting_sweep: bool = True
+    initial_boosting_sweep: bool = False  # Legacy opt-in; default starters are agent-selected.
+    preparation_workers: int = Field(3, ge=1, le=3)
     cycle_full_refit: bool = True
     feature_search_enabled: bool = True
     feature_max_configurations: int = Field(6, ge=1, le=6)
@@ -38,7 +39,7 @@ class RunConfig(StrictModel):
     ensemble_agent_seconds: float = Field(120, gt=0)
     max_workers: int = Field(3, ge=1, le=3)
     max_attempts: int = Field(3, ge=1, le=10)
-    runtime_repairs: int = Field(2, ge=0, le=5)
+    runtime_repairs: int | None = Field(None, ge=0)
     agent_steps: int = Field(12, ge=1, le=50)
     holdout_fraction: float = Field(.2, gt=0, lt=.5)
     inner_fraction: float = Field(.2, gt=0, lt=.5)
@@ -66,7 +67,9 @@ class RunConfig(StrictModel):
     submission_kind: str | None = None
     hpo_enabled: bool = True
     hpo_batch_size: int = Field(5, ge=1)
-    hpo_max_trials: int = Field(15, ge=1)
+    hpo_initial_trials: int = Field(15, ge=1)
+    hpo_max_trials: int | None = Field(None, ge=1)
+    hpo_startup_trials: int = Field(3, ge=1)
     hpo_gain_threshold: float = Field(.005, ge=0)
     hpo_seconds: float = Field(600, gt=0)
     diagnostic_seconds: float = Field(60, ge=0)
@@ -155,6 +158,12 @@ class BudgetSnapshot(StrictModel):
     available_memory_gb: float
     spent_seconds: float
 
+    def agent_view(self):
+        value = self.model_dump(mode='json')
+        if not self.timeouts_enabled:
+            value.update(remaining_seconds=None, research_seconds=None)
+        return value
+
 
 class Hypothesis(AgentNarrative):
     hypothesis_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
@@ -172,7 +181,9 @@ class HypothesisBatch(AgentNarrative):
     hypotheses: list[Hypothesis] = Field(min_length=1, max_length=2)
 
 
-class HypothesisPlan(AgentNarrative):
+class PlannerPlan(AgentNarrative):
+    """Agent-owned experiment choices; search-group membership is controller state."""
+    priority: int = Field(100, ge=0, description='Lower values run first; the first baseline remains the initial control.')
     feature_set_id: str | None = None
     feature_set: FeatureSet | None = None
     contract_version: Literal[2] = 2
@@ -188,6 +199,7 @@ class HypothesisPlan(AgentNarrative):
     preprocessing: list[str] = Field(default_factory=list)
     strategy: Literal['single', 'optuna', 'native'] = 'single'
     search_space: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    hpo_trial_budget: int | None = Field(None, ge=1, description='Agent-selected initial budget for later HPO of this fixed baseline.')
     cost_tag: Literal['fast', 'medium', 'slow'] = 'fast'
     time_limit_seconds: float = Field(300, gt=0)
     cpus: int = Field(2, ge=1, strict=True)
@@ -204,9 +216,6 @@ class HypothesisPlan(AgentNarrative):
     change_kind: Literal['experiment','single_change_ablation'] = 'experiment'
     validation_protocol: dict[str, Any] = Field(default_factory=dict)
     parameter_routes: dict[str, str] = Field(default_factory=dict, description='For ensembles, map each flat HPO parameter to its fitted component name.')
-    search_group_id: str | None = None
-    search_group_kind: Literal['single', 'family', 'ensemble'] = 'single'
-    parent_hypothesis: Hypothesis | None = None
     ensemble_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode='before')
@@ -225,6 +234,13 @@ class HypothesisPlan(AgentNarrative):
         return value
 
 
+class HypothesisPlan(PlannerPlan):
+    """Executable plan with a controller-derived view of its owning group."""
+    search_group_id: str | None = None
+    search_group_kind: Literal['single', 'family', 'ensemble'] = 'single'
+    parent_hypothesis: Hypothesis | None = None
+
+
 class SearchGroupPlan(StrictModel):
     hypothesis: Hypothesis
     kind: Literal['single', 'family', 'ensemble'] = 'single'
@@ -237,8 +253,13 @@ class SearchGroupPlan(StrictModel):
         ids = [p.hypothesis.hypothesis_id for p in self.variants]
         if len(ids) > limit or len(ids) != len(set(ids)):
             raise ValueError('Invalid/duplicate variants in search group')
-        if any((p.search_group_id or p.hypothesis.hypothesis_id) != self.hypothesis.hypothesis_id for p in self.variants):
-            raise ValueError('Variant belongs to a different search group')
+        # The containing group owns membership. Flat fields are a derived view for
+        # execution/persistence, never independently authored agent decisions.
+        self.variants = [p.model_copy(deep=True, update=dict(
+            search_group_id=self.hypothesis.hypothesis_id if self.kind != 'single' else None,
+            search_group_kind=self.kind,
+            parent_hypothesis=self.hypothesis.model_copy(deep=True) if self.kind != 'single' else None,
+        )) for p in self.variants]
         return self
 
 
@@ -246,6 +267,9 @@ class EnsembleProposal(AgentNarrative):
     component_experiment_ids: list[str] = Field(default_factory=list, max_length=3)
     rationale: str = Field(min_length=1,max_length=4000)
     skip: bool = False
+    methods: list[Literal['mean', 'median', 'weighted', 'stack']] = Field(default_factory=lambda: ['mean'], min_length=1, max_length=4)
+    oof_folds: int = Field(3, ge=2)
+    weight_trials: int = Field(15, ge=1)
 
     @model_validator(mode='after')
     def distinct_components(self):
@@ -257,13 +281,25 @@ class EnsembleProposal(AgentNarrative):
 
 
 class PlanBatch(AgentNarrative):
-    plans: list[HypothesisPlan] = Field(min_length=1, max_length=2)
+    plans: list[PlannerPlan] = Field(min_length=1, max_length=2)
 
     @model_validator(mode='before')
     @classmethod
     def accept_single_plan(cls, value):
         if isinstance(value, dict) and 'plans' not in value and 'hypothesis' in value and 'tool_id' in value:
-            return {'plans': [value]}
+            value = {'plans': [value]}
+        if isinstance(value, dict) and isinstance(value.get('plans'), list):
+            # Old clients/cached responses may still include these obsolete hints.
+            # They have no authority and must not turn a valid recipe into a refusal.
+            runtime_fields = {'search_group_id', 'search_group_kind', 'parent_hypothesis'}
+            plans = []
+            for plan in value['plans']:
+                if isinstance(plan, PlannerPlan):
+                    plan = plan.model_dump(mode='python')
+                if isinstance(plan, dict):
+                    plan = {key: item for key, item in plan.items() if key not in runtime_fields}
+                plans.append(plan)
+            return dict(value, plans=plans)
         return value
 
 
@@ -303,6 +339,8 @@ class SplitSpec(StrictModel):
 
 
 class TrialResult(StrictModel):
+    origin: Literal['trained', 'baseline'] = 'trained'
+    selection_ref: str | None = None
     validation_scope: Literal['model', 'feature'] = 'model'
     number: int
     params: dict[str, Any]
@@ -507,7 +545,10 @@ class TrainingCheckpoint(StrictModel):
     trials: list[dict[str, Any]] = Field(default_factory=list)
     best_params: dict[str, Any] = Field(default_factory=dict)
     best_score: float | None = None
-    remaining_seconds: float = Field(ge=0)
+    remaining_seconds: float | None = Field(None, ge=0)
+    timeouts_enabled: bool = True
+    spent_seconds: float = Field(0, ge=0)
+    trial_limit: int | None = Field(None, ge=1)
     remaining_trials: int = Field(ge=0)
     default_action: Literal['continue', 'stop', 'refit']
     error: str | None = None
@@ -521,5 +562,5 @@ class TrainingCheckpoint(StrictModel):
 class TrainingDecision(AgentNarrative):
     action: Literal['continue', 'stop', 'refit']
     reason: str
-    next_params: list[dict[str, Any]] = Field(default_factory=list, max_length=5)
+    additional_trials: int = Field(0, ge=0)
     recommendations: list[str] = Field(default_factory=list)

@@ -5,8 +5,11 @@ import json
 import time
 import uuid
 import hashlib
+import threading
+from concurrent.futures import CancelledError
 from collections import Counter
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from pydantic import BaseModel
@@ -52,6 +55,37 @@ def role_window(client, role, key, seconds):
 
 
 class RoleClient:
+    @property
+    def max_steps(self):
+        return self._max_steps.get()
+
+    @max_steps.setter
+    def max_steps(self, value):
+        if not hasattr(self, '_max_steps'):
+            self._max_steps = ContextVar('role_steps_'+uuid.uuid4().hex, default=value)
+        else:
+            self._max_steps.set(value)
+
+    @property
+    def deadline(self):
+        return self._deadline.get()
+
+    @deadline.setter
+    def deadline(self, value):
+        if not hasattr(self, '_deadline'):
+            self._deadline = ContextVar('role_deadline_'+uuid.uuid4().hex, default=value)
+        else:
+            self._deadline.set(value)
+
+    @contextmanager
+    def assignment_scope(self, **options):
+        previous = {key:getattr(self,key) for key in options}
+        try:
+            for key,value in options.items(): setattr(self,key,value)
+            yield
+        finally:
+            for key,value in previous.items(): setattr(self,key,value)
+
     def __init__(self, settings: LLMSettings, *, deadline: float, max_steps: int = 12, usage_callback=None, request_callback=None, trace=None, budget_store=None,
                  planning_direct_first=True,planning_context_reads=2,timeouts_enabled=True,
                  thinking_mode='default',role_thinking=None,network_failure_threshold=3,network_cooldown_seconds=30,network_circuit=None):
@@ -62,6 +96,7 @@ class RoleClient:
         self.thinking_unsupported = False
         self.request_fingerprints=Counter()
         self.settings = settings
+        self.cancel_event = threading.Event()
         self.timeouts_enabled = timeouts_enabled
         self.model = settings.model
         self.deadline = deadline
@@ -71,6 +106,9 @@ class RoleClient:
         self.usage_callback = usage_callback
         self.request_callback = request_callback
         self.trace = trace
+        self._trace_lock = threading.RLock()
+        self._owned_trace = None
+        self._trace_users = 0
         self.budget_store = budget_store
         self.role_windows = {}
         self.trace_id = 'llm-'+uuid.uuid4().hex
@@ -101,18 +139,29 @@ class RoleClient:
         sink = current_sink() or self.trace
         owned = sink is None
         if owned:
-            sink = TraceSink(self.trace_root, self.trace_id)
+            with self._trace_lock:
+                if self._owned_trace is None:
+                    self._owned_trace = TraceSink(self.trace_root, self.trace_id)
+                sink = self._owned_trace
+                self._trace_users += 1
         sink.add_secrets([self.settings.api_key])
         try:
             with sink.activate(role=role):
                 yield sink
         finally:
             if owned:
-                sink.close()
+                with self._trace_lock:
+                    self._trace_users -= 1
+                    if not self._trace_users:
+                        sink.close()
+                        self._owned_trace = None
 
     def _request(self, messages, *, tools=None, role='reconnaissance_agent'):
+        if self.cancel_event.is_set(): raise CancelledError('Controller stopped')
         with self._traced(role), span('llm.call', role=role):
-            return self._request_impl(messages, tools=tools, role=role)
+            result = self._request_impl(messages, tools=tools, role=role)
+            if self.cancel_event.is_set(): raise CancelledError('Controller stopped')
+            return result
 
     def _request_impl(self, messages, *, tools=None, role='reconnaissance_agent'):
         if getattr(self,'terminal_error',None): raise self.terminal_error
@@ -137,6 +186,7 @@ class RoleClient:
             emit('llm.repeated_payload',dict(role=role,sha256=fingerprint,count=self.request_fingerprints[(role,fingerprint)]))
         last = None
         for attempt in range(3):
+            if self.cancel_event.is_set(): raise CancelledError('Controller stopped')
             remaining = self.deadline-time.time() if self.timeouts_enabled else 1e12
             if remaining <= 0: break
             try:
@@ -159,6 +209,7 @@ class RoleClient:
                             'status_code':getattr(error,'status_code',None), 'body':getattr(error,'body',None),
                             'request_id':getattr(error,'request_id',None)})
                         raise
+                    if self.cancel_event.is_set(): raise CancelledError('Controller stopped')
                     raw = response.model_dump(mode='json') if hasattr(response,'model_dump') else {
                         'choices':[{'message':choice.message.model_dump(exclude_none=True),
                                     'finish_reason':getattr(choice,'finish_reason',None)} for choice in response.choices],
@@ -251,6 +302,8 @@ class RoleClient:
             return self._generate(role,instruction,payload,schema,tools)
 
     def _generate(self, role, instruction, payload, schema, tools):
+        from .time_policy import agent_payload
+        payload = agent_payload(payload, timed=self.timeouts_enabled)
         request = dict(payload, output_schema=schema.model_json_schema())
         direct=self.planning_direct_first and role in {'hypothesis_generator','planner'}
         if direct:

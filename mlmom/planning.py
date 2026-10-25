@@ -14,6 +14,7 @@ from .tracing import bind, emit
 from .model_spec import normalize_protocol, constant_space, apply_overrides, Intervention
 from .planning_assignments import normalize_cpu_hints
 from .planning_retries import PlanningRejections
+from .execution_contract import execution_contract, plan_field_sources
 
 
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills,
@@ -22,8 +23,6 @@ def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skill
     errors = []
     if plan.cpus > budget.available_cpus or plan.memory_gb > budget.available_memory_gb:
         errors.append('Requested resources exceed worker capacity')
-    if getattr(budget, 'timeouts_enabled', True) and plan.time_limit_seconds + max(0, evaluation_reserve_seconds) > budget.research_seconds:
-        errors.append('Experiment exceeds research deadline including evaluation reserve')
     return ValidationReport(valid=not errors, errors=errors)
 
 
@@ -44,7 +43,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                          initial_experiment_seconds=300, hypothesis_ids=None, planning_mode='all',
                          probe_tool=None, evaluation_reserve_seconds=0, candidate_hypotheses=None,
                          hypothesis_seconds=210, planner_seconds=210, validator_seconds=210,
-                         saved_progress=None,save_progress=None,initial_max_workers=3):
+                          saved_progress=None,save_progress=None,initial_max_workers=3,group_parent=None):
     """Plan hypotheses independently; callers can publish a baseline before alternatives.
 
     Pass a previous output's ``hypotheses`` in the input state to reuse the same
@@ -80,7 +79,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             instruction += (' This is the required first-cycle boosting comparison. '
                 'All members use the same confirmed folds, metric and seed. CPU/RAM are assigned '
                 'by the runtime; use budget.available_cpus and budget.available_memory_gb per worker. '
-                'Feature search and HPO start only after the initial family fits finish. ')
+                'Feature proposals are prepared early; measure features on the first control before long HPO. ')
             if role == 'hypothesis_generator':
                 instruction += (' Propose one cheap boosting-family baseline. The runtime expands it '
                     'into separate backend-specific planning and review calls. ')
@@ -90,9 +89,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             elif role == 'plan_validator':
                 instruction += (' Review only the supplied single family member. The runtime plans '
                     'and checks sibling coverage separately; absent sibling plans are expected here. ')
-            payload = dict(payload, budget=worker_budget.model_dump(), initial_boosting_sweep=initial_resources)
+            payload = dict(payload, budget=worker_budget.agent_view(), initial_boosting_sweep=initial_resources)
         instruction += (' Hard timeouts apply only when budget.timeouts_enabled=true. Otherwise time fields '
             'are estimates, not cutoffs; CPU, memory and trial-count limits still apply. ')
+        instruction += (' Historical durations are advisory, not admission tests. A source experiment wall time '
+            'may include a whole HPO study and is not one frozen refit cost. Actual scheduling owns parallelism. ')
         instruction += (' Read planning_brief for task purpose, quoted domain details and prioritized dataset evidence. '
             'Canonical task and planning_brief.requirements are authoritative; never replace them with narrative '
             'assumptions. Account for mandatory_findings even when not selected in ranked_findings. '
@@ -145,8 +146,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'model_family=gradient_boosting: the runner compares compatible LightGBM, CatBoost and XGBoost '
                         'inside that one hypothesis before tuning the winner. Other families specify up to three family_tools. '
                         'Do not spend separate hypothesis slots on equivalent boosting implementations. '
-                        'When lightweight=true, propose simple fixed-configuration fits only: no HPO, AutoML, neural '
-                        'networks. Prefer a cheap single-model baseline; ensembles are permitted when justified. The coder implements the baseline directly using the selected library '
+                        'When lightweight=true, prefer inexpensive fixed-configuration fits before long searches. '
+                        'Choose families for the actual task; a boosting family is optional. The coder implements the baseline using the selected library '
                         'and simple fold-local preprocessing; reference skills provide implementation examples. '
                         'The runner performs the confirmed internal validation; candidate.fit must not repeat it. '
                         'Use supplied history; empty history is normal before the first fit. '
@@ -194,18 +195,30 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
             baseline=next((h.hypothesis_id for h in source if h.baseline),None)
             chosen=[h for h in chosen if h.hypothesis_id!=baseline or h.kind=='family']
         chosen.sort(key=lambda h:not h.baseline)
-        from .search_groups import expand_families, collect_groups, configure_composite, normalize_single_group
+        from .search_groups import expand_families, collect_groups, configure_composite, bind_group
         chosen, family_metadata, skipped = expand_families(chosen,tools,context.task.task_type,
             'all' if planning_mode == 'initial' else planning_mode)
         rejections.variants = {key: tool_id for key, (_, tool_id) in family_metadata.items()}
+
+        def owned_group(item, hypothesis):
+            if hypothesis.hypothesis_id in family_metadata:
+                parent, _ = family_metadata[hypothesis.hypothesis_id]
+                item.strategy, item.max_trials = 'single', 1
+                return bind_group(item, parent=parent, kind='family')
+            if group_parent is not None:
+                return bind_group(item, parent=group_parent, kind=group_parent.kind)
+            return bind_group(item, kind='ensemble' if hypothesis.kind == 'ensemble' else 'single')
+
         for hypothesis in chosen:
             feedback=[rejections.record(hypothesis)['error']] if rejections.record(hypothesis) else []
+            repair_context={}
             if rejections.blocked(hypothesis):
                 rejected.append(dict(hypothesis_id=hypothesis.hypothesis_id, errors=feedback, exhausted=True))
                 continue
             for _ in range(max_attempts):
                 attempts+=1
                 validating=False
+                item=None
                 try:
                     saved=progress['proposed'].get(hypothesis.hypothesis_id)
                     batch = PlanBatch(plans=[saved]) if saved else for_hypothesis(hypothesis,generate,'planner',
@@ -221,8 +234,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Use supplied context to return final JSON first; '
                         'Select backend skills, hpo for Optuna, feature_engineering for new features, '
                         'imbalance for supported classification or regression weighting/thresholds. Ensembles are allowed; include the ensembles and component skills. '
-                        'When lightweight=true require strategy=single, max_trials=1, no '
-                        'native AutoML or slow backend, and an optional time_limit_seconds of '
+                        'When lightweight=true prefer a cheap fixed strategy=single, max_trials=1 control. '
+                        'Choose the actual backend for the task; justify costlier or native search choices. '
+                        'An optional initial time estimate is '
                         f'{initial_experiment_seconds}. Never override orchestration resources; '
                         'exclude targets, IDs and evaluation data from features. Always use execution_mode=custom: '
                         'the preprocessing agent implements transforms; the model coder implements the estimator. In lightweight mode '
@@ -233,6 +247,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'budget all folds plus a mandatory full-train refit. Do not implement CV in candidate.fit. '
                         'Use strategy=optuna only for an explicitly declared HPO intervention; keep fixed ablations single. '
                         'Declare target_transform, weight_policy and prediction_policy as runtime policies, never native model_params. '
+                         'Search-group membership and parent group identifiers are assigned by the controller; '
+                         'return only the experiment fields in output_schema. '
                         'Route custom search dimensions as policy_params.<policy>.<field>. '
                         'never implement HPO in candidate.fit. Respect improvement_policy; stacking meta learners require OOF base predictions. '
                         'Backend skills are references, not hidden runtime adapters. The code must consume every '
@@ -242,9 +258,14 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         dict(state['payload'],lightweight=is_light(state),
                              required_tool_id=family_metadata.get(hypothesis.hypothesis_id,(None,None))[1],
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
-                             feedback=feedback), PlanBatch, role_tools)
+                             feedback=feedback,repair_context=repair_context), PlanBatch, role_tools)
                     if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
-                    item=batch.plans[0]
+                    item=HypothesisPlan.model_validate(batch.plans[0].model_dump(mode='json'))
+                    if item.hypothesis.hypothesis_id != hypothesis.hypothesis_id:
+                        item.agent_notes['requested_hypothesis_id'] = item.hypothesis.hypothesis_id
+                        item.hypothesis.hypothesis_id = hypothesis.hypothesis_id
+                    item.hypothesis.baseline = hypothesis.baseline
+                    item = owned_group(item, hypothesis)
                     if batch.agent_notes:
                         import copy
                         item.agent_notes['batch'] = copy.deepcopy(batch.agent_notes)
@@ -261,20 +282,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.feature_set=registered
                     elif item.feature_set is not None:
                         raise ValueError('Planner must select a registered feature_set_id')
-                    if hypothesis.hypothesis_id in family_metadata:
-                        parent, required_tool = family_metadata[hypothesis.hypothesis_id]
-                        item.search_group_id=parent.hypothesis_id
-                        item.search_group_kind='family'
-                        item.parent_hypothesis=parent
-                        item.strategy='single';item.max_trials=1
                     if state['payload'].get('ensemble_sources'):
+                        item.model_params = dict(state['payload'].get('ensemble_recipe',{}), **item.model_params)
                         item=configure_composite(item,state['payload']['ensemble_sources'],
                                                  state['payload'].get('ensemble_weight_trials',15))
-                    group_id = item.search_group_id
-                    item = normalize_single_group(item)
-                    if item.search_group_id != group_id:
-                        emit('planning.normalized_group',dict(hypothesis_id=item.hypothesis.hypothesis_id,
-                            requested_group_id=group_id,search_group_id=item.search_group_id))
                     actual_protocol=dict(strategy=str(context.task.validation_strategy),
                         folds=context.task.validation_folds,duplicate_policy=getattr(context.task,'duplicate_policy','allow'))
                     item.validation_protocol,metadata=normalize_protocol(item.validation_protocol,actual_protocol)
@@ -306,10 +317,6 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     normalized=normalize_cpu_hints(item)
                     if normalized:
                         emit('planning.normalized_resources',{'parameters':normalized,'cpus':item.cpus})
-                    if item.hypothesis.hypothesis_id != hypothesis.hypothesis_id:
-                        item.agent_notes['requested_hypothesis_id'] = item.hypothesis.hypothesis_id
-                        item.hypothesis.hypothesis_id = hypothesis.hypothesis_id
-                    item.hypothesis.baseline = hypothesis.baseline
                     if item.hypothesis.based_on and known_candidates is not None and item.hypothesis.based_on not in known_candidates:
                         alias = item.hypothesis.based_on
                         matches = [key for key, value in (candidate_hypotheses or {}).items() if value == alias and key in known_candidates]
@@ -321,8 +328,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     if not report.valid: raise ValueError('; '.join(report.errors))
                     approved = progress['accepted'].get(hypothesis.hypothesis_id)
                     if approved:
-                        progress['accepted'][hypothesis.hypothesis_id] = normalize_single_group(
-                            HypothesisPlan.model_validate(approved)).model_dump(mode='json')
+                        progress['accepted'][hypothesis.hypothesis_id] = owned_group(
+                            HypothesisPlan.model_validate(approved), hypothesis).model_dump(mode='json')
                     progress['proposed'][hypothesis.hypothesis_id]=item.model_dump(mode='json');persist()
                     if progress['accepted'].get(hypothesis.hypothesis_id)==item.model_dump(mode='json'):
                         accepted.append(item.model_dump(mode='json'))
@@ -337,6 +344,8 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Review feasibility, leakage and methodological validity against the supplied skill '
                         'instructions. Return a concise validation JSON; never rewrite plans. '
                         'review_scope describes this single-plan call; sibling plans are intentionally absent. '
+                        'execution_contract describes the CURRENT SDK, including feature_set augmentation. '
+                        'Frozen preprocessing prose is historical intent, not a ban on an active feature_set. '
                         'Use execution_contract for ownership: CPU/thread controls come from runtime FitContext, '
                         'so their absence from model_params is expected and is not a warning. '
                         'You decide methodological approval. Runtime only enforces technical boundaries and budgets. '
@@ -354,8 +363,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
                              task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else
                                   dict(task_type=context.task.task_type,primary_metric=context.task.primary_metric),
-                             features=getattr(context,'feature_columns',[]),budget=budget.model_dump(),
+                             features=getattr(context,'feature_columns',[]),budget=budget.agent_view(),
                              plans=[item.model_dump(mode='json')],
+                             field_sources=plan_field_sources(item),
+                             revision_changes=[key for key,value in item.model_dump(mode='json').items()
+                                 if repair_context.get('effective_plan') and value!=repair_context['effective_plan'].get(key)],
                              required_tool_id=family_metadata.get(hypothesis.hypothesis_id,(None,None))[1],
                              review_scope=dict(kind='single_plan',tool_id=item.tool_id,
                                  family_id=item.search_group_id if item.search_group_kind=='family' else None,
@@ -364,11 +376,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                  accepted_family_tools=[plan['tool_id'] for plan in progress['accepted'].values()
                                      if item.search_group_kind=='family' and plan.get('search_group_id')==item.search_group_id],
                                  family_coverage_owner='runtime',sibling_plans_in_payload=False),
-                             execution_contract=dict(resource_owner='runtime',cpus=item.cpus,memory_gb=item.memory_gb,
-                                 thread_source='FitContext.cpus',thread_params_required_in_model_params=False,
-                                 resource_enforcement='worker_admission',
-                                 preprocessing_owner='preprocessing_agent',estimator_owner='coding_agent',
-                                 policy_owner='runtime',validation_owner='runtime',refit_owner='runtime'),
+                             execution_contract=execution_contract(item),
                              capability_probes=probes,
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)
@@ -392,9 +400,13 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                     break
                 except ValueError as error:
                     feedback=[str(error)]
+                    if item is not None:
+                        repair_context=dict(error=str(error),effective_plan=item.model_dump(mode='json'),
+                            execution_contract=execution_contract(item),field_sources=plan_field_sources(item))
+                        emit('planning.repair_feedback',repair_context)
                     progress['proposed'].pop(hypothesis.hypothesis_id,None)
                     progress['accepted'].pop(hypothesis.hypothesis_id,None);persist()
-                    if rejections.reject(hypothesis,error):
+                    if rejections.reject(hypothesis,error,item):
                         rejected.append(dict(hypothesis_id=hypothesis.hypothesis_id,errors=feedback,exhausted=True))
                         break
             else: rejected.append({'hypothesis_id':hypothesis.hypothesis_id,'errors':feedback})

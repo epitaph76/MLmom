@@ -8,6 +8,6 @@ Use train-fold quantiles, median, IQR, skew and domain bounds to distinguish dat
 
 Scale for linear, SVM, kNN, PCA and neighbour-based sampling. Standard scaling is the baseline for regular distributions; robust scaling is a candidate when valid heavy tails dominate. Trees and native boosters usually need no scaling. With sparse data avoid centering and estimate dense memory before conversion.
 
-Apply feature log1p only when its domain is valid. Target transformations belong to coding_agent, with the inverse applied to predictions and persisted in the estimator; preprocessing.py transforms X only and must not change y. Yeo-Johnson, power or quantile transforms are optional experiments, not universal cleanup; nonlinear transforms alter distances and interpretation. Learn clipping or winsorization bounds inside each fold and compare against an unclipped baseline.
+Apply feature log1p only when its domain is valid. Declared target transformations and their inverses belong to the SDK runtime through target_transform; preprocessing.py transforms X only and must not change y. Yeo-Johnson, power or quantile transforms are optional experiments, not universal cleanup; nonlinear transforms alter distances and interpretation. Learn clipping or winsorization bounds inside each fold and compare against an unclipped baseline.
 
 Replace non-finite results deliberately, guard ratios against zero denominators, and preserve the original feature order. Evaluate transformations on the task metric and required target scale rather than on prettier histograms.

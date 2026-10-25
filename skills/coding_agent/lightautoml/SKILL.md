@@ -4,9 +4,7 @@ description: Use LightAutoML 0.4.2 through the restricted untuned tabular lgb/cb
 ---
 # LightAutoML 0.4.2
 
-The generated path is not admitted yet: validation_strategies is empty until
-non-ensemble holdout search, frozen full refit and relocation are verified.
-The API notes below are compatibility references, not planner permission.
+The generated native path currently has no verified validation protocols in the capability metadata. Treat this as uncertainty, not a Python admission veto. Assess the actual generated implementation, objective, internal validation and frozen refit rather than inferring support from installation.
 
 Only regression/binary/multiclass; strategy='native', patience_trials=null. Supported metrics are rmse/roc_auc/log_loss but uses Task defaults: regression RMSE, binary AUC, multiclass cross-entropy. Require an exact task/metric match; an accepted name alone does not imply correct optimization.
 

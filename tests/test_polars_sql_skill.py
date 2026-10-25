@@ -33,6 +33,9 @@ class PolarsSQLSkillTests(unittest.TestCase):
             [dict(overlapping_complete_keys=1)],
             [dict(source='train', n=6, missing=2), dict(source='test', n=3, missing=1)],
             [dict(n=6, at_least_300=2)],
+            [dict(source='train', n=6), dict(source='test', n=3)],
+            [dict(overlapping_bins=1)],
+            [dict(nonzero=4)],
         ]
         self.assertEqual(len(queries), len(expected), 'Every documented SQL example needs a result check')
         with tempfile.TemporaryDirectory() as tmp:

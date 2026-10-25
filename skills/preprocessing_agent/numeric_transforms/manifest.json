@@ -1,6 +1,6 @@
 {
   "skill_id": "numeric_transforms",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "title": "Numeric transforms and outliers",
   "status": "ready",
   "task_types": [],

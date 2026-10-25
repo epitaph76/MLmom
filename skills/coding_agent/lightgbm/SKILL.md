@@ -16,5 +16,4 @@ export_model_params returns ALL model parameters and output/target options, not 
 
 A backend update may produce no valid split, so current_iteration() and retained tree counts
 can be smaller than the requested boosting rounds after a successful fit. Keep the declared
-fixed count unchanged; the runtime records actual Booster.update calls and fit-time categorical
-arguments. Do not raise diagnostic exceptions or edit fitted counters to force exact tree counts.
+fixed count unchanged; runtime metrics and saved artifacts reflect the executed fit; no Booster.update interception is performed. Do not raise diagnostic exceptions or edit fitted counters to force exact tree counts.

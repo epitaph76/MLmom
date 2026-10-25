@@ -7,7 +7,9 @@ description: Turn measured findings and experiment history into one-change, fals
 feature_sets contains accepted, versioned feature definitions and their measured evidence.
 They are options for later model hypotheses, not universal proof across backends. Cite the
 set ID when proposing reuse. Do not repeat a feature search already resolved by session
-history; the coordinator has one bounded session before initial HPO.
+history; the coordinator prepares initial proposals after context and measures them on a fixed control before long HPO.
+Feature sets may contain Python modules beyond DSL, including supervised representations
+and inferred entity history. An unavailable DSL operator is not a modeling restriction.
 
 Select an observation that can change a modeling decision. Prefer confirmed task
 requirements, critical findings, measured reconnaissance observations, comparable
@@ -40,7 +42,7 @@ falsify the claim.
 
 Return at most the requested number of hypotheses. Preserve the required baseline flag.
 Treat equivalent backend implementations as variants of one approach: use kind=family,
-model_family=gradient_boosting for LightGBM/CatBoost/XGBoost. Other model families name
+model_family=gradient_boosting and explicitly select useful family_tools for the task. Boosting is optional; other supported tasks need appropriate models. Other model families name
 up to three family_tools. The runner compares initial configurations on the same inner
 split and tunes only the best implementation. Do not use multiple parent slots for
 boosting library names. Ensemble search has its own slot after the first cycle; prefer
@@ -64,3 +66,6 @@ opt-in; do not invent a hard deadline when timeouts_enabled=false.
 
 ## Authoritative current evidence
 Use Champion.model_params/configuration_hash and scoped evaluation; original_hypothesis is historical prose with potentially obsolete numbers. A single-change ablation must inherit the current configuration; extra tuning makes it a bundled experiment. Never interpret mae as signed bias: mean_residual=y_true-y_pred, positive means underprediction. Scores have explicit score_kind, split and weighting; historical outer holdout is not an internal CV baseline. A runtime failure means the hypothesis was not tested; use actual scores and errors, without requiring provenance reports. Promise duplicate-aware validation only when the immutable task duplicate_policy is group_features.
+
+Choose hypotheses/families and lineage. The controller owns search-group IDs and
+membership; based_on fields describe historical lineage, not group assignment.

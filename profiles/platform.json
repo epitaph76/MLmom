@@ -4,7 +4,7 @@
   "final_reserve_seconds": 2400,
   "first_submission_seconds": 600,
   "max_workers": 3,
-  "initial_boosting_sweep": true,
+  "initial_boosting_sweep": false,
   "cycle_full_refit": true,
   "max_rounds": null,
   "plateau_rounds": null,

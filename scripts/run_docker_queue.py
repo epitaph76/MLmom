@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,7 +73,7 @@ def audit_cycles(case, target, rows, checked):
 def save_report(output, report):
     atomic_json(output / 'report.json', report)
     lines = ['# Последовательный запуск в Docker', '',
-             f"Состояние: {report['status']}. Лимит: {report['seconds_per_task']} секунд на задачу.", '',
+             f"Состояние: {report['status']}. " + (f"Лимит: {report['seconds_per_task']} секунд на задачу." if report['seconds_per_task'] else 'Общего дедлайна нет; завершение по числу полных циклов.'), '',
              '| Задача | Состояние | Проверено CSV циклов | Итоговый CSV |',
              '|---|---|---:|---|']
     for case in report['cases']:
@@ -97,6 +98,10 @@ def stop_pipeline(process, grace_seconds=10):
         process.wait()
 
 
+def external_stop(signum, frame):
+    raise KeyboardInterrupt
+
+
 def run_case(output, record, seconds):
     name, target, rows = next(spec for spec in SPECS if spec[0] == record['name'])
     case = output / name
@@ -115,16 +120,18 @@ def run_case(output, record, seconds):
             while process.poll() is None:
                 audit_cycles(case, target, rows, record['cycle_checks'])
                 yield
-                # The pipeline gets 59 minutes, then a separate minute for audit/replay.
-                if time.monotonic() - started >= seconds - 55:
+                # An external wall-time guard exists only when explicitly requested.
+                if seconds and time.monotonic() - started >= seconds - 55:
                     record['guard'] = 'pipeline_wall_time_limit'
                     stop_pipeline(process)
                     break
-                time.sleep(min(5, max(.1, seconds - 55 - (time.monotonic() - started))))
+                delay = min(5, max(.1, seconds - 55 - (time.monotonic() - started))) if seconds else 5
+                time.sleep(delay)
             process.wait()
         record['exit_code'] = process.returncode
         audit_cycles(case, target, rows, record['cycle_checks'])
         summary_path = run / 'summary.json'
+        summary = {}
         if summary_path.exists():
             summary = json.loads(summary_path.read_text(encoding='utf-8'))
             record['result'] = {key: summary.get(key) for key in
@@ -145,21 +152,30 @@ def run_case(output, record, seconds):
         missing = [cycle['round_id'] for cycle in cycles if cycle['round_id'] not in record['cycle_checks']]
         if missing:
             raise ValueError('Cycles without a verified CSV: ' + ', '.join(missing))
-        if not cycles:
+        if not cycles and summary.get('status') != 'interrupted':
             raise ValueError('No completed cycle records')
         record['cycles_recorded'] = len(cycles)
-        remaining = seconds - (time.monotonic() - started)
-        if summary_path.exists() and remaining > 3:
+        remaining = seconds - (time.monotonic() - started) if seconds else None
+        if summary_path.exists() and (remaining is None or remaining > 3) and summary.get('status') != 'interrupted':
             from scripts.run_real_diagnostics import validate
-            record['saved_model_replay'] = validate(run, rows, min(45, remaining - 2))
+            record['saved_model_replay'] = validate(run, rows, min(45, remaining - 2) if remaining is not None else 120,
+                                                   timeouts_enabled=bool(seconds))
         else:
             record['saved_model_replay'] = dict(status='not_run', reason='No saved summary or verification time')
-        record['status'] = ('passed' if process.returncode == 0 and
+        record['status'] = ('interrupted' if summary.get('status') == 'interrupted' else 'passed' if process.returncode == 0 and
             record['saved_model_replay'].get('status') == 'passed' else 'failed')
+    except KeyboardInterrupt:
+        if process is not None and process.poll() is None:
+            stop_pipeline(process)
+        record.update(status='interrupted', stop_reason='external_stop')
+        raise
     except Exception as error:
         if process is not None and process.poll() is None:
             terminate_tree(process.pid)
-        record.update(status='failed', error=str(error))
+        stopped = False
+        if (run/'summary.json').is_file():
+            stopped = json.loads((run/'summary.json').read_text(encoding='utf-8')).get('status') == 'interrupted'
+        record.update(status='interrupted' if stopped else 'failed', error=str(error))
     finally:
         record.pop('pid', None)
         record.update(finished_at=now(), duration_seconds=round(time.monotonic() - started, 3))
@@ -169,21 +185,29 @@ def run_case(output, record, seconds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, default=Path('/work'))
-    parser.add_argument('--seconds', type=int, default=3600)
+    parser.add_argument('--seconds', type=int, default=0, help='0 disables the external task deadline')
     args = parser.parse_args()
     output = args.output.resolve()
     if (output / 'report.json').exists():
         raise ValueError('Queue already exists; use a new output directory')
-    report = dict(status='running', started_at=now(), seconds_per_task=args.seconds,
+    if args.seconds < 0:
+        raise ValueError('seconds must be nonnegative')
+    signal.signal(signal.SIGTERM, external_stop)
+    report = dict(status='running', started_at=now(), seconds_per_task=args.seconds or None,
                   model=os.environ.get('OPENAI_MODEL'), base_url=os.environ.get('OPENAI_BASE_URL'),
                   cases=[dict(name=name, status='pending') for name, _, _ in SPECS])
     save_report(output, report)
-    for record in report['cases']:
-        print(json.dumps(dict(event='case.started', case=record['name'], at=now())), flush=True)
-        for _ in run_case(output, record, args.seconds):
-            save_report(output, report)
-        print(json.dumps(dict(event='case.finished', case=record['name'], status=record['status'],
-                              duration_seconds=record['duration_seconds'], at=now())), flush=True)
+    try:
+        for record in report['cases']:
+            print(json.dumps(dict(event='case.started', case=record['name'], at=now())), flush=True)
+            for _ in run_case(output, record, args.seconds):
+                save_report(output, report)
+            print(json.dumps(dict(event='case.finished', case=record['name'], status=record['status'],
+                                  duration_seconds=record['duration_seconds'], at=now())), flush=True)
+    except KeyboardInterrupt:
+        report.update(status='interrupted', stop_reason='external_stop', finished_at=now())
+        save_report(output, report)
+        return 130
     report.update(status='passed' if all(c['status'] == 'passed' for c in report['cases']) else 'failed', finished_at=now())
     save_report(output, report)
     return 0 if report['status'] == 'passed' else 2

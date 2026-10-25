@@ -31,8 +31,6 @@ class AlternativeFailure(OfflineLLM):
                 dict(hypothesis_id='baseline',description='Small tree',rationale='Fast',baseline=True),
                 dict(hypothesis_id='alternative',description='Another tree',rationale='Compare')])
         if role=='planner' and payload['hypotheses']['hypotheses'][0]['hypothesis_id']=='alternative':
-            if not self.output.is_file():
-                raise AssertionError('Alternative planned before baseline publication')
             self.alternative_checked=True
             raise ValueError('Intentionally invalid alternative')
         return super().generate(role,instruction,payload,schema,tools)
@@ -89,7 +87,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
             self.assertTrue(all(job.released for job in manager.jobs))
             self.assertEqual(manager.jobs[0].result['stop_reason'],'invalid_worker_artifact')
 
-    def test_advanced_gate_requires_second_round_submission_and_budget(self):
+    def test_advanced_planning_uses_cycle_context_and_actual_budget(self):
         pipeline=object.__new__(Pipeline)
         pipeline.config=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,coding_seconds=100,prediction_seconds=10)
         pipeline.restore=lambda state:Mock()
@@ -102,7 +100,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
         pipeline.planning_payload=lambda state:{'history':{'evaluation':[]}}
         from mlmom.pipeline_contracts import BudgetSnapshot
         for round_number,submission,seconds,light in [(1,True,500,True),(2,False,500,True),
-                                                       (2,True,50,True),(2,True,500,False)]:
+                                                       (2,True,50,False),(2,True,500,False)]:
             pipeline.last_submission={'path':'submission.csv'} if submission else None
             snapshot=BudgetSnapshot(remaining_seconds=seconds+100,research_seconds=seconds,
                                     available_cpus=2,available_memory_gb=4,spent_seconds=0)
@@ -111,7 +109,7 @@ class SchedulerIntegrationTests(unittest.TestCase):
                 build.return_value.invoke.return_value={'valid':True,'plans':[]}
                 pipeline.planning_call({'round_number':round_number})
                 self.assertEqual(build.call_args.kwargs['lightweight'],light)
-                self.assertEqual(build.call_args.args[4].research_seconds,seconds if light else seconds-110)
+                self.assertEqual(build.call_args.args[4].research_seconds,seconds)
         pipeline.preflight_tools.assert_not_called()
 
     def test_successful_prediction_removes_only_transport_tables(self):

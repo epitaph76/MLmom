@@ -26,17 +26,20 @@ class PlanningRejections:
     def blocked(self, hypothesis):
         return self.record(hypothesis).get('blocked', False)
 
-    def reject(self, hypothesis, error):
+    def reject(self, hypothesis, error, plan=None):
         key = self.key(hypothesis)
         previous = self.records.get(key, {})
         signature = ' '.join(str(error).split())
-        repeated = previous.get('repeated', 0) + 1 if signature == previous.get('signature') else 1
+        executable = plan.model_dump(mode='json',exclude={'hypothesis','agent_notes'}) if plan is not None else None
+        fingerprint = hashlib.sha256(json.dumps(executable,sort_keys=True).encode()).hexdigest()
+        unchanged = signature == previous.get('signature') and fingerprint == previous.get('plan_fingerprint')
+        repeated = previous.get('repeated', 0) + 1 if unchanged else 1
         attempts = previous.get('attempts', 0) + 1
         self.records[key] = dict(hypothesis_id=hypothesis.hypothesis_id,
             description=hypothesis.description, attempts=attempts, repeated=repeated,
             backend=self.variants.get(hypothesis.hypothesis_id),
-            signature=signature, error=str(error)[:2000],
-            blocked=attempts >= self.maximum or repeated >= min(2, self.maximum))
+            signature=signature, plan_fingerprint=fingerprint,error=str(error)[:2000],
+            blocked=repeated >= min(2, self.maximum))
         self.persist()
         return self.blocked(hypothesis)
 

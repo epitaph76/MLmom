@@ -51,7 +51,7 @@ def verify_observation_handoff(run_dir, reports):
     return dict(verified=True,saved_observations=len(ids),shared_ids=sorted(shared))
 
 
-def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_handoff=False):
+def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_handoff=False, minimum_cycles=3):
     """Runs in a new interpreter bound to the package, with relocated source/model."""
     import numpy as np
     import pandas as pd
@@ -106,7 +106,9 @@ def verify_run(run_dir, expected_rows, expected_metric, *, require_observation_h
     split_ids={r['split_id'] for r in experiments if r['role']=='evaluation' and r['status']=='completed'}
     incumbent_rounds={r['round_id'] for r in experiments if r['incumbent'] and r['status']=='completed' and r.get('full_refit')}
     generated=all((Path(metadata['code_dir'])/name).is_file() for name in ['preprocessing.py','candidate.py'])
-    if completed<3 or len(split_ids)<3 or len(incumbent_rounds)<2:raise ValueError('Three rotating cycles with refitted incumbents not completed')
+    if minimum_cycles < 1: raise ValueError('minimum_cycles must be positive')
+    if completed<minimum_cycles or len(split_ids)<minimum_cycles or len(incumbent_rounds)<minimum_cycles-1:
+        raise ValueError(f'{minimum_cycles} rotating cycles with refitted incumbents not completed')
     if not generated:raise ValueError('Separate generated preprocessing/model path missing')
     handoff=verify_observation_handoff(run_dir,reconnaissance) if require_observation_handoff else dict(verified=False,reason='Offline fixture; real request handoff checked separately')
     report=dict(status='passed',rows=len(output),primary_metric=expected_metric,completed_cycles=completed,

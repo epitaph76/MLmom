@@ -4,9 +4,7 @@ description: Use restricted CPU AutoGluon Tabular 1.3.1 when multiple model fami
 ---
 # AutoGluon 1.3.1
 
-The generated path is not admitted yet: validation_strategies is empty until
-non-ensemble holdout search, frozen full refit and relocation are verified.
-The API notes below are compatibility references, not planner permission.
+The generated native path currently has no verified validation protocols in the capability metadata. Treat this as uncertainty, not a Python admission veto. The planner and validator must assess the actual proposed implementation, internal validation and frozen refit; report real failures for repair.
 
 Only regression/binary/multiclass; strategy='native', patience_trials=null. Mapped metrics: rmse, mae, f1_macro, accuracy, roc_auc, log_loss. Prefer direct boosting on short budgets. Allowed model families: GBM/CAT/XGB/RF/XT; native weighted ensembles require a proven frozen ensemble export/refit; the current reference fits individual families.
 

@@ -55,8 +55,8 @@ def composite_case(root, kind='regression', method='mean', different_policies=Fa
                 base.weight_policy.name='sqrt_balanced'
         sources.append(dict(name=f'base_{i}',candidate_id=f'c{i}',experiment_id=f'e{i}',
             code_hash=tree_hash(component),config=base.model_dump(mode='json')))
-    plan = configure_composite(plan,sources,3)
     plan.model_params['method'] = method
+    plan = configure_composite(plan,sources,3)
     X,y = synthetic(kind)
     if 'regression' in kind:
         y = y-y.min()+1
@@ -76,10 +76,9 @@ class FamilyPlanTests(unittest.TestCase):
         group = collect_groups([plan])[0]
         variant = group.variants[0]
         self.assertEqual(group.hypothesis.hypothesis_id, plan.hypothesis.hypothesis_id)
-        self.assertEqual(variant.search_group_id, plan.hypothesis.hypothesis_id)
-        self.assertEqual(variant.parent_hypothesis.hypothesis_id, 'old-family')
+        self.assertIsNone(variant.search_group_id)
+        self.assertIsNone(variant.parent_hypothesis)
         self.assertEqual(variant.hypothesis.based_on_hypothesis_id, 'old-backend-child')
-        self.assertEqual(variant.agent_notes['requested_search_group_id'], 'h2-single-change-ablation')
         self.assertEqual(plan.search_group_id, 'h2-single-change-ablation')
 
     def test_standalone_hypotheses_do_not_merge_by_an_invented_shared_group_label(self):
@@ -92,12 +91,14 @@ class FamilyPlanTests(unittest.TestCase):
         self.assertEqual([g.hypothesis.hypothesis_id for g in groups], ['first', 'second'])
         self.assertTrue(all(len(g.variants) == 1 for g in groups))
 
-    def test_family_group_mismatch_remains_an_error(self):
+    def test_containing_family_owns_membership_without_refusing_the_variant(self):
         plan = case()[3]
         plan.parent_hypothesis = plan.hypothesis.model_copy(update={'hypothesis_id': 'actual-family'})
         plan.search_group_kind, plan.search_group_id = 'family', 'wrong-family'
-        with self.assertRaisesRegex(ValueError, 'different search group'):
-            collect_groups([plan])
+        group = collect_groups([plan])[0]
+        self.assertEqual(group.hypothesis.hypothesis_id, 'actual-family')
+        self.assertEqual(group.variants[0].search_group_id, 'actual-family')
+        self.assertEqual(plan.search_group_id, 'wrong-family')
 
     def test_accepted_cached_single_group_is_repaired_without_another_llm_call(self):
         context, tools, budget, _ = case()
@@ -118,9 +119,9 @@ class FamilyPlanTests(unittest.TestCase):
         self.assertTrue(resumed['valid'], resumed)
         self.assertEqual(client.calls, [])
         base = next(p for p in resumed['plans'] if p['hypothesis']['hypothesis_id'] == 'base')
-        self.assertEqual(base['search_group_id'], 'base')
-        self.assertEqual(base['parent_hypothesis']['hypothesis_id'], 'old-family')
-        self.assertEqual(saved['accepted']['base']['search_group_id'], 'base')
+        self.assertIsNone(base['search_group_id'])
+        self.assertIsNone(base['parent_hypothesis'])
+        self.assertIsNone(saved['accepted']['base']['search_group_id'])
 
     def test_boosting_is_one_parent_with_three_stable_variants(self):
         context,tools,budget,_ = case()
@@ -339,7 +340,7 @@ class CompositeTests(unittest.TestCase):
 
 
 class GroupPipelineTests(unittest.TestCase):
-    def test_ensemble_budget_skip_is_explicit_and_cached_without_calling_llm(self):
+    def test_expired_ensemble_deadline_is_explicit_and_cached_without_calling_llm(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
         from mlmom.ensemble_planning import plan_ensemble
@@ -354,10 +355,9 @@ class GroupPipelineTests(unittest.TestCase):
                 pipeline=SimpleNamespace(store=store,config=RunConfig(timeouts_enabled=True),client=Mock(),
                     tools=installed_tools(),
                     context=SimpleNamespace(task=SimpleNamespace(task_type='regression')),
-                    budget=SimpleNamespace(snapshot=lambda:SimpleNamespace(timeouts_enabled=True,research_seconds=1)),
-                    admission_cost=lambda:100)
+                    budget=SimpleNamespace(snapshot=lambda:SimpleNamespace(timeouts_enabled=True,research_seconds=0)))
                 result=plan_ensemble(pipeline,{'round_number':2})
-                self.assertEqual(result['reason'],'insufficient_complete_ensemble_budget')
+                self.assertEqual(result['reason'],'research_deadline')
                 self.assertEqual(plan_ensemble(pipeline,{'round_number':2}),result)
                 pipeline.client.generate.assert_not_called()
             finally:store.close()
@@ -404,7 +404,7 @@ class GroupPipelineTests(unittest.TestCase):
                         tool=payload.get('required_tool_id') or self.tool_id
                         plan.tool_id=tool;plan.skill_ids=[tool]
                         plan.model_params=dict(n_estimators=3,max_depth=3)
-                        plan.search_space={'n_estimators':{'type':'int','low':4,'high':6}}
+                        plan.search_space={'n_estimators':{'type':'int','low':3,'high':6}}
                         if tool=='lightgbm':plan.model_params.update(min_child_samples=2,verbosity=-1)
                         plan.time_limit_seconds=90
                     return result
@@ -441,12 +441,16 @@ class GroupPipelineTests(unittest.TestCase):
                 initial=[r for r in first_group['variants'] if not r['experiment_id'].endswith('-hpo')]
                 selected=min(initial,key=lambda r:r['internal_score'])
                 self.assertEqual(hpo[0]['candidate_id'],selected['candidate_id'])
+                imported=[trial for trial in hpo[0]['trials'] if trial['origin']=='baseline']
+                self.assertEqual(len(imported),1,'A family baseline with matching inner evidence must be reused')
+                self.assertEqual(imported[0]['score'],selected['internal_score'])
+                self.assertTrue(imported[0]['selection_ref'])
                 self.assertEqual(len([role for role,_ in client.calls if role=='ensemble_agent']),1)
                 proposed=store.get('ensemble_proposal','r2')['component_experiment_ids']
                 self.assertTrue(all(store.get('experiment',key)['round_id']=='r1' for key in proposed))
                 ensemble=next(g for g in second['search_groups'] if g['kind']=='ensemble')
                 self.assertEqual(ensemble['status'],'completed',ensemble)
-                self.assertEqual({r['method'] for r in ensemble['variants']},{'mean','median','weighted','stack'},ensemble)
+                self.assertEqual({r['method'] for r in ensemble['variants']},{'mean'},ensemble)
                 evaluations={r['experiment_id'] for r in store.list('evaluation')}
                 self.assertEqual(evaluations & {r['experiment_id'] for r in ensemble['variants']},
                                  {ensemble['winner_experiment_id']})

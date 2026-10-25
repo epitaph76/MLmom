@@ -13,8 +13,13 @@ names alone or invent correlations. Compare metrics only with the same split and
 protocol; otherwise treat them as historical context. Never consume old predictions
 as meta training data, use current holdout labels, or include a previous ensemble.
 
-One proposal owns one independent ensemble search slot. Planner produces the resource
-assignment; workers compare simple combinations before learned weights and OOF stacking.
+One proposal owns one independent ensemble search slot. Explicitly return methods from mean/median/weighted/stack, plus oof_folds and weight_trials for the methods that use them. Planner produces each selected executable recipe and resource assignment; Python does not add unselected methods.
 The SDK replays each frozen component's own source, preprocessing and policies on
-current fold training rows. The agent selects composition, not code or hyperparameters.
+current fold training rows. You select composition, recipes and their search budget, not component code or frozen hyperparameters.
 No metric gain is guaranteed. Prefer an explained skip to an invalid composition.
+
+Select components/methods/budgets. The controller binds membership before review
+and records local recipe failures without discarding other selected recipes.
+Source duration_seconds is historical experiment wall time, possibly including HPO.
+It is not selected-refit latency or an admission threshold. Scheduling owns job overlap;
+choose feasible recipes from actual budgets and explain uncertain costs to Planner.

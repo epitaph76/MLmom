@@ -4,7 +4,6 @@ from __future__ import annotations
 from .agents import GlobalAPIError
 from .resources import WorkerInfrastructureError
 
-import math
 import os
 import uuid
 import time
@@ -32,26 +31,14 @@ def commit_mailbox(path, value):
 
 def validate_decision(decision, checkpoint):
     decision = TrainingDecision.model_validate(decision)
-    if decision.action == 'continue' and (checkpoint.remaining_seconds <= 0 or checkpoint.remaining_trials <= 0):
+    if decision.action == 'continue' and ((checkpoint.remaining_seconds is not None and checkpoint.remaining_seconds <= 0) or
+                                         checkpoint.remaining_trials + decision.additional_trials <= 0):
         raise ValueError('No remaining search budget')
-    if decision.next_params and decision.action != 'continue':
-        raise ValueError('Trial suggestions require continue')
-    if len(decision.next_params) > checkpoint.remaining_trials:
-        raise ValueError('Too many trial suggestions')
-    space = checkpoint.plan.get('search_space', {})
-    for params in decision.next_params:
-        for key, value in params.items():
-            if key not in space: raise ValueError(f'Unknown search parameter: {key}')
-            spec = space[key]
-            kind = spec['type']
-            if kind == 'categorical':
-                if not any(type(value) is type(c) and value == c for c in spec['choices']):
-                    raise ValueError(f'Invalid categorical value: {key}')
-            else:
-                if type(value) not in ({int} if kind == 'int' else {int, float}):
-                    raise ValueError(f'Invalid parameter type: {key}')
-                if not math.isfinite(value) or not spec['low'] <= value <= spec['high']:
-                    raise ValueError(f'Parameter outside approved bounds: {key}')
+    if decision.additional_trials and decision.action != 'continue':
+        raise ValueError('Additional trials require continue')
+    if checkpoint.trial_limit is not None and decision.additional_trials > max(0, checkpoint.trial_limit-len(
+            [t for t in checkpoint.trials if t.get('origin') != 'baseline'])-checkpoint.remaining_trials):
+        raise ValueError('Additional trials exceed the explicit user limit')
     return decision
 
 
@@ -61,13 +48,16 @@ def fallback(checkpoint, reason):
 
 def decide(client, checkpoint, skills, *, seconds=30):
     try:
-        with role_window(client, 'training_agent', checkpoint.checkpoint_id, min(seconds, checkpoint.remaining_seconds)):
+        allowance = min(seconds, checkpoint.remaining_seconds) if checkpoint.remaining_seconds is not None else seconds
+        with role_window(client, 'training_agent', checkpoint.checkpoint_id, allowance):
             answer = client.generate('training_agent',
                 'Control an existing training run at this checkpoint only. Do not write code or change the model, '
                 'metric, splits, base parameters or search distributions. Inspect internal scores, failures, trial '
                 'parameters and time. Choose continue, stop (end search) or refit (end search). Both stop and '
                 'refit require a fresh fit of the selected configuration on all allowed training rows before evaluation. '
-                'Optional next_params are queued suggestions within the approved search space, never a new space. '
+                'Optuna alone selects numerical trial configurations. To extend this unchanged experiment, '
+                'return additional_trials with continue; respect trial_limit when supplied. '
+                'A null remaining_seconds means no time deadline; use measured duration and progress. '
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
                 dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills), TrainingDecision, None)
         return validate_decision(answer, checkpoint)
@@ -84,7 +74,8 @@ def worker_checkpoint(root, checkpoint, *, seconds=30):
     request = folder/(checkpoint.checkpoint_id+'.request.json')
     response = folder/(checkpoint.checkpoint_id+'.decision.json')
     commit_mailbox(request, checkpoint)
-    until = time.monotonic()+min(seconds, max(0., checkpoint.remaining_seconds)) if seconds is not None else float('inf')
+    allowance = min(seconds, max(0., checkpoint.remaining_seconds)) if seconds is not None and checkpoint.remaining_seconds is not None else seconds
+    until = time.monotonic()+allowance if allowance is not None else float('inf')
     while True:
         if response.exists():
             try:

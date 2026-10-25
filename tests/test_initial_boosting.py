@@ -183,7 +183,7 @@ class InitialPlanningTests(unittest.TestCase):
                 client = SimpleNamespace(generate=Mock(side_effect=[StructuredOutputError('Extra field skip_reason'),
                     EnsembleProposal(skip=True, rationale='No defensible composition')]))
                 pipeline = SimpleNamespace(context=context, config=RunConfig(), tools=tools, client=client,
-                    store=store, skills=Skills(), budget=SimpleNamespace(snapshot=lambda: budget), admission_cost=lambda: 1)
+                    store=store, skills=Skills(), budget=SimpleNamespace(snapshot=lambda: budget))
                 pool = [dict(experiment_id=str(i), plan=dict(tool_id='sklearn')) for i in range(2)]
                 with patch('mlmom.ensemble_planning.component_pool', return_value=pool), \
                      patch('mlmom.ensemble_planning.component_brief', side_effect=lambda row: row):
@@ -274,7 +274,7 @@ class InitialBoostingIntegrationTests(unittest.TestCase):
         for kind in ['regression', 'multiclass_classification']:
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                config = RunConfig(max_rounds=1, hpo_enabled=kind == 'regression', feature_search_enabled=True,
+                config = RunConfig(initial_boosting_sweep=True,max_rounds=1, hpo_enabled=kind == 'regression', feature_search_enabled=True,
                     hpo_max_trials=2, hpo_batch_size=2, diagnostic_seconds=0,
                     max_workers=3, reserve_cpus=0, reserve_memory_gb=0)
                 pipeline = Pipeline(dataset(root/'input', kind), config, run_dir=root/'run', client=NativeStarterClient())

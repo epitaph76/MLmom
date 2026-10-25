@@ -115,6 +115,14 @@ class FrozenEnsemble:
         if self.method not in {'mean','median','weighted','stack'} or (self.method=='median' and self.classification):
             raise ValueError('Unsupported ensemble recipe')
         self.weights = np.full(len(self.sources), 1/len(self.sources))
+        requested_weights = self.params.get('weights',self.params.get('component_weights'))
+        if self.method == 'mean' and requested_weights is not None:
+            if isinstance(requested_weights,dict):
+                requested_weights=[requested_weights[source['name']] for source in self.sources]
+            values=np.asarray(requested_weights,dtype=float)
+            if values.shape != self.weights.shape or not np.isfinite(values).all() or (values<0).any() or values.sum()<=0:
+                raise ValueError('Fixed component weights must be finite, nonnegative and match the sources')
+            self.weights=values/values.sum()
         self.fold_evidence = []
         if self.method in {'weighted','stack'}:
             folds = self._folds(X, y, context)

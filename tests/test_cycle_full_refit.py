@@ -57,7 +57,7 @@ class SubmissionIsolationTests(unittest.TestCase):
                     result = Pipeline(task, config, run_dir=root/'run', client=StopAtSecondCycle()).run()
             finally:
                 signal.signal(signal.SIGTERM, original_handler)
-            self.assertEqual(result['status'], 'completed', result)
+            self.assertEqual(result['status'], 'interrupted', result)
             self.assertEqual(result['stop_reason'], 'external_stop')
             self.assertEqual(result['submission']['model_role'], 'submission_refit')
             self.assertEqual(result['submission']['experiment_id'], 'r1-submission-refit')
@@ -66,7 +66,7 @@ class SubmissionIsolationTests(unittest.TestCase):
             try:
                 full = store.get('submission_refit', 'r1-submission-refit')
                 self.assertEqual(full['status'], 'completed')
-                self.assertEqual(len(store.list('submission_refit')), 1)
+                self.assertEqual(len(store.list('submission_refit')), 2)
                 self.assertTrue(store.get('cycle', 'r1')['completed'])
                 self.assertEqual(store.get('champion', 'current')['run']['role'], 'evaluation')
                 self.assertEqual({r['run']['role'] for r in component_pool(store, 2)}, {'evaluation'})

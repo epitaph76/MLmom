@@ -140,7 +140,7 @@ class PreparedCandidate:
             fit_stack(X, transformed, stack_context, self.create_preprocessor)
             return self
         try:
-            # DSL definitions belong exclusively to this wrapper, not generated factories.
+            # Registered feature definitions belong to this wrapper, not base factories.
             factory_config={k:v for k,v in self.config.items() if k not in {'feature_set','feature_set_id'}}
             self.preprocessor = self.create_preprocessor(copy.deepcopy(factory_config))
             if self.config.get('feature_set'):

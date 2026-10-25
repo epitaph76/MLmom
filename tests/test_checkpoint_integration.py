@@ -18,7 +18,7 @@ class ControlledLLM(OfflineLLM):
             cp=payload['checkpoint']
             if cp['stage']=='batch':return schema(action='stop',reason='Integration: keep best trial')
             if cp['remaining_trials']:
-                return schema(action='continue',reason='Integration: queued trial',next_params=[{'n_estimators':11}])
+                return schema(action='continue',reason='Integration: let Optuna sample')
             return schema(action='refit',reason='Initial single fit')
         if role=='result_validator':
             self.calls.append((role,payload))
@@ -43,8 +43,9 @@ class CheckpointIntegrationTests(unittest.TestCase):
             store=ExperimentStore(root/'run')
             try:
                 search=next(r for r in store.list('experiment') if r['experiment_id'].endswith('-hpo'))
-                self.assertEqual(len(search['trials']),2)
-                self.assertEqual(search['trials'][1]['params']['n_estimators'],11)
+                trained=[t for t in search['trials'] if t['origin']=='trained']
+                self.assertEqual(len(trained),2)
+                self.assertTrue(all(t['status']=='completed' for t in trained))
                 self.assertEqual(search['stop_reason'],'training_agent_stop')
                 checkpoints=store.list('training_checkpoint')
                 self.assertEqual([c['stage'] for c in checkpoints],['initial_fit','initial_fit','batch'])

@@ -13,7 +13,7 @@ from .agents import GlobalAPIError, role_window
 from .resources import WorkerInfrastructureError
 from .process_identity import worker_record, recorded_process_matches
 from .feature_contracts import (FeatureSet, FeatureProposal, FeatureSession, FeatureEvidence,
-                               FeatureExperimentPlan, feature_hash)
+                               FeatureExperimentPlan, feature_hash, feature_configuration_keys)
 from .feature_engineering import validate_features
 from .persistence import atomic_json, file_hash, tree_hash
 from .execution import config_hash
@@ -79,6 +79,57 @@ def dictionary_metadata(context):
             for column in profile.get('columns',[]) if column['name'] in context.feature_columns]
 
 
+def feature_runtime_info():
+    from importlib.metadata import version, PackageNotFoundError
+    installed = {}
+    for package in ['numpy', 'pandas', 'scipy', 'scikit-learn', 'polars', 'lightgbm', 'catboost', 'xgboost']:
+        try:
+            installed[package] = version(package)
+        except PackageNotFoundError:
+            pass
+    return dict(interface='create_features(config) -> fit_transform(X,y,context), transform(X)',
+        implementations=['python', 'optional_dsl'], feature_count_limit=None,
+        installed_libraries=installed, fitting_scope='current training fold only',
+        transform_has_labels=False, persistence='cloudpickle state with the model')
+
+
+def prepare_initial_proposal(p, planning_brief):
+    """Let the role contribute before model preparation; measure only on a fixed control later."""
+    if not p.config.feature_search_enabled or p.store.get('feature_proposal', '0') is not None:
+        return
+    if p.store.get('feature_proposal_error', 'early') is not None:
+        return  # The measured session receives this error and can request a corrected proposal.
+    from .splitting import make_split
+    from .pipeline_contracts import SplitSpec
+    saved = p.store.get('split', 'r1')
+    split = SplitSpec.model_validate(saved) if saved else make_split(p.frame,p.context,'r1',p.config.holdout_fraction,p.config.seed)
+    p.store.put('split','r1',split,immutable=True)
+    directory = p.run_dir/'splits'/'r1'
+    directory.mkdir(parents=True,exist_ok=True)
+    train_path = directory/'train.csv'
+    if not train_path.exists(): p.frame.iloc[split.train_indices].to_csv(train_path,index=False)
+    try:
+        profile = p.sandbox.run(dict(action='feature_profile',context=p.sanitized_context(train_path),
+            train_path=str(train_path)),p.run_dir/'feature_search'/'early-profile',
+            seconds=p.config.reconnaissance_query_seconds,cpus=min(2,p.budget.cpus),memory_gb=min(2.,p.budget.memory_gb))
+        if profile.get('status') != 'completed': raise ValueError(profile.get('error') or 'Feature profile unavailable')
+        payload = dict(task=feature_task_view(p.context.task), train_profile=profile['profile'],
+            dictionary_metadata=dictionary_metadata(p.context), task_description=Path(p.files.task).read_text(encoding='utf-8-sig'),
+            current_feature_set=FeatureSet(feature_set_id='empty').model_dump(mode='json'), history=[],
+            phase='proposal_before_baseline', remaining_configurations=p.config.feature_max_configurations,
+            feature_runtime=feature_runtime_info(),
+            skill_instructions=p.skills.load([],p.context.task.task_type,role='feature_agent'))
+        with role_window(p.client,'feature_agent','initial:0',p.config.feature_agent_seconds):
+            proposal = p.client.generate('feature_agent',FEATURE_PROMPT+' No fitted model or OOF evidence exists yet; '
+                'propose a testable feature intervention from train-only facts, or stop.',payload,FeatureProposal)
+        p.store.put('feature_proposal','0',proposal,immutable=True)
+        emit('feature.proposal_prepared',dict(session_id='initial',proposal=proposal.model_dump(mode='json')))
+    except (GlobalAPIError, WorkerInfrastructureError):
+        raise
+    except Exception as error:
+        p.store.put('feature_proposal_error','early',dict(session_id='initial',reason=str(error)))
+
+
 def feature_profile(request):
     """Numerical observations computed in a worker from outer train and inner OOF only."""
     from .inputs import read_table, features, targets
@@ -97,18 +148,26 @@ def feature_profile(request):
     report = dict(rows=len(X), columns=columns, residual_slices=[],
                   error_weighting='unweighted', residual_scope='feature_inner_oof')
     if request.get('oof_ref'):
+        if context.task.task_type not in {'regression','multioutput_regression','binary_classification',
+                                           'multiclass_classification','multilabel_classification'}:
+            return dict(status='completed',profile=report)
         oof = json.loads(Path(request['oof_ref']).read_text(encoding='utf-8'))
         indices = np.asarray(oof['indices'], dtype=int)
         prediction = np.asarray(oof['predictions'])
         if prediction.ndim == 2 and prediction.shape[1] == 1:
             prediction = prediction[:, 0]
         truth = np.asarray(y.iloc[indices])
-        if context.task.task_type == 'regression':
+        if context.task.task_type in {'regression','multioutput_regression'}:
             residual = truth - prediction
             error = np.abs(residual)
+            if error.ndim > 1:
+                error = np.mean(error,axis=1)
+                residual = np.mean(residual,axis=1)
         else:
             residual = None
-            if prediction.ndim == 2:
+            if context.task.task_type == 'multilabel_classification':
+                error = np.mean(np.abs(truth-prediction),axis=1)
+            elif prediction.ndim == 2:
                 classes = list(context.classes)
                 error = 1 - prediction[np.arange(len(truth)), [classes.index(t) for t in truth]]
             elif oof['prediction_kind'] == 'probability':
@@ -137,6 +196,20 @@ def feature_profile(request):
 
 def fixed_model_hash(spec):
     return config_hash({k: v for k, v in spec.items() if k != 'feature_set_hash'})
+
+
+def proposed_feature_set(parent, proposal, allowed_columns):
+    unknown = set(proposal.remove) - {f.name for f in [*parent.features, *parent.programs]}
+    if unknown:
+        raise ValueError('Removal references unknown features: ' + ', '.join(sorted(unknown)))
+    definition = FeatureSet(feature_set_id='pending',
+        features=[f for f in parent.features if f.name not in proposal.remove] + proposal.features,
+        programs=[p for p in parent.programs if p.name not in proposal.remove] + proposal.programs)
+    validate_features(definition, allowed_columns)
+    keys = feature_configuration_keys(definition)
+    fingerprint = config_hash(keys) if keys else 'empty'
+    definition.feature_set_id = 'fe-' + fingerprint[:16] if keys else 'empty'
+    return definition, fingerprint
 
 
 def paired_evidence(candidate, reference, protocol, expected_model_hash, direction, min_delta=0):
@@ -209,8 +282,8 @@ def run_feature_session(pipeline, baseline, split, train_path):
             baseline_candidate_id=baseline.candidate.candidate_id, model_hash=model_hash,
             train_hash=train_hash, protocol_hash=protocol_hash, protocol_ref=str(protocol_ref),
             baseline_feature_set_id=baseline_feature_set_id, best_feature_set_id=baseline_feature_set_id,
-            attempted_hashes=([config_hash(sorted(f.expression_key() for f in baseline_feature_set.features))]
-                              if baseline_feature_set.features else ['empty']),
+            attempted_hashes=([config_hash(feature_configuration_keys(baseline_feature_set))]
+                              if baseline_feature_set.features or baseline_feature_set.programs else ['empty']),
             max_configurations=p.config.feature_max_configurations, plateau_limit=p.config.feature_plateau_limit)
         p.store.put('feature_set', 'empty', FeatureSet(feature_set_id='empty'))
         p.store.put('feature_set', baseline_feature_set_id, baseline_feature_set, immutable=True)
@@ -309,6 +382,8 @@ def run_feature_session(pipeline, baseline, split, train_path):
                     if profile.get('status') != 'completed':
                         raise ValueError('Train-only feature profile is unavailable')
                     payload = dict(task=feature_task_view(context.task),
+                        feature_runtime=feature_runtime_info(), frozen_model=spec,
+                        base_preprocessing=(p.store.get('preprocessing', Path(baseline.candidate.plan_ref).stem) or {}).get('spec'),
                         dictionary_metadata=dictionary_metadata(context),
                         task_description=Path(p.files.task).read_text(encoding='utf-8-sig'),
                         train_profile=profile['profile'],
@@ -331,16 +406,11 @@ def run_feature_session(pipeline, baseline, split, train_path):
                     session.reason = proposal.rationale
                     break
                 parent = FeatureSet.model_validate(p.store.get('feature_set', session.best_feature_set_id))
-                if proposal.action == 'remove' and not set(proposal.remove) <= {f.name for f in parent.features}:
-                    raise ValueError('Removal references an unknown feature')
-                members = ([*parent.features, *proposal.features] if proposal.action == 'add' else
-                           [f for f in parent.features if f.name not in proposal.remove])
-                definition = FeatureSet(feature_set_id='pending', features=members)
-                validate_features(definition, context.feature_columns)
-                fingerprint = config_hash(sorted(f.expression_key() for f in definition.features)) if definition.features else 'empty'
+                # Construct and measure only the final set. Removal is not a separate
+                # experiment and need not improve the metric on its own.
+                definition, fingerprint = proposed_feature_set(parent, proposal, context.feature_columns)
                 if fingerprint in session.attempted_hashes:
                     raise ValueError('Equivalent feature configuration was already tested')
-                definition.feature_set_id = 'fe-' + fingerprint[:16] if definition.features else 'empty'
                 existing = p.store.get('feature_set', definition.feature_set_id)
                 if existing:
                     # Equivalent formulas keep their immutable, previously assigned names.
@@ -348,7 +418,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                 p.store.put('feature_set', definition.feature_set_id, definition, immutable=True)
                 session.pending = dict(feature_set_id=definition.feature_set_id, fingerprint=fingerprint,
                     parent_feature_set_id=parent.feature_set_id, reference=session.best_result,
-                    rationale=proposal.rationale)
+                    rationale=proposal.rationale, proposal=proposal.model_dump(mode='json'))
                 # Commit the reservation BEFORE smoke or full training can start.
                 session.attempts += 1
                 session.attempted_hashes.append(fingerprint)
@@ -379,6 +449,8 @@ def run_feature_session(pipeline, baseline, split, train_path):
             if assignment is None:
                 payload = dict(task=feature_task_view(context.task),
                     feature_set=definition.model_dump(mode='json'),
+                    reference_feature_set=p.store.get('feature_set', pending['parent_feature_set_id']),
+                    proposal=pending.get('proposal'),
                     reference_feature_set_id=pending['parent_feature_set_id'], hypothesis=pending['rationale'],
                     frozen_model=spec, validation_scope='feature', protocol_hash=protocol_hash,
                     skill_instructions=p.skills.load([], context.task.task_type, role='planner'))
@@ -388,6 +460,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                         'Frame this single feature intervention against the supplied reference. Return FeatureExperimentPlan. '
                         'Preserve feature_set_id and reference_feature_set_id exactly. The runtime fixes model source, '
                         'exported parameters, policies, folds and seeds, and disables HPO. Do not introduce another change. '
+                        'A replace proposal is one atomic final-set comparison; do not require an intermediate removal gain. '
                         'These are internal train-only experiments, with no external evidence.', payload,
                         FeatureExperimentPlan).model_dump(mode='json')
                 assignment = FeatureExperimentPlan.model_validate(assignment)
@@ -410,7 +483,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
             status=status, reason=reason, mean_delta=mean, fold_deltas=deltas, protocol_hash=protocol_hash,
             baseline_mean_delta=baseline_mean, baseline_fold_deltas=baseline_deltas,
             result_ref=str(directory / definition.feature_set_id / 'result.json'), oof_ref=result.get('oof_ref'),
-            duration_seconds=result.get('duration_seconds', 0))
+            duration_seconds=result.get('duration_seconds', 0), proposal=pending.get('proposal'))
         p.store.put('feature_evidence', evidence_key, evidence, immutable=True)
         atomic_json(directory / definition.feature_set_id / 'evidence.json', evidence)
         if status == 'accepted':
@@ -433,7 +506,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
     winner_plan.hypothesis.hypothesis_id = definition.feature_set_id
     winner_plan.hypothesis.description = 'Selected stable feature set ' + definition.feature_set_id
     winner_plan.intervention = Intervention(kind='ablation', base_candidate_id=baseline.candidate.candidate_id,
-        changed_fields=['feature_set'], operations=[f.expression_key() for f in definition.features])
+        changed_fields=['feature_set'], operations=[f.expression_key() for f in [*definition.features, *definition.programs]])
     plan_ref = p.run_dir / 'plans' / (round_id + '-' + definition.feature_set_id + '.json')
     atomic_json(plan_ref, winner_plan)
     # Same immutable estimator/preprocessing source, a new feature assignment.
@@ -485,23 +558,29 @@ def complete_feature_session(pipeline, winner, promoted):
         reason=session.reason, attempts=session.attempts))
 
 
-FEATURE_PROMPT = '''Coordinate one feature-only experiment on the frozen baseline. Return a typed
-FeatureProposal: add one related group, remove one related group, or stop with a reason.
-Use only train_profile (computed from outer train and inner OOF), task semantics and supplied history.
-dictionary_metadata contains declared column meanings and units, not measured effects.
-Investigate hidden entities and repeated observations across time or conditions using stable
-eligible attributes in the supplied train-only evidence, following the discovery skill guidance.
-Validate candidate matches and prediction-time availability before proposing within-entity
-aggregates or historical/temporal features. If the evidence, leakage-safe validation, or required
-DSL operation is unavailable, explain the limitation in rationale; do not invent matches or
-claim unsupported historical joins. Keep the frozen model and fold protocol unchanged.
-Never request external holdout, test, files, arbitrary Python, target-dependent features, IDs or excluded
-columns. The trusted DSL executes operations; you do not implement Python or change model parameters.
-missing/log/frequency/date_part take one column; ratio/difference/product take two. date_part also
-requires part=year/month/day/dayofweek/hour. group_count takes no columns and requires by;
-group_mean/std/min/max take one numeric column and by. Logs use positive values; invalid arithmetic
-is imputed using training-fold medians. Group maps fit on the training fold only, with stored fallbacks.
-Give unique short ASCII feature names. At most 16 features in the resulting set. Do not repeat failed,
-rejected or equivalent configurations. A numerical improvement must come from runtime evidence;
-semantic plausibility, correlations and importance alone are not proof. No causal claims. Stop when
-no useful, new, safe intervention is supported by the available evidence.'''
+FEATURE_PROMPT = '''Design one executable feature experiment on the frozen control model.
+Return FeatureProposal: add, remove, replace, or stop. You may write Python in programs;
+the optional features DSL is a shortcut, not a limit on your methods or feature count.
+Each program has name, source and config. source defines create_features(config), returning
+an object with fit_transform(X,y,context) and transform(X). Return additional columns as a
+DataFrame, 2D NumPy array or scipy sparse matrix. Preserve row order and names/width at inference.
+Use installed libraries, raw permitted feature columns and current fold training labels.
+Supervised representations, smoothed target statistics, inferred entity keys, historical
+aggregates and other learned transformations are allowed. For target-derived training
+columns use appropriate cross-fitting or exclusion so a row's own label is not its input.
+Apply that scope to smoothing priors and fallback statistics too.
+Build inference maps from this fold's train only; transform receives X without labels and
+must not fit or learn from the prediction batch. Respect declared group/time boundaries.
+Treat inferred identities as hypotheses to measure, not as verified IDs; lack of an official
+entity ID or a matching DSL operator is not by itself a reason to abandon an experiment.
+Persist learned maps/state on the object; the SDK serializes it with the model. No file,
+network, environment or external-dataset reads. No access to outer holdout/test labels.
+Keep the frozen control model, its parameters, folds and target/output policies unchanged.
+Use train_profile, task semantics, dictionary meanings and supplied scoped history. Explain
+uncertainty rather than inventing observed improvements. Consider compatible costs/resources.
+Replace removes named programs/features and adds new ones atomically, without an intermediate
+removal-only gain requirement. Legacy add with removals is read as replace. Names identify
+programs/features; the number of returned columns is chosen by you. Runtime measures the
+final set against the current accepted set and the original control on the same folds.
+Actual errors and measurements return to you for correction or a different proposal.
+Stop when no useful further experiment is justified, not merely because an idea needs Python.'''

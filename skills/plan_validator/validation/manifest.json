@@ -1,6 +1,6 @@
 {
   "skill_id": "validation",
-  "version": "1.1.1",
+  "version": "1.1.5",
   "title": "Internal validation",
   "status": "ready",
   "task_types": [],

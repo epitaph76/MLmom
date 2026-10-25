@@ -58,10 +58,13 @@ def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, group
     from .sdk import FitContext
     work_dir=Path(work_dir)/uuid.uuid4().hex[:8]
     work_dir.mkdir(parents=True,exist_ok=True)
+    allowance = max(.1,seconds or request['worker_seconds']*.8)
+    if not request.get('timeouts_enabled',True):
+        allowance = request.get('plan',{}).get('time_limit_seconds',allowance)
     return FitContext(task_type=context.task.task_type,metric=context.task.primary_metric,
         direction=context.task.metric_direction,seed=request.get('seed',42),
         cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
-        time_limit_seconds=max(.1,seconds or request['worker_seconds']*.8),classes=context.classes,
+        time_limit_seconds=allowance,classes=context.classes,
         groups=groups,sample_weight=weights,validation_X=X_valid,validation_y=y_valid,
         validation_groups=validation_groups,validation_weight=validation_weight,work_dir=str(work_dir),task_context=context,
         timeouts_enabled=request.get('timeouts_enabled',True))
@@ -218,16 +221,32 @@ def train(request, root):
     protocol_ref = None
     best_details = {}
 
+    def imported_metadata(record):
+        selection=json.loads(Path(record['selection_ref']).read_text(encoding='utf-8'))
+        return dict(number=record['number'],origin='baseline',selection_ref=record['selection_ref'],
+            params=dict(plan.model_params,**record['params']),status='completed',score=record['score'],
+            duration_seconds=0.,kind='optuna',validation_scope='model',
+            outer_split_id=request.get('outer_split_id'),validation_protocol_ref=protocol_ref,
+            score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
+            metric_options=context.metric_options,weighting='sample_weight' if weights is not None else 'unweighted',
+            **{k:v for k,v in selection['details'].items() if k in {'fold_results','score_std','oof_score','oof_ref'}})
+
     def control(stage, details=None, error=None):
         nonlocal control_action
         from .pipeline_contracts import TrainingCheckpoint
         from .training_control import worker_checkpoint, fallback
         details=details or {}
-        checkpoint=TrainingCheckpoint(checkpoint_id=f'{stage}-{len(trials)}',stage=stage,
-            plan=plan.model_dump(mode='json'),trials=[t.model_dump(mode='json') for t in trials],
+        control_trials={t.number:t.model_dump(mode='json') for t in trials}
+        for record in details.get('trials',[]):
+            if record.get('origin')=='baseline': control_trials[record['number']]=imported_metadata(record)
+        checkpoint_index=details.get('new_trials',len([t for t in trials if t.origin!='baseline']))
+        checkpoint=TrainingCheckpoint(checkpoint_id=f'{stage}-{checkpoint_index}',stage=stage,
+            plan=plan.model_dump(mode='json'),trials=list(control_trials.values()),
             best_params=details.get('best_params',best_params),best_score=details.get('best_score',best_score),
-            remaining_seconds=max(0.,min(details.get('remaining_seconds',fit_budget),fit_budget-(time.monotonic()-started))),
-            remaining_trials=details.get('remaining_trials',max(0,min(plan.max_trials,request.get('hpo_max_trials',15))-len(trials))) if plan.strategy=='optuna' else 0,
+            remaining_seconds=max(0.,min(details.get('remaining_seconds',fit_budget),fit_budget-(time.monotonic()-started))) if timed else None,
+            timeouts_enabled=timed, spent_seconds=details.get('spent_seconds',time.monotonic()-started),
+            trial_limit=request.get('hpo_max_trials'),
+            remaining_trials=details.get('remaining_trials',max(0,min(plan.max_trials,request.get('hpo_max_trials') or plan.max_trials)-len(trials))) if plan.strategy=='optuna' else 0,
             default_action=details.get('default_action','continue' if plan.strategy=='optuna' else 'refit'),error=error)
         checkpoint=checkpoint.model_copy(update=dict(score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
             outer_split_id=request.get('outer_split_id'),validation_protocol_ref=protocol_ref,
@@ -281,6 +300,7 @@ def train(request, root):
         if protocol_path.exists() and json.loads(protocol_path.read_text(encoding='utf-8')) != protocol:
             raise ValueError('Saved validation protocol differs from this request')
         atomic_json(protocol_path,protocol)
+        evaluation_identity = dict(code_hash=request['code_hash'],train_hash=file_hash(Path(request['train_path'])))
         selection_path=root/'selection.json'
         if selection_path.exists():
             saved=json.loads(selection_path.read_text(encoding='utf-8'))
@@ -357,7 +377,8 @@ def train(request, root):
                 details={key:getattr(trial,key) for key in ('fold_results','score_std','oof_score','oof_ref')}
                 from .model_spec import model_spec
                 details['model_spec'] = model_spec(trial_config, selected_params)
-                trial_selection=dict(protocol=protocol,number=trial_number,score=score,params=selected_params,details=details)
+                trial_selection=dict(protocol=protocol,number=trial_number,score=score,params=selected_params,details=details,
+                                     execution_identity=evaluation_identity)
                 atomic_json(trial_root/'selection.json',trial_selection)
                 if best_score is None or better(score,best_score,context.task.metric_direction):
                     best_score,best_params=score,selected_params
@@ -376,6 +397,8 @@ def train(request, root):
 
         if plan.strategy=='optuna':
             from .hpo import run_search
+            from .hpo_baseline import importable_baseline
+            baseline_trial = importable_baseline(request, protocol)
             def search_checkpoint(details):
                 return control('batch',details)
             search_result=run_search(objective,directory=root/'hpo',identity=dict(code=request['code_hash'],
@@ -385,22 +408,26 @@ def train(request, root):
                 **({'feature_set_hash':feature_hash(plan.feature_set)}
                    if plan.feature_set else {})),
                 space=plan.search_space,direction=context.task.metric_direction,seed=request.get('seed',42),
-                max_trials=min(plan.max_trials,request.get('hpo_max_trials',15)),batch_size=request.get('hpo_batch_size',5),
+                max_trials=plan.max_trials, hard_limit=request.get('hpo_max_trials'),
+                startup_trials=request.get('hpo_startup_trials',3), baseline_trial=baseline_trial,
+                batch_size=request.get('hpo_batch_size',5),
                 gain_threshold=request.get('hpo_gain_threshold',.005),seconds=max(0,search_deadline-time.time()),
                 timeouts_enabled=request.get('timeouts_enabled',True),
-                baseline_score=request.get('baseline_score'),checkpoint=search_checkpoint if request.get('training_control') else None,
+                baseline_score=baseline_trial['score'] if baseline_trial else None,checkpoint=search_checkpoint if request.get('training_control') else None,
                 trial_checkpoint=(lambda details:control(details['stage'],details,error=details.get('error'))) if request.get('training_control') else None)
             control_action=search_result.get('control_action',control_action)
             metadata={t.number:t.model_dump() for t in trials}
+            metadata.update({t['number']:imported_metadata(t) for t in search_result['trials'] if t.get('origin')=='baseline'})
             trials=[TrialResult(**dict(metadata.get(t['number'],{}),number=t['number'],params=dict(plan.model_params,**t['params']),
                 status='completed' if t['status']=='complete' else 'failed',score=t['score'],
-                duration_seconds=t['duration_seconds'],error=t.get('error'))) for t in search_result['trials']]
+                duration_seconds=t['duration_seconds'],error=t.get('error'),origin=t.get('origin','trained'),
+                selection_ref=t.get('selection_ref'))) for t in search_result['trials']]
             atomic_json(root/'trials.json',trials)
             successful=[t for t in trials if t.status=='completed']
             if not successful:
                 raise ValueError('No successful internal trial: '+'; '.join(t.error or '' for t in trials)[-2500:])
             winner=(min if context.task.metric_direction=='minimize' else max)(successful,key=lambda t:t.score)
-            chosen=json.loads((root/f'trial-{winner.number}'/'selection.json').read_text(encoding='utf-8'))
+            chosen=json.loads((Path(winner.selection_ref) if winner.selection_ref else root/f'trial-{winner.number}'/'selection.json').read_text(encoding='utf-8'))
             if chosen['protocol']!=protocol or chosen['score']!=winner.score:
                 raise ValueError('Completed study trial differs from saved validation evidence')
             best_score,best_params,best_details=chosen['score'],chosen['params'],chosen['details']

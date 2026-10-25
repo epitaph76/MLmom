@@ -162,12 +162,12 @@ def create_preprocessor(config):return Pre()
 
 
 class TrainingControlTests(unittest.TestCase):
-    def test_suggestions_obey_types_bounds_and_remaining_trials(self):
+    def test_renewals_obey_remaining_trials_and_explicit_user_cap(self):
         cp=checkpoint()
-        validate_decision(TrainingDecision(action='continue',reason='test',next_params=[dict(depth=2,rate=.1,kind='a')]),cp)
-        for params in [dict(depth=True),dict(depth=2.),dict(depth=99),dict(rate=float('nan')),dict(kind='c'),dict(n_jobs=5)]:
-            with self.subTest(params=params),self.assertRaises(ValueError):
-                validate_decision(TrainingDecision(action='continue',reason='test',next_params=[params]),cp)
+        self.assertEqual(validate_decision(TrainingDecision(action='continue',reason='test',additional_trials=2),cp).additional_trials,2)
+        with self.assertRaises(ValueError):
+            validate_decision(TrainingDecision(action='continue',reason='cap',additional_trials=2),checkpoint(trial_limit=4))
+        self.assertNotIn('next_params',TrainingDecision.model_json_schema()['properties'])
         with self.assertRaises(ValueError):validate_decision(TrainingDecision(action='continue',reason='test'),checkpoint(remaining_trials=0))
 
     def test_failure_uses_default_and_worker_timeout_is_replayed(self):
@@ -181,14 +181,14 @@ class TrainingControlTests(unittest.TestCase):
             self.assertEqual(first,second)
             self.assertEqual(first.action,'refit')
 
-    def test_control_at_initial_fit_and_batches_enqueues_params_and_resumes_once(self):
+    def test_control_at_initial_fit_and_batches_keeps_sampler_ownership_and_resumes_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             calls=[];values=[]
             def objective(params,number,seconds):
                 values.append(params['depth']);return float(params['depth'])
             def initial(data):
                 calls.append(('initial',len(data['trials'])))
-                return TrainingDecision(action='continue',reason='try depth four',next_params=[dict(depth=4)])
+                return TrainingDecision(action='continue',reason='Sampler explores the approved space')
             def batch(data):
                 calls.append(('batch',len(data['trials'])))
                 return TrainingDecision(action=data['default_action'],reason='programmatic')
@@ -197,7 +197,7 @@ class TrainingControlTests(unittest.TestCase):
                 checkpoint=batch,trial_checkpoint=initial)
             state=run_search(objective,**kwargs)
             self.assertEqual(calls,[('initial',1),('batch',2),('batch',4)])
-            self.assertEqual(values[1],4)
+            self.assertTrue(all(1<=value<=4 for value in values))
             deadline=state['deadline']
             again=run_search(objective,**kwargs)
             self.assertEqual(len(values),4)

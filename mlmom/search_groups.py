@@ -37,7 +37,7 @@ def expand_families(hypotheses, tools, task_type, mode='all'):
                 expanded.append(parent)
             continue
         family = (parent.model_family or '').lower()
-        requested = list(BOOSTERS) if family in {'boosting', 'gradient_boosting', 'gbdt', 'boosted_trees'} else parent.family_tools
+        requested = parent.family_tools or (list(BOOSTERS) if family in {'boosting', 'gradient_boosting', 'gbdt', 'boosted_trees'} else [])
         if not requested:
             raise ValueError('A model family requires model_family=gradient_boosting or explicit family_tools')
         compatible = list(dict.fromkeys(requested))
@@ -55,29 +55,22 @@ def expand_families(hypotheses, tools, task_type, mode='all'):
     return expanded, metadata, skipped
 
 
-def normalize_single_group(plan):
-    """A standalone hypothesis owns its group; historical lineage remains separate."""
-    if plan.search_group_kind != 'single' or plan.search_group_id in {None, plan.hypothesis.hypothesis_id}:
-        return plan
-    notes = dict(plan.agent_notes)
-    notes.setdefault('requested_search_group_id', plan.search_group_id)
-    return plan.model_copy(update=dict(search_group_id=plan.hypothesis.hypothesis_id, agent_notes=notes))
+def bind_group(plan, *, parent=None, kind='single'):
+    """Project one controller-owned group onto an executable variant."""
+    return SearchGroupPlan(hypothesis=parent or plan.hypothesis, kind=kind, variants=[plan]).variants[0]
 
 
 def collect_groups(plans, skipped=()):
     groups = {}
     for value in plans:
         plan = value if isinstance(value, HypothesisPlan) else HypothesisPlan.model_validate(value)
-        plan = normalize_single_group(plan)
-        key = plan.search_group_id or plan.hypothesis.hypothesis_id
+        parent = (plan.parent_hypothesis or plan.hypothesis) if plan.search_group_kind != 'single' else plan.hypothesis
+        key = (plan.search_group_kind, parent.hypothesis_id)
         if key not in groups:
-            groups[key] = SearchGroupPlan(hypothesis=(plan.parent_hypothesis or plan.hypothesis)
-                if plan.search_group_kind != 'single' else plan.hypothesis,
-                kind=plan.search_group_kind, variants=[plan],
-                skipped=[s for s in skipped if s.get('group_id') == key])
-        else:
-            groups[key].variants.append(plan)
-    return [SearchGroupPlan.model_validate(g.model_dump()) for g in groups.values()]
+            groups[key] = dict(hypothesis=parent, kind=plan.search_group_kind, variants=[],
+                skipped=[s for s in skipped if s.get('group_id') == parent.hypothesis_id])
+        groups[key]['variants'].append(plan)
+    return [SearchGroupPlan(**group) for group in groups.values()]
 
 
 def internal_winner(rows, direction):
@@ -148,6 +141,7 @@ def component_brief(row):
         internal_score=row['run']['internal_score'], score_kind=row['run'].get('score_kind'),
         validation_protocol_ref=row['run'].get('validation_protocol_ref'),
         configuration_hash=row['configuration_hash'], duration_seconds=row['run']['duration_seconds'],
+        duration_scope='source experiment wall time, may include HPO, validation and refit; not selected-fit latency',
         evaluation=evaluation_summary(row['evaluation']) if row.get('evaluation') else None)
 
 
@@ -158,8 +152,18 @@ def configure_composite(plan, sources, max_trials):
     plan.ensemble_components = [dict(name=s['name'], tool_id=s['config']['tool_id'],
         model_params=s['config']['model_params']) for s in sources]
     plan.tool_id = sources[0]['config']['tool_id']
-    plan.model_params = dict(method='mean', oof_folds=3, weight_trials=max_trials,
-                            **{s['name']:s['config']['model_params'] for s in sources})
+    params = dict(plan.model_params)
+    method = params.pop('blend', params.get('method', 'mean'))
+    params['method'] = method
+    if method in {'mean', 'median'}:
+        params.pop('oof_folds', None)
+        params.pop('weight_trials', None)
+    else:
+        params.setdefault('oof_folds', 3)
+        if method == 'weighted': params.setdefault('weight_trials', max_trials or 15)
+        else: params.pop('weight_trials', None)
+    params.update({s['name']:s['config']['model_params'] for s in sources})
+    plan.model_params = params
     plan.target_transform = TargetTransform()
     plan.weight_policy = WeightPolicy()
     plan.prediction_policy = PredictionPolicy()
@@ -175,9 +179,9 @@ def configure_composite(plan, sources, max_trials):
     return plan
 
 
-def ensemble_recipes(plan, task_type):
+def ensemble_recipes(plan, task_type, methods=None):
     parent = plan.hypothesis.model_copy(deep=True)
-    methods = ['mean', 'median', 'weighted', 'stack'] if 'regression' in task_type else ['mean', 'weighted', 'stack']
+    methods = list(dict.fromkeys(methods or [plan.model_params.get('method', 'mean')]))
     variants = []
     for method in methods:
         child = plan.model_copy(deep=True)

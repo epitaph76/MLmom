@@ -8,7 +8,7 @@ train = X.assign(**{label: np.asarray(y)})
 valid = context.validation_X.assign(**{label: np.asarray(context.validation_y)}) if context.validation_X is not None else None
 self.model = TabularPredictor(label=label, path=str(Path(context.work_dir)/'predictor'),
     eval_metric='root_mean_squared_error', verbosity=0)  # map the exact requested metric
-self.model.fit(train, tuning_data=valid, time_limit=max(1.,context.remaining_seconds),
+self.model.fit(train, tuning_data=valid, time_limit=max(1.,(context.remaining_seconds if context.timeouts_enabled else context.time_limit_seconds)),
     hyperparameters={'GBM':{},'CAT':{},'XGB':{},'RF':{},'XT':{}}, fit_weighted_ensemble=False,
     num_cpus=context.cpus, num_gpus=0)
 ```

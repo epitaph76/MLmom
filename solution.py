@@ -43,7 +43,7 @@ def main():
     except Exception as error:
         result={'status':'failed','error':str(error)}
     print(json.dumps({k:v for k,v in result.items() if k!='champion'},ensure_ascii=False))
-    return 0 if result['status']=='completed' else 2
+    return 0 if result['status']=='completed' else 130 if result['status']=='interrupted' else 2
 
 
 if __name__=='__main__':raise SystemExit(main())

@@ -141,7 +141,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 self.assertTrue(all(d['reference_score']==reference for d in store.get('analysis','r2')['decisions']))
                 self.assertTrue(all(r['split_id']!='all-train' for r in evaluations))
                 full_runs=store.list('submission_refit')
-                self.assertEqual(len(full_runs),2)
+                self.assertEqual(len(full_runs),3)  # Early full answer plus one full refit per cycle.
                 self.assertTrue(all(r['role']=='submission_refit' and r['split_id']=='all-train' for r in full_runs))
                 self.assertTrue(all(r['internal_score'] is None and not r['trials'] for r in full_runs))
                 self.assertTrue(all(store.get('evaluation',r['experiment_id']) is None for r in full_runs))

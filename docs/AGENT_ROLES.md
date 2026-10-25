@@ -24,14 +24,46 @@ Plan validator получает один план и сведения о сос�
 повторную машинную проверку цитат/обоснования. Result validator не меняет выбор Champion.
 Наблюдения и brief сохраняются без проверки точного совпадения чисел, цитат или приоритетов.
 
-TrainingDecision задаёт continue, stop или refit и предложения trial-параметров в существующем
-пространстве. Ресурсные/trial-лимиты и атомарный mailbox сохраняются; при сбое роли используется
-существующая программная политика. Поиск заканчивается refit выбранных параметров.
+TrainingDecision задаёт continue, stop или refit и additional_trials для продления неизменённого
+эксперимента. Конкретные числа выбирает Optuna; next_params больше не исполняется.
+При отсутствии дедлайна remaining_seconds=null. Явный пользовательский trial_limit сохраняется;
+при сбое роли используется программная политика. Поиск заканчивается refit выбранных параметров.
 
-Первый цикл сравнивает бустинги, затем выполняются feature search/HPO и обычные циклы улучшения.
+Первый набор моделей и priority выбирают агенты для задачи. Feature agent предлагает признаки
+сразу после Context agent, затем runtime измеряет их на замороженном контроле до длительного HPO.
+Независимая подготовка выполняется параллельно; общий scheduler учитывает все CPU/RAM leases.
+Первый успешный baseline выпускает full-train результат до окончания остальных экспериментов.
 Полный refit для CSV имеет роль submission_refit и не входит в сравнение моделей.
 Повторные попытки ограничены; resume сохраняет выполненную работу и историю ошибок.
 Ошибки исходника/обучения передаются кодеру с source line и traceback для исправления.
+Ансамбли исполняют только явно выбранные агентом рецепты. Валидатор получает execution_contract
+с актуальным DSL и порядком композиции. Остановка обозначается interrupted/external_stop отдельно
+от наличия результата; опубликованный full-train CSV сохраняется.
 
 Детали инструментов/скилов: [SKILLS.md](SKILLS.md). Процессы и ресурсы:
 [WORKER_SUPERVISION_RU.md](WORKER_SUPERVISION_RU.md), [WORKER_RUNTIME.md](WORKER_RUNTIME.md).
+
+## Контракт групп исполнения v4
+
+Planner возвращает PlannerPlan без search_group_id/search_group_kind/parent_hypothesis.
+Контроллер создаёт SearchGroupPlan, связывает варианты до plan review и сохраняет
+HypothesisPlan с производными полями для scheduler/store. Историческое происхождение
+эксперимента остаётся в based_on/based_on_hypothesis_id. Ошибки отдельного рецепта
+ансамбля сохраняются в ensemble_recipe_failed; остальные выбранные рецепты продолжаются.
+Версия групп введена в v4; текущая session runtime_contract_version=6.
+Детали: [CONTROLLER_GROUPS_RU.md](CONTROLLER_GROUPS_RU.md).
+
+## Длительности и замены признаков v5
+
+Исторические длительности являются справочной информацией, а не программным
+условием допуска. Реальные дедлайны и CPU/RAM исполняет scheduler. Feature agent
+может вернуть replace с удалениями и добавлениями: один итоговый набор измеряется
+относительно исходного без промежуточного требования улучшения. Обе стороны
+сохраняются в evidence. Подробности: [ADVISORY_COSTS_AND_REPLACEMENT_RU.md](ADVISORY_COSTS_AND_REPLACEMENT_RU.md).
+
+## Python-признаки v6
+
+Feature Agent пишет programs с create_features(config), fit_transform(X,y,context),
+transform(X). DSL необязателен, лимита 16 колонок нет. Разрешены supervised-признаки
+на fold train с корректным исключением собственной метки/cross-fitting. SDK исполняет
+и сохраняет модули вместе с моделью. Подробности: [PYTHON_FEATURE_PROGRAMS_RU.md](PYTHON_FEATURE_PROGRAMS_RU.md).

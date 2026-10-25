@@ -74,7 +74,7 @@ class Pipeline:
         if session_path.exists():
             if not resume: raise ValueError('Run already exists; use --resume')
             session = json.loads(session_path.read_text(encoding='utf-8'))
-            if session.get('runtime_contract_version') != 2:
+            if session.get('runtime_contract_version') != 6:
                 raise ValueError('This run uses an older runtime contract. Start a new run; saved models remain available for inference.')
             legacy_policy = 'timeouts_enabled' not in session['config']
             if legacy_policy:
@@ -106,7 +106,7 @@ class Pipeline:
             if legacy_policy or legacy_features or legacy_boosting or legacy_cycle_refit: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
-            session = dict(runtime_contract_version=2,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
+            session = dict(runtime_contract_version=6,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
             atomic_json(session_path,session)
         if 'run_id' not in session:
             session['run_id']=uuid.uuid4().hex
@@ -140,6 +140,11 @@ class Pipeline:
                 usage_callback=lambda usage:self.store.event('llm_usage','run',usage),
                 request_callback=lambda event:self.store.event('llm_request','run',event),budget_store=self.store)
         self.client = client
+        self._preparation_pool = None
+        import threading
+        self._cancel = threading.Event()
+        self._controller_thread = threading.get_ident()
+        self.sandbox.wait_callback = self.poll_training_controls
         if isinstance(client,RoleClient):
             client.timeouts_enabled=config.timeouts_enabled
         self.role_tools = ToolSet()
@@ -317,7 +322,7 @@ class Pipeline:
             for c in self.store.list('candidate') if c['verification']['valid']]
         payload['improvement_policy']=dict(hpo_inside_hypothesis=self.config.hpo_enabled,
             batch_size=self.config.hpo_batch_size,relative_gain=self.config.hpo_gain_threshold,
-            max_trials=self.config.hpo_max_trials,remaining_cycle_seconds=self.cycle_allowance(state['round_number']),
+            max_trials=self.config.hpo_initial_trials,explicit_trial_limit=self.config.hpo_max_trials,remaining_cycle_seconds=self.cycle_allowance(state['round_number']),
             require_evidence=state['round_number']>1,ensembles=True,timeouts_enabled=self.config.timeouts_enabled,
             outer_split_policy='fixed' if self.config.fixed_outer_split else 'reshuffle_each_cycle',
             comparison_policy='Retrain champion code with saved best parameters on this cycle train; compare only on this cycle holdout. Previous-cycle scores are historical, not a promotion threshold.',
@@ -333,7 +338,10 @@ class Pipeline:
         payload['planning_brief']=prepare_planner_context(client=self.client,context=context,profile=profile,
             reports=reports,store=self.store,budget=self.budget,config=self.config,round_number=state['round_number'],
             skills=self.skills.load([],context.task.task_type,role='context_agent'),
-            seconds=max(0,self.budget.snapshot().research_seconds-self.admission_cost()))
+            seconds=max(0,self.budget.snapshot().research_seconds))
+        if state['round_number'] == 1:
+            from .feature_search import prepare_initial_proposal
+            prepare_initial_proposal(self,payload['planning_brief'])
         payload['result_reviews']=self.store.list('result_review',limit=4)
         payload['feature_sets']=self.store.list('feature_registry')
         payload['feature_search_history']=[dict(evidence=e,definition=self.store.get('feature_set',e['feature_set_id']),
@@ -385,6 +393,17 @@ class Pipeline:
         emit('reconnaissance.completed',value)
         return value
 
+    def poll_training_controls(self):
+        """Synchronous inference/refit must not starve another worker's mailbox."""
+        import threading
+        if threading.get_ident() != self._controller_thread:
+            return
+        for job in list(self.sandbox.jobs):
+            if not job.released and (job.directory/'control').is_dir():
+                run = self.store.get('experiment',job.directory.name)
+                if run is not None:
+                    self.training_checkpoints(job,ExperimentRun.model_validate(run))
+
     def training_checkpoints(self,job,run):
         for path in sorted((job.directory/'control').glob('*.request.json')):
             checkpoint=TrainingCheckpoint.model_validate_json(path.read_text(encoding='utf-8'))
@@ -400,11 +419,11 @@ class Pipeline:
                 commit_mailbox(response,cached);continue
             # Poll watchdogs before any potentially blocking API request.
             self.sandbox.reap()
-            remaining=max(0.,min(checkpoint.remaining_seconds,
+            remaining=max(0.,min(checkpoint.remaining_seconds if checkpoint.remaining_seconds is not None else float('inf'),
                 job.seconds-(time.monotonic()-job.started),self.budget.snapshot().research_seconds))
-            live=checkpoint.model_copy(update={'checkpoint_id':key,'remaining_seconds':remaining})
+            live=checkpoint.model_copy(update={'checkpoint_id':key,'remaining_seconds':remaining if self.config.timeouts_enabled else None,
+                                               'timeouts_enabled':self.config.timeouts_enabled})
             seconds=min(self.config.training_control_seconds,remaining) if job.process.poll() is None else 0.
-            if not self.config.timeouts_enabled and job.process.poll() is None:seconds=remaining
             decision=decide(self.client,live,self.skills.load([],self.context.task.task_type,role='training_agent'),seconds=seconds) if seconds>.5 else TrainingDecision(action=checkpoint.default_action,reason='No control budget')
             # A worker timeout may have committed its fallback during the API call.
             decision=TrainingDecision.model_validate(commit_mailbox(response,decision))
@@ -412,21 +431,11 @@ class Pipeline:
             self.store.put('training_decision',key,decision,immutable=True)
             emit('training.decision',dict(checkpoint=key,decision=decision.model_dump(mode='json')))
 
-    def estimate(self,stage,default,cap):
-        values=[r['seconds'] for r in self.store.list('cost') if r['stage']==stage][-8:]
-        return min(cap,max(5.,max(values)*1.35+5 if values else default))
-
     def cycle_allowance(self,round_number):
         available=self.budget.snapshot().research_seconds
         completed=sum(c['completed'] for c in self.store.list('cycle'))
         outstanding=max(1,self.config.target_completed_rounds-completed)
         return max(0.,available/outstanding)
-
-    def admission_cost(self, *, planning=True, advanced=False):
-        return ((self.estimate('planning',120.,self.config.planner_seconds+self.config.validator_seconds+self.config.hypothesis_seconds)
-                 if planning else 0.) + self.estimate('coding',75.,self.config.coding_seconds)+
-                self.estimate('fit',30.,self.config.experiment_seconds if advanced else self.config.initial_experiment_seconds)+
-                2*self.config.prediction_seconds+15)
 
     def planning_call(self,state, *, mode='all', hypotheses=None):
         context = self.restore(state)
@@ -436,22 +445,13 @@ class Pipeline:
             emit('planning.reused',{'key':key})
             return cached
         snapshot=self.budget.snapshot()
-        advanced = (state['round_number']>1 and bool(self.last_submission) and
-                    snapshot.research_seconds>self.config.coding_seconds+self.config.prediction_seconds+1)
-        if isinstance(self.client,RoleClient):
-            minimum=self.admission_cost(advanced=advanced)
-            if snapshot.research_seconds < minimum:
-                emit('planning.not_admitted',{'required_seconds':minimum,'available_seconds':snapshot.research_seconds})
-                return dict(valid=False,plans=[],stop_reason='insufficient_experiment_budget',errors=[{'errors':['Insufficient complete hypothesis budget']}])
+        advanced = state['round_number']>1 and bool(self.last_submission)
         lightweight = not advanced
         if isinstance(self.client,RoleClient):self.client.deadline=self.budget.deadline-self.budget.reserve
         payload=self.planning_payload(state)
         progress=self.store.get('planning_progress',key) or {}
         snapshot=self.budget.snapshot()
-        if advanced:
-            snapshot=snapshot.model_copy(update={'research_seconds':max(0.,snapshot.research_seconds-
-                self.config.coding_seconds-self.config.prediction_seconds)})
-        payload['budget']=snapshot.model_dump()
+        payload['budget']=snapshot.agent_view()
         role_tools=ToolSet()
         role_tools.tools=dict(self.role_tools.tools)
         role_tools.register('read_skills',self.read_missing_planning_skills,'Read only missing backend/technique contracts; core instructions are already supplied.')
@@ -459,9 +459,6 @@ class Pipeline:
             role_tools.tools.pop('read_history',None)
         emit('planning.policy',dict(lightweight=lightweight,mode=mode,budget=payload['budget']))
         candidate_limit=1 if mode == 'initial' else self.config.max_candidates
-        if self.config.target_completed_rounds and self.cycle_allowance(state['round_number'])<2*self.admission_cost(advanced=advanced):
-            candidate_limit=1
-            emit('planning.single_candidate_budget',dict(reason='protect_required_cycles'))
         graph = build_planning_graph(self.client,context,self.tools,self.skills,snapshot,
             self.config.max_attempts,candidate_limit,role_tools,
             known_candidates={c['candidate_id'] for c in self.store.list('candidate') if c['verification']['valid']},
@@ -479,13 +476,6 @@ class Pipeline:
             started=time.monotonic()
             output=graph.invoke(initial,{'recursion_limit':100})
             self.store.put('cost',uuid.uuid4().hex,dict(stage='planning',seconds=time.monotonic()-started))
-        if self.config.target_completed_rounds:
-            # A second idea is optional; preserve time for later feedback cycles.
-            allowance=self.cycle_allowance(state['round_number'])
-            if allowance<2*self.admission_cost(advanced=advanced):
-                from .search_groups import limit_parent_groups
-                output['plans']=limit_parent_groups(output.get('plans',[]),1)
-                emit('planning.alternative_deferred',dict(reason='protect_required_cycles',allowance=allowance))
         for group in output.get('groups',[]):
             identity=f"r{state['round_number']}-"+group['hypothesis']['hypothesis_id']
             old=self.store.get('search_group',identity)
@@ -515,8 +505,7 @@ class Pipeline:
                 self.store.event('planning_failed',f"r{state['round_number']}",output.get('errors',[]))
                 if ensemble['plans']:
                     return dict(plans=ensemble['plans'],stop_reason=None,planning_attempt=0,deferred_hypotheses=None)
-                if (output.get('stop_reason')!='insufficient_experiment_budget' and
-                    'budget exceeded' not in json.dumps(output.get('errors',[])).lower() and self.can_retry_planning(state)):
+                if ('budget exceeded' not in json.dumps(output.get('errors',[])).lower() and self.can_retry_planning(state)):
                     previous=dict(state.get('selected',{}))
                     previous['failures']=(previous.get('failures',[])+[dict(stage='planning',
                         round_number=state['round_number'],errors=output.get('errors',[]))])[-10:]
@@ -547,12 +536,12 @@ class Pipeline:
     def can_retry_round(self,state):
         return ((self.config.continuous or self.config.target_completed_rounds>0) and
                 (self.config.max_rounds is None or state['round_number']<self.config.max_rounds) and
-                self.budget.snapshot().research_seconds>=self.admission_cost())
+                self.budget.snapshot().research_seconds>.5)
 
     def can_retry_planning(self,state):
         return ((self.config.max_rounds is None or state['round_number']<=self.config.max_rounds) and
                 state.get('planning_attempt',0)+1<self.config.max_attempts and
-                self.budget.snapshot().research_seconds>=self.admission_cost())
+                self.budget.snapshot().research_seconds>.5)
 
     def prepare(self,plan,round_id,*,feedback=None, prior=None, coding_config=None):
         with bind(hypothesis_id=plan.hypothesis.hypothesis_id,round_id=round_id), span('coding'):
@@ -579,11 +568,6 @@ class Pipeline:
                 report=verify_source(Path(candidate.code_dir))
                 if not report.valid:raise ValueError('Stored candidate violates current source policy; start a new run: '+ '; '.join(report.errors))
                 return candidate
-        if isinstance(self.client,RoleClient) and feedback is None:
-            required=self.admission_cost(planning=False,advanced=round_id!='r1')
-            if self.budget.snapshot().research_seconds < required:
-                self.store.event('coding_not_admitted',plan.hypothesis.hypothesis_id,dict(required_seconds=required))
-                return None
         previous = None
         if plan.hypothesis.based_on or prior:
             previous_candidate = prior or self.store.get('candidate',plan.hypothesis.based_on)
@@ -605,7 +589,8 @@ class Pipeline:
         if plan.ensemble_sources:
             from .ensemble_planning import bundle_components
             bundle_components(plan,self.store,workspace)
-        graph = build_coding_graph(self.client,workspace=workspace,store=self.store,plan=plan,plan_ref=plan_ref,
+        from .concurrency import AssignmentClient
+        graph = build_coding_graph(AssignmentClient(self.client,self._cancel),workspace=workspace,store=self.store,plan=plan,plan_ref=plan_ref,
             skill_data=skills,tools=self.tools,context=self.context,sandbox=self.sandbox,budget=self.budget,
             config=coding_config or self.config,round_id=round_id,previous=previous,runtime_feedback=feedback,preprocessing_skills=preprocessing_skills)
         output = graph.invoke({'payload':dict(plan=plan.model_dump(mode='json'),task=self.context.task.model_dump(mode='json'),
@@ -644,9 +629,12 @@ class Pipeline:
         return predictions
 
     def publish(self,champion):
-        if (self.config.cycle_full_refit and champion.run.role == 'evaluation' and self.last_submission and
-                self.last_submission.get('model_role') == 'submission_refit'):
-            return None  # Keep the latest full-data answer safe while the next cycle runs.
+        if self.config.cycle_full_refit and champion.run.role == 'evaluation':
+            if not self.last_submission or self.last_submission.get('model_role') != 'submission_refit':
+                report = self.refit_submission(champion,round_id=champion.run.round_id,
+                    experiment_id=champion.run.experiment_id+'-first-submission-refit')
+                return SubmissionArtifact.model_validate(report['artifact']) if report.get('status')=='passed' else None
+            return None
         return self.publish_model(champion.candidate, champion.plan, champion.run)
 
     def publish_model(self,candidate,plan,run):
@@ -776,18 +764,9 @@ class Pipeline:
         group_skips=[]
 
         def group_remaining(plan):
-            if not self.config.timeouts_enabled or plan.search_group_kind=='single':
-                return float('inf')
-            key=round_id+'-'+plan.search_group_id
-            window=self.store.get('search_group_budget',key)
-            if window is None:
-                count=3 if plan.search_group_kind=='family' else (4 if 'regression' in context.task.task_type else 3)
-                allowance=count*(self.config.coding_seconds+plan.time_limit_seconds)
-                if plan.search_group_kind=='family' and self.config.hpo_enabled:allowance+=self.config.hpo_seconds
-                allowance=min(allowance,self.cycle_allowance(state['round_number']),self.budget.snapshot().research_seconds)
-                window=dict(started=self.budget.now(),deadline=self.budget.now()+allowance,allowance_seconds=allowance)
-                self.store.put('search_group_budget',key,window,immutable=True)
-            return max(0.,window['deadline']-self.budget.now())
+            # Independent recipes share the actual run deadline and resource ledger.
+            # No synthetic serial group window is inferred from historical costs.
+            return self.budget.snapshot().research_seconds
 
         def finished(candidate,plan,run,result):
             nonlocal incumbent_ok,champion,promoted
@@ -817,7 +796,7 @@ class Pipeline:
                     self.store.put('experiment',run.experiment_id,run)
                 if (not run.incumbent and plan.search_group_kind!='single' and
                     run.experiment_id not in evaluation_ready and not self.store.get('evaluation',run.experiment_id) and
-                    not (plan.hypothesis.baseline and not self.last_submission)):
+                    not (previous is None and not self.last_submission)):
                     # Family and recipe selection happens entirely on internal metrics.
                     self.store.put('search_group_progress',round_id+'-'+plan.search_group_id,
                         dict(group_id=plan.search_group_id,experiment_ids=[key for key,row in trained.items()
@@ -944,14 +923,14 @@ class Pipeline:
                     req=dict(action='train',code_dir=candidate.code_dir,code_hash=candidate.code_hash,context=self.sanitized_context(train_path),
                         plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent,
                         outer_split_id=split.split_id, outer_train_indices=split.train_indices)
-                    req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_gain_threshold','hpo_seconds')})
+                    req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_startup_trials','hpo_gain_threshold','hpo_seconds')})
                     req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
-                    initial=next((r for r in results if r['candidate']['candidate_id']==candidate.candidate_id and r['plan']['strategy']=='single'),None)
+                    initial=next((r for r in trained.values() if r['candidate']['candidate_id']==candidate.candidate_id and
+                                  r['plan']['strategy']=='single'),None)
                     if initial and initial['run'].get('validation_scope','model')=='model':
-                        req['baseline_score']=initial['run']['internal_score']
+                        source=self.run_dir/'runs'/initial['run']['experiment_id']
+                        req['baseline_evidence']=dict(request_ref=str(source/'request.json'),selection_ref=str(source/'selection.json'))
                     seconds=min(plan.time_limit_seconds,self.config.experiment_seconds,remaining)
-                    if self.config.target_completed_rounds:
-                        seconds=min(seconds,max(10.,self.cycle_allowance(state['round_number'])-2*self.config.prediction_seconds-self.config.diagnostic_seconds-30))
                     if state['round_number']==1 or not self.last_submission:
                         if plan.strategy!='optuna':seconds=min(seconds,self.config.initial_experiment_seconds)
                     with bind(hypothesis_id=plan.hypothesis.hypothesis_id,candidate_id=candidate.candidate_id,experiment_id=experiment_id):
@@ -966,7 +945,10 @@ class Pipeline:
                     candidate,plan,incumbent,repairs=entry
                     result=job.finish(); completed_run=finished(candidate,plan,run,result)
                     active.remove((entry,job,run))
-                    if completed_run.status=='failed' and not incumbent and repairs<self.config.runtime_repairs and self.budget.snapshot().research_seconds>1:
+                    from .recovery import repair_allowed
+                    if (completed_run.status=='failed' and not incumbent and self.budget.snapshot().research_seconds>1 and
+                            repair_allowed(self.store,round_id+':'+plan.hypothesis.hypothesis_id,candidate,plan,
+                                           completed_run.error,repairs,self.config.runtime_repairs)):
                         repair_queue.append((candidate,plan,completed_run.error,repairs))
                 if active: time.sleep(.05)
                 elif pending:
@@ -979,7 +961,7 @@ class Pipeline:
 
         def feature_branch():
             nonlocal feature_handled
-            if feature_handled or not self.last_submission or champion is None:
+            if feature_handled or champion is None:
                 return
             feature_handled = True
             from .feature_search import (run_feature_session, complete_feature_session,
@@ -999,34 +981,56 @@ class Pipeline:
             except Exception as error:
                 self.store.event('feature_session_failed',feature_session_key(round_id),{'error':str(error)[:1500]})
 
-        plans=sorted([HypothesisPlan.model_validate(p) for p in state['plans']],key=lambda p:not p.hypothesis.baseline)
+        plans=sorted([HypothesisPlan.model_validate(p) for p in state['plans']],key=lambda p:(not p.hypothesis.baseline,p.priority))
+        # Preparation shares controller persistence and independent workspaces. Resource leases
+        # remain in the sandbox, including optional smoke workers started by a coder.
+        futures = {}
+        prepared_plans = {}
+        alternative_future = None
+        parallel_prepare = self.config.preparation_workers > 1 and (len(plans)>1 or state.get('deferred_hypotheses'))
+        def queue_preparation(items):
+            queued, assignments = {}, {}
+            for item in items:
+                room = group_remaining(item)
+                limit = min(self.allocated_fit_seconds(item,state['round_number']),room)
+                prepared_plan = item.model_copy(update={'time_limit_seconds':limit}) if limit < item.time_limit_seconds else item
+                assignments[item.hypothesis.hypothesis_id] = prepared_plan
+                config = self.config.model_copy(update=dict(coding_seconds=max(.1,min(self.config.coding_seconds,room))))
+                queued[item.hypothesis.hypothesis_id] = self._preparation_pool.submit(
+                    self.prepare,prepared_plan,round_id,coding_config=config)
+            return queued, assignments
+        if parallel_prepare:
+            from .concurrency import PreparationPool
+            self._preparation_pool = getattr(self,'_preparation_pool',None) or PreparationPool(self.config.preparation_workers)
+            futures,prepared_plans = queue_preparation(plans)
+            if state.get('deferred_hypotheses'):
+                def prepare_alternatives():
+                    output = self.planning_call(state,mode='alternatives',hypotheses=state['deferred_hypotheses'])
+                    items = [HypothesisPlan.model_validate(value) for value in output.get('plans',[])] if output.get('valid') else []
+                    queued,assignments = queue_preparation(items)
+                    return output,queued,assignments
+                alternative_future = self._preparation_pool.submit(prepare_alternatives)
         entries=[]
         if previous:
             from .model_spec import frozen_plan
             incumbent_plan=frozen_plan(previous.plan,previous.run)
             entries.append((previous.candidate,incumbent_plan,True,0))
         for number,plan in enumerate(plans):
+            plan = prepared_plans.get(plan.hypothesis.hypothesis_id,plan)
             if self.budget.snapshot().research_seconds<.5: break
-            if number and self.config.target_completed_rounds and self.cycle_allowance(state['round_number'])<self.admission_cost():
-                self.store.event('alternative_deferred',round_id,dict(reason='protect_required_cycles'));break
             group_room=group_remaining(plan)
-            if group_room<2*self.config.prediction_seconds+.5:
+            if group_room<.5:
                 group_skips.append(dict(group_id=plan.search_group_id,variant_id=plan.hypothesis.hypothesis_id,reason='group_budget_exhausted'))
                 continue
             fit_limit=min(self.allocated_fit_seconds(plan,state['round_number']),group_room)
-            if plan.ensemble_sources and self.config.timeouts_enabled:
-                cost=sum((self.store.get('experiment',s['experiment_id']) or {}).get('duration_seconds',0) for s in plan.ensemble_sources)
-                cost*=4 if plan.model_params.get('method') in {'weighted','stack'} else 1
-                if cost+2*self.config.prediction_seconds>min(self.budget.snapshot().research_seconds,fit_limit):
-                    group_skips.append(dict(group_id=plan.search_group_id,variant_id=plan.hypothesis.hypothesis_id,
-                        method=plan.model_params['method'],reason='insufficient_complete_recipe_budget'))
-                    continue
             if fit_limit<plan.time_limit_seconds:
                 emit('budget.plan_trimmed',dict(hypothesis_id=plan.hypothesis.hypothesis_id,
                     requested_seconds=plan.time_limit_seconds,allocated_seconds=fit_limit))
                 plan=plan.model_copy(update={'time_limit_seconds':fit_limit})
             coding_config=self.config.model_copy(update=dict(coding_seconds=max(.1,min(self.config.coding_seconds,group_room))))
-            try: candidate=self.prepare(plan,round_id,coding_config=coding_config)
+            try:
+                future = futures.get(plan.hypothesis.hypothesis_id)
+                candidate=future.result() if future is not None else self.prepare(plan,round_id,coding_config=coding_config)
             except (GlobalAPIError, WorkerInfrastructureError):
                 raise
             except LLMUnavailable:
@@ -1043,12 +1047,12 @@ class Pipeline:
                     feature_branch()
                     if self.last_submission and self.config.hpo_enabled and plan.strategy=='single' and plan.search_group_kind=='single':
                         space=self.search_space(plan)
-                        if space and self.budget.snapshot().research_seconds>2*self.config.prediction_seconds+30:
+                        if space and self.budget.snapshot().research_seconds>.5:
                             from .model_spec import frozen_plan
                             hpo_base=champion if champion is not None else None
                             hpo_candidate=hpo_base.candidate if hpo_base else candidate
                             hpo_plan=frozen_plan(hpo_base.plan,hpo_base.run) if hpo_base else plan
-                            search=hpo_plan.model_copy(update={'strategy':'optuna','search_space':space,'max_trials':self.config.hpo_max_trials,
+                            search=hpo_plan.model_copy(update={'strategy':'optuna','search_space':space,'max_trials':hpo_plan.hpo_trial_budget or self.config.hpo_initial_trials,
                                 'time_limit_seconds':min(self.config.experiment_seconds,self.config.hpo_seconds*1.35)})
                             from .model_spec import hpo_child
                             parent=hpo_base.run.experiment_id if hpo_base else None
@@ -1059,15 +1063,17 @@ class Pipeline:
                             if parent_row:
                                 from .execution import config_hash
                                 search.base_config_hash=config_hash(parent_row['run'].get('model_spec') or parent_row['run']['best_params'])
-                            process_jobs([(hpo_candidate,search,False,0)])
+                            entries.append((hpo_candidate,search,False,0))
                 else: entries.append(entry)
             elif plan.search_group_id:
                 group_skips.append(dict(group_id=plan.search_group_id,variant_id=plan.hypothesis.hypothesis_id,reason='coding_failed_or_not_admitted'))
             if number==0 and state.get('deferred_hypotheses'):
-                if self.config.target_completed_rounds and self.cycle_allowance(state['round_number'])<self.admission_cost():
-                    self.store.event('alternative_deferred',round_id,dict(reason='protect_required_cycles'));continue
                 try:
-                    alternative=self.planning_call(state,mode='alternatives',hypotheses=state['deferred_hypotheses'])
+                    if alternative_future is not None:
+                        alternative,queued,assignments=alternative_future.result()
+                        futures.update(queued);prepared_plans.update(assignments)
+                    else:
+                        alternative=self.planning_call(state,mode='alternatives',hypotheses=state['deferred_hypotheses'])
                     if alternative.get('valid'):
                         plans.extend(HypothesisPlan.model_validate(p) for p in alternative['plans'])
                 except (GlobalAPIError, WorkerInfrastructureError):
@@ -1075,7 +1081,7 @@ class Pipeline:
                 except (LLMUnavailable,ValueError) as error:
                     emit('planning.alternative_failed',{'error':str(error)})
         process_jobs(entries)
-        if previous is None and not initial_sweep:
+        if previous is None:
             feature_branch()
         from .search_groups import collect_groups, internal_winner
         group_results=[]
@@ -1089,10 +1095,10 @@ class Pipeline:
             winner=internal_winner(members(),context.task.metric_direction)
             if winner and group.kind=='family' and self.config.hpo_enabled:
                 selected_plan=HypothesisPlan.model_validate(winner['plan'])
-                if selected_plan.search_space and min(group_remaining(selected_plan),self.budget.snapshot().research_seconds)>2*self.config.prediction_seconds+30:
+                if selected_plan.search_space and min(group_remaining(selected_plan),self.budget.snapshot().research_seconds)>.5:
                     from .model_spec import hpo_child
                     search=hpo_child(selected_plan,winner['run']['experiment_id'])
-                    search.strategy='optuna';search.max_trials=self.config.hpo_max_trials
+                    search.strategy='optuna';search.max_trials=selected_plan.hpo_trial_budget or self.config.hpo_initial_trials
                     search.time_limit_seconds=min(self.config.experiment_seconds,self.config.hpo_seconds*1.35,group_remaining(selected_plan))
                     search.hypothesis.based_on=winner['candidate']['candidate_id']
                     search.intervention.base_candidate_id=winner['candidate']['candidate_id']
@@ -1133,10 +1139,7 @@ class Pipeline:
 
     def allocated_fit_seconds(self,plan,round_number):
         available=self.budget.snapshot().research_seconds
-        room=max(5.,available-self.estimate('coding',75.,self.config.coding_seconds)-2*self.config.prediction_seconds-15)
-        if self.config.target_completed_rounds:
-            room=min(room,max(5.,self.cycle_allowance(round_number)*.45))
-        return min(plan.time_limit_seconds,self.config.experiment_seconds,room)
+        return min(plan.time_limit_seconds,self.config.experiment_seconds,max(0.,available))
 
     def search_space(self,plan):
         # Generated implementations own their constructor contract; never guess parameters.
@@ -1267,6 +1270,7 @@ class Pipeline:
         if champion and not current_full and self.budget.snapshot().remaining_seconds>self.config.prediction_seconds+2:
             self.refit_submission(champion, round_id='final', experiment_id='final-refit', final=True)
         output=dict(status='completed' if self.last_submission else 'failed',stop_reason=state.get('stop_reason') or 'finished',
+            result_available=bool(self.last_submission and self.last_submission.get('model_role')=='submission_refit'),
             submission=self.last_submission,champion=state.get('champion'),run_dir=str(self.run_dir),
             trace=str(self.run_dir/'trace.md'),first_submission=self.store.get('milestone','first_submission'))
         output['failure_causes']=self.failure_causes()
@@ -1277,7 +1281,9 @@ class Pipeline:
         output['warnings']=self.store.list('warning')
         output['process_acceptance']=dict(target_completed_rounds=self.config.target_completed_rounds,
             completed_rounds=sum(c['completed'] for c in self.store.list('cycle')),
-            completed_optuna_trials=sum(t['status']=='completed' and t['kind']=='optuna'
+            imported_baselines=sum(t.get('origin')=='baseline'
+                for run in self.store.list('experiment') for t in run['trials']),
+            completed_optuna_trials=sum(t['status']=='completed' and t['kind']=='optuna' and t.get('origin')!='baseline'
                 for run in self.store.list('experiment') if not run['incumbent'] for t in run['trials']))
         acceptance=output['process_acceptance']
         acceptance['passed']=(acceptance['completed_rounds']>=self.config.target_completed_rounds and
@@ -1357,22 +1363,46 @@ class Pipeline:
             emit('run.failed',output)
             return output
         except KeyboardInterrupt:
+            self._cancel.set()
+            if isinstance(self.client,RoleClient): self.client.cancel_event.set()
+            if self._preparation_pool is not None: self._preparation_pool.close()
+            if isinstance(self.sandbox,SandboxManager):
+                for job in self.sandbox.jobs:
+                    if job.process.poll() is None: job.reason='external_stop'
+            self.sandbox.close()
+            active_studies=[]
+            for kind in ('experiment','submission_refit'):
+                for record in self.store.list(kind):
+                    if record.get('status')=='running':
+                        directory=self.run_dir/'runs'/record['experiment_id']/'hpo'
+                        if directory.is_dir(): active_studies.append(directory)
+                        record.update(status='interrupted',stop_reason='external_stop')
+                        self.store.put(kind,record['experiment_id'],record)
             submission_champion = (self.store.get('submission_champion', self.last_submission['experiment_id'])
                                    if self.last_submission else None)
-            output = dict(status='completed' if self.last_submission else 'interrupted', stop_reason='external_stop',
+            output = dict(status='interrupted', stop_reason='external_stop',
+                result_available=bool(self.last_submission and self.last_submission.get('model_role')=='submission_refit'),
                 submission=self.last_submission, champion=submission_champion or self.store.get('champion','current'),
                 first_submission=self.store.get('milestone','first_submission'), failure_causes=self.failure_causes(),
                 run_dir=str(self.run_dir), trace=str(self.run_dir/'trace.md'))
             atomic_json(self.run_dir/'summary.json', output)
             emit('run.stopped', output)
+            from .hpo import interrupt_search
+            for directory in active_studies:
+                try: interrupt_search(directory,'external_stop')
+                except Exception as error:
+                    self.store.event('stop_accounting_failed',str(directory),dict(error=str(error)))
             return output
         except Exception as error:
-            output=dict(status='completed' if self.last_submission else 'failed',stop_reason='worker_runtime_error' if isinstance(error,WorkerRuntimeError) else 'error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())
+            output=dict(status='failed',stop_reason='worker_runtime_error' if isinstance(error,WorkerRuntimeError) else 'error',error=self.trace.scrub(str(error)),submission=self.last_submission,run_dir=str(self.run_dir),trace=str(self.run_dir/'trace.md'),failure_causes=self.failure_causes())
             emit('run.error',output)
-            emit('run.completed' if self.last_submission else 'run.failed',output)
+            emit('run.failed',output)
             atomic_json(self.run_dir/'summary.json',output)
             return output
         finally:
+            self._cancel.set()
+            if isinstance(self.client,RoleClient): self.client.cancel_event.set()
+            if self._preparation_pool is not None: self._preparation_pool.close()
             try:
                 self.sandbox.close()
             finally:

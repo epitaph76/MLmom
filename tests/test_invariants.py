@@ -143,17 +143,19 @@ class InvariantTests(unittest.TestCase):
             self.assertTrue(any(r['status']=='completed' and r['role']=='evaluation' for r in store.list('experiment')))
             self.assertEqual(client.code_calls,2);store.close()
 
-    def test_failed_full_refit_preserves_valid_split_submission(self):
+    def test_failed_full_refit_retains_evaluation_evidence_without_publishing_it_as_final(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);task=dataset(root/'input')
             cfg=RunConfig(timeouts_enabled=True,hpo_enabled=False,diagnostic_seconds=0,total_seconds=150,final_reserve_seconds=20,prediction_seconds=10,smoke_seconds=15,max_rounds=1)
             with patch('mlmom.pipeline.installed_tools',only_sklearn):result=CustomCandidatePipeline(task,cfg,run_dir=root/'run',client=RepairLLM(refit_failure=True)).run()
-            self.assertEqual(result['status'],'completed',result)
-            self.assertEqual(result['submission']['model_role'],'evaluation')
+            self.assertEqual(result['status'],'failed',result)
+            self.assertIsNone(result['submission'])
             self.assertFalse(result['process_acceptance']['passed'])
             self.assertFalse(result['process_acceptance']['full_data_submission'])
-            self.assertEqual(file_hash(Path(result['submission']['path'])),result['submission']['sha256'])
-            store=ExperimentStore(root/'run');self.assertEqual(store.get('experiment','final-refit')['status'],'failed');store.close()
+            self.assertFalse((task.parent/'submission.csv').exists())
+            store=ExperimentStore(root/'run')
+            self.assertTrue(store.list('evaluation'))
+            self.assertEqual(store.get('experiment','final-refit')['status'],'failed');store.close()
 
     def test_cpu_affinity_is_disjoint_and_worker_keys_are_removed(self):
         from mlmom.resources import Budget

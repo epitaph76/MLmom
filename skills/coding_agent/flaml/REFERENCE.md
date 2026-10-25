@@ -31,7 +31,7 @@ class Candidate:
                 writer.append(0, None, 0., 0., frozen['validation_loss'], frozen['config'], frozen['estimator'], len(X))
             automl.retrain_from_log(str(log), X_train=X, y_train=labels, record_id=0,
                 train_full=True, task=task, n_jobs=context.cpus,
-                time_budget=max(.1, context.remaining_seconds))
+                time_budget=max(.1, (context.remaining_seconds if context.timeouts_enabled else context.time_limit_seconds)))
             self.frozen = frozen
             self.history = {'mode':'fixed_configuration', 'new_trials':0}
         else:
@@ -40,7 +40,7 @@ class Candidate:
             metric = {'f1_macro':'macro_f1', 'macro_f1':'macro_f1'}.get(context.metric, context.metric)
             validation_y = self.encoder.transform(np.asarray(context.validation_y)) if self.encoder is not None else context.validation_y
             automl.fit(X_train=X, y_train=labels, X_val=context.validation_X, y_val=validation_y,
-                task=task, metric=metric, time_budget=max(.1, context.remaining_seconds),
+                task=task, metric=metric, time_budget=max(.1, (context.remaining_seconds if context.timeouts_enabled else context.time_limit_seconds)),
                 n_jobs=context.cpus, seed=context.seed, estimator_list=['lgbm','extra_tree'],
                 max_iter=self.config.get('max_trials',15), eval_method='holdout',
                 ensemble=False, retrain_full=False, verbose=0, **params)

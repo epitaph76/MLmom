@@ -194,6 +194,10 @@ class CSVTools:
         saved = self.store.get('csv_result', identity)
         if saved:
             return saved
+        failure = self.store.get('csv_failure', identity)
+        if failure:
+            from .tools import ToolInputError
+            raise ToolInputError(failure['reason'],code='csv_calculation_failed',hint=failure['hint'],artifacts=failure['artifacts'])
         seconds = min(self.query_seconds, self.deadline-self.budget.now(), self.budget.snapshot().research_seconds)
         if not getattr(self.budget,'timeouts_enabled',True):
             from .time_policy import UNBOUNDED_SECONDS
@@ -215,6 +219,8 @@ class CSVTools:
             # Preserve the last backend exception, without feeding the full traceback back to the role.
             lines = [line.strip() for line in str(detail).splitlines() if line.strip()]
             reason = next((line for line in reversed(lines) if 'Error:' in line),lines[-1] if lines else 'CSV calculation failed')
+            hint += ' Re-read list_tables for missing columns and their actual dtypes. Use explicit casts and matching aliases in every UNION branch; use identifier equality JOIN keys prepared in derived tables.'
+            self.store.put('csv_failure',identity,dict(reason=reason[:700],hint=hint,artifacts=[str(error_path)]))
             raise ToolInputError(reason[:700],code='csv_calculation_failed',hint=hint,artifacts=[str(error_path)])
         result = {k:v for k,v in result.items() if k not in {'duration_seconds','peak_memory_gb'}}
         result['source_ref'] = 'csv:'+identity

@@ -9,19 +9,20 @@ Objects implement fit(X,y,context), predict(X,prediction_spec), save(artifact_di
 preprocessing.py exports create_preprocessor(config), returning fit_transform(X,y,context)
 and transform(X). Keep rows/order and fresh train-fitted state for every fold/refit.
 Runtime owns target/weight/prediction policies; do not apply them twice.
+SDK appends feature programs/DSL once, with fold train labels and saved transform state.
 
 FitContext provides task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds,
 remaining_seconds, timeouts_enabled, classes, groups, sample_weight, validation_X/y,
 validation_groups/weight and work_dir. Use attributes. Threads use context.cpus.
-Only check a deadline when timeouts_enabled. Workers receive no outer labels or LLM keys.
+Only enforce deadlines when timeouts_enabled. Agent JSON remaining_seconds=null means unbounded time. Native search budgets use the agent-assigned time_limit_seconds; never pass infinity to a library. Workers receive no outer labels or LLM keys.
 
-export_model_params is optional: return a finite JSON object for later refit. If absent,
-the runner uses the executed trial parameters. fitted_components is not required.
-There is no estimator audit or mandatory export/recreate. check_source checks syntax and
-factories; run_smoke_check is optional. Real errors are returned with a traceback for repair.
-load_candidate should return the restored object without nominal class identity checks.
+Optional export_model_params returns finite JSON; otherwise refit uses executed parameters.
+No fitted_components, audit or export/recreate requirement. check_source checks syntax/factories;
+smoke is optional. Errors return with traceback. Load objects without nominal class checks.
 
 Preserve prediction kind/class order. Save portable state; inference uses saved transforms.
 Stacking uses OOF base predictions and fold-local preprocessing; fit_stack receives raw X
 and create_preprocessor. Persist wrapped bases/meta learner; stack predict also takes raw X.
 CatBoost after_iteration returns True to continue and False to stop.
+
+Search-group metadata is controller-owned/read-only; FitContext.groups means validation rows.

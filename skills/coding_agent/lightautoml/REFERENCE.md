@@ -5,7 +5,7 @@
 from lightautoml.automl.presets.tabular_presets import TabularAutoML
 from lightautoml.tasks import Task
 # Exact objective mappings: regression=rmse, binary=roc_auc, multiclass=log_loss.
-self.model = TabularAutoML(task=Task('reg'), timeout=max(1.,context.remaining_seconds),
+self.model = TabularAutoML(task=Task('reg'), timeout=max(1.,(context.remaining_seconds if context.timeouts_enabled else context.time_limit_seconds)),
     cpu_limit=context.cpus, memory_limit=max(1,int(context.memory_gb)), gpu_ids='',
     general_params={'use_algos':[['lgb','cb']]}, reader_params={'cv':3,'random_state':context.seed})
 train = X.assign(__target__=np.asarray(y))

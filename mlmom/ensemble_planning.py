@@ -1,5 +1,6 @@
 """A separate ensemble proposal, using only frozen sources from completed cycles."""
 from pathlib import Path
+from concurrent.futures import CancelledError
 import shutil
 
 from .agents import GlobalAPIError, LLMUnavailable, StructuredOutputError, role_window
@@ -30,8 +31,8 @@ def plan_ensemble(pipeline, state):
     if len(pool) < 2:
         return finish(plans=[], reason='fewer_than_two_compatible_components')
     snapshot = pipeline.budget.snapshot()
-    if snapshot.timeouts_enabled and snapshot.research_seconds < pipeline.admission_cost():
-        return finish(plans=[], reason='insufficient_complete_ensemble_budget')
+    if snapshot.timeouts_enabled and snapshot.research_seconds <= .5:
+        return finish(plans=[], reason='research_deadline')
     try:
         proposal = pipeline.store.get('ensemble_proposal',key)
         if proposal is None:
@@ -53,9 +54,12 @@ def plan_ensemble(pipeline, state):
                             'Select two or three complementary saved SINGLE model experiments for one ensemble hypothesis. '
                             'Use only supplied experiment IDs. No recursive ensembles. Consider diversity, evidence and cost; '
                             'historical scores with different split IDs are not comparable. Return skip=true with a reason '
-                            'when no defensible composition exists. Return only component_experiment_ids, rationale and skip; '
+                            'when appropriate. Source duration_seconds is historical experiment wall time, possibly a whole '
+                            'HPO study; do not treat its sum as frozen-refit wall time. Actual resource scheduling owns overlap. '
+                            'when no defensible composition exists. Explicitly select methods (mean, median, weighted, stack), '
+                            'oof_folds and weight_trials when relevant, plus component_experiment_ids, rationale and skip; '
                             'put any skip explanation in rationale. Do not train, write code or select on current holdout labels.',
-                            dict(task=context.task.model_dump(mode='json'), budget=snapshot.model_dump(),
+                            dict(task=context.task.model_dump(mode='json'), budget=snapshot.agent_view(),
                                  components=[component_brief(row) for row in preview],total_components=len(pool),
                                  validation_feedback=feedback,
                                  skill_instructions=pipeline.skills.load([],context.task.task_type,role='ensemble_agent')),
@@ -79,23 +83,40 @@ def plan_ensemble(pipeline, state):
             plan = frozen_plan(HypothesisPlan.model_validate(row['plan']),ExperimentRun.model_validate(row['run']))
             sources.append(dict(name=f'base_{index}', candidate_id=row['candidate']['candidate_id'],
                 experiment_id=experiment_id, code_hash=row['candidate']['code_hash'], config=plan.model_dump(mode='json')))
-        hypothesis = Hypothesis(hypothesis_id=key+'-ensemble',kind='ensemble',
-            description='Compare combinations of complementary frozen model implementations',rationale=proposal.rationale)
-        payload = pipeline.planning_payload(state)
-        payload.update(ensemble_sources=sources,ensemble_weight_trials=pipeline.config.hpo_max_trials)
-        progress = pipeline.store.get('ensemble_planning_progress',key) or {}
-        graph = build_planning_graph(pipeline.client,context,pipeline.tools,pipeline.skills,snapshot,
-            max_attempts=pipeline.config.max_attempts,max_candidates=1,lightweight=False,
-            evaluation_reserve_seconds=2*pipeline.config.prediction_seconds,
-            planner_seconds=pipeline.config.planner_seconds,validator_seconds=pipeline.config.validator_seconds,
-            saved_progress=progress,save_progress=lambda p:pipeline.store.put('ensemble_planning_progress',key,p))
-        result = graph.invoke(dict(payload=payload,hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]}),
-                              {'recursion_limit':100})
-        if not result.get('valid'):
-            return finish(plans=[],reason='ensemble_plan_rejected',errors=result.get('errors',[]))
-        group = ensemble_recipes(HypothesisPlan.model_validate(result['plans'][0]),context.task.task_type)
-        pipeline.store.put('search_group',key+'-'+group.hypothesis.hypothesis_id,group)
-        return finish(plans=[p.model_dump(mode='json') for p in group.variants],reason='planned')
+        parent = Hypothesis(hypothesis_id=key+'-ensemble',kind='ensemble',
+            description='Agent-selected recipes of complementary frozen models',rationale=proposal.rationale)
+        plans, errors = [], []
+        for method in dict.fromkeys(proposal.methods):
+            try:
+                hypothesis = parent.model_copy(update={'hypothesis_id':key+'-ensemble-'+method,
+                    'description':f'Fit the selected {method} recipe with frozen components'})
+                payload = pipeline.planning_payload(state)
+                recipe = dict(method=method)
+                if method in {'weighted','stack'}: recipe['oof_folds']=proposal.oof_folds
+                if method == 'weighted': recipe['weight_trials']=proposal.weight_trials
+                payload.update(ensemble_sources=sources,ensemble_recipe=recipe,
+                               ensemble_weight_trials=proposal.weight_trials)
+                progress_key = key+':'+method
+                progress = pipeline.store.get('ensemble_planning_progress',progress_key) or {}
+                graph = build_planning_graph(pipeline.client,context,pipeline.tools,pipeline.skills,snapshot,
+                    max_attempts=pipeline.config.max_attempts,max_candidates=1,lightweight=False,
+                    evaluation_reserve_seconds=2*pipeline.config.prediction_seconds,
+                    planner_seconds=pipeline.config.planner_seconds,validator_seconds=pipeline.config.validator_seconds,
+                    group_parent=parent,
+                    saved_progress=progress,save_progress=lambda value,k=progress_key:pipeline.store.put('ensemble_planning_progress',k,value))
+                result = graph.invoke(dict(payload=payload,hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]}),
+                                      {'recursion_limit':100})
+                if not result.get('valid'):
+                    errors.extend(dict(error, method=method) for error in result.get('errors',[]))
+                    continue
+                plans.append(result['plans'][0])
+            except (GlobalAPIError, WorkerInfrastructureError, CancelledError):
+                raise
+            except Exception as error:
+                failure = dict(method=method, error=str(error)[:2000], error_type=type(error).__name__)
+                pipeline.store.event('ensemble_recipe_failed',key+':'+method,failure)
+                errors.append(failure)
+        return finish(plans=plans,reason='planned' if plans else 'ensemble_plan_rejected',errors=errors)
     except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except (LLMUnavailable,ValueError) as error:
