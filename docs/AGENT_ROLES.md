@@ -50,7 +50,7 @@ Planner возвращает PlannerPlan без search_group_id/search_group_kin
 HypothesisPlan с производными полями для scheduler/store. Историческое происхождение
 эксперимента остаётся в based_on/based_on_hypothesis_id. Ошибки отдельного рецепта
 ансамбля сохраняются в ensemble_recipe_failed; остальные выбранные рецепты продолжаются.
-Версия групп введена в v4; текущая session runtime_contract_version=6.
+Версия групп введена в v4; текущая session runtime_contract_version=7.
 Детали: [CONTROLLER_GROUPS_RU.md](CONTROLLER_GROUPS_RU.md).
 
 ## Длительности и замены признаков v5
@@ -67,3 +67,10 @@ Feature Agent пишет programs с create_features(config), fit_transform(X,y,
 transform(X). DSL необязателен, лимита 16 колонок нет. Разрешены supervised-признаки
 на fold train с корректным исключением собственной метки/cross-fitting. SDK исполняет
 и сохраняет модули вместе с моделью. Подробности: [PYTHON_FEATURE_PROGRAMS_RU.md](PYTHON_FEATURE_PROGRAMS_RU.md).
+
+## Факты исполнения v7
+
+Все роли получают актуальную конфигурацию и наблюдаемые сведения SDK отдельно от
+исторического baseline и мнений reviewer. Полные планы наследуют champion до review;
+удаление признаков задаётся явно. Ссылки evidence формируются из читаемых материалов.
+Подробности и replay diamonds: [EXECUTION_FACTS_RU.md](EXECUTION_FACTS_RU.md).

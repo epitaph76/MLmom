@@ -78,6 +78,13 @@ class ExperimentStore:
             rows = self.db.execute('SELECT body FROM objects WHERE kind=? ORDER BY rowid DESC LIMIT ?', (kind, limit)).fetchall()
         return [json.loads(row[0]) for row in reversed(rows)]
 
+    def items(self, kind: str, *, limit: int = 1000) -> list[tuple[str, dict]]:
+        """Retain store identities for evidence whose body has no ID field."""
+        with self.lock:
+            rows=self.db.execute('SELECT id,body FROM objects WHERE kind=? ORDER BY rowid DESC LIMIT ?',
+                                 (kind,limit)).fetchall()
+        return [(key,json.loads(body)) for key,body in reversed(rows)]
+
     def event(self, kind: str, key: str, value: Any) -> None:
         from .tracing import emit, current_sink
         sink=current_sink()

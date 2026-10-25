@@ -50,11 +50,13 @@ class FrozenEnsemble:
         c = replace(context, groups=take(context.groups), sample_weight=take(context.sample_weight),
             validation_X=None, validation_y=None, validation_groups=None, validation_weight=None,
             runtime_policies_applied=False, fit_rows=len(X),
-            fit_id=context.fit_id if final else uuid.uuid4().hex,
+            fit_id=uuid.uuid4().hex, parent_fit_id=context.fit_id, component_name=source['name'],
             started=time.monotonic(), time_limit_seconds=max(.1, context.remaining_seconds),
             work_dir=str(Path(context.work_dir)/source['name']/tag))
         Path(c.work_dir).mkdir(parents=True, exist_ok=True)
         model.fit(X, y, c)
+        from .execution_facts import record_fit
+        record_fit(model, config, c)
         if final:
             self.params[source['name']] = export_params(model, config['model_params'])
         return model

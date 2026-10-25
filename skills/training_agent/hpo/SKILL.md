@@ -4,6 +4,11 @@ description: Configure persistent batched Optuna inside a hypothesis, without re
 ---
 # HPO
 
+execution_context supplies the configuration and completed fit observations separately from
+scores. Registered SDK programs may contain learned representations; do not infer composition
+from the estimator name or historical reviewer prose. Facts keep trial/fold/split/stage identity.
+Missing facts are unknown. No extra fit or audit is required to obtain metadata.
+
 After first valid submission, strategy=optuna uses the shared runner. fit trains supplied model_params once. Search specs: {'type':'float','low':.01,'high':.15,'log':True}, {'type':'int','low':3,'high':8}, {'type':'categorical','choices':[...]}.
 
 One persistent study per implementation, data split, metric and space. Defaults: batches of 5, an agent-assigned initial trial budget (default 15); time deadlines apply only when enabled. The default programmatic policy continues only after >=0.5% relative primary-metric improvement per batch. Smaller improvements still update the best checkpoint. min_delta=0 is correct; it is not the batched hpo_gain_threshold. Trials and batch decisions persist immediately; resume keeps the original deadline. HPO batches do NOT create new hypotheses or coder calls.

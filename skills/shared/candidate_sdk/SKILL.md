@@ -4,6 +4,9 @@ description: Fold-local preprocessing, estimators and reproducible ModelSpec exp
 ---
 # Candidate SDK
 
+Runtime v7 records FitExecutionFacts. execution_context separates config/facts/scores
+from historical prose. Missing manifests are unknown; candidate APIs are unchanged.
+
 candidate.py exports create_candidate(config) and load_candidate(artifact_dir).
 Objects implement fit(X,y,context), predict(X,prediction_spec), save(artifact_dir).
 preprocessing.py exports create_preprocessor(config), returning fit_transform(X,y,context)
@@ -14,7 +17,7 @@ SDK appends feature programs/DSL once, with fold train labels and saved transfor
 FitContext provides task_type, metric, direction, seed, cpus, memory_gb, time_limit_seconds,
 remaining_seconds, timeouts_enabled, classes, groups, sample_weight, validation_X/y,
 validation_groups/weight and work_dir. Use attributes. Threads use context.cpus.
-Only enforce deadlines when timeouts_enabled. Agent JSON remaining_seconds=null means unbounded time. Native search budgets use the agent-assigned time_limit_seconds; never pass infinity to a library. Workers receive no outer labels or LLM keys.
+Enforce deadlines only when timeouts_enabled; remaining_seconds=null means unbounded time. Native search budgets use time_limit_seconds; never pass infinity to a library. Workers receive no outer labels or LLM keys.
 
 Optional export_model_params returns finite JSON; otherwise refit uses executed parameters.
 No fitted_components, audit or export/recreate requirement. check_source checks syntax/factories;

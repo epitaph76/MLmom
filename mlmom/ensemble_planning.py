@@ -5,7 +5,8 @@ import shutil
 
 from .agents import GlobalAPIError, LLMUnavailable, StructuredOutputError, role_window
 from .resources import WorkerInfrastructureError
-from .pipeline_contracts import EnsembleProposal, Hypothesis, HypothesisPlan, ExperimentRun
+from .pipeline_contracts import EnsembleProposal, Hypothesis, HypothesisPlan, ExperimentRun, Champion
+from .planning_context import champion_snapshot
 from .planning import build_planning_graph
 from .search_groups import SUPERVISED, component_pool, component_brief, ensemble_recipes
 from .model_spec import frozen_plan
@@ -60,6 +61,7 @@ def plan_ensemble(pipeline, state):
                             'oof_folds and weight_trials when relevant, plus component_experiment_ids, rationale and skip; '
                             'put any skip explanation in rationale. Do not train, write code or select on current holdout labels.',
                             dict(task=context.task.model_dump(mode='json'), budget=snapshot.agent_view(),
+                                 champion=champion_snapshot(Champion.model_validate(state['champion']),pipeline.store) if state.get('champion') else None,
                                  components=[component_brief(row) for row in preview],total_components=len(pool),
                                  validation_feedback=feedback,
                                  skill_instructions=pipeline.skills.load([],context.task.task_type,role='ensemble_agent')),

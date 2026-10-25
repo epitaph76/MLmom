@@ -4,7 +4,9 @@ description: Keep model selection inside supplied training data and form valid g
 ---
 # Plan validator
 
-Review one executable plan against execution_contract: fold-local base preprocessing then
+Read configuration_diff and execution_context; missing observations are unknown.
+
+Review the controller-resolved plan against execution_contract: fold-local base preprocessing then
 SDK feature augmentation. Historical prose does not prohibit active features. Review the
 selected recipe; mean/median have no weight search/OOF. Do not rewrite frozen components
 to fix stale prose. Reject with valid=false and actionable errors; reasons/quotes are agent-owned.

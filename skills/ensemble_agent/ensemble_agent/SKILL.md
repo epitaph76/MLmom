@@ -4,6 +4,12 @@ description: Select complementary frozen single-model implementations from compl
 ---
 # Ensemble composition
 
+Each component.execution_context supplies its frozen current configuration, SDK feature
+programs and observed fits with their stages/splits. Champion has the same view. A Ridge
+with a trained GBM representation already contains nonlinear learned features; do not infer
+diversity from estimator names or historical hypothesis descriptions. Missing manifests are
+unknown. Submission-refit observations are distinct from scored evaluation fits.
+
 Select two or three distinct supplied experiment IDs, or explicitly skip with a reason.
 Only verified single candidates from completed earlier cycles are eligible. A model
 that lost a family comparison may still supply complementary predictions. Consider

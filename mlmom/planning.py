@@ -15,6 +15,7 @@ from .model_spec import normalize_protocol, constant_space, apply_overrides, Int
 from .planning_assignments import normalize_cpu_hints
 from .planning_retries import PlanningRejections
 from .execution_contract import execution_contract, plan_field_sources
+from .execution_facts import execution_context
 
 
 def validate_plan(plan: HypothesisPlan, context: TaskContext, tools: dict, skills,
@@ -221,7 +222,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                 item=None
                 try:
                     saved=progress['proposed'].get(hypothesis.hypothesis_id)
-                    batch = PlanBatch(plans=[saved]) if saved else for_hypothesis(hypothesis,generate,'planner',
+                    batch = None if saved else for_hypothesis(hypothesis,generate,'planner',
                         'Turn exactly the supplied hypothesis into one executable plan, preserving its ID, '
                         'When required_tool_id is supplied, use exactly that backend; it is one member of a family search. '
                         'When ensemble_sources is supplied, plan a frozen-source composition via SDK FrozenEnsemble; '
@@ -259,14 +260,15 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                              required_tool_id=family_metadata.get(hypothesis.hypothesis_id,(None,None))[1],
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
                              feedback=feedback,repair_context=repair_context), PlanBatch, role_tools)
-                    if len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
-                    item=HypothesisPlan.model_validate(batch.plans[0].model_dump(mode='json'))
+                    if batch and len(batch.plans)!=1: raise ValueError('Return exactly one plan for the supplied hypothesis')
+                    supplied=saved if saved else batch.plans[0].model_dump(mode='json', exclude_unset=True)
+                    item=HypothesisPlan.model_validate(supplied)
                     if item.hypothesis.hypothesis_id != hypothesis.hypothesis_id:
                         item.agent_notes['requested_hypothesis_id'] = item.hypothesis.hypothesis_id
                         item.hypothesis.hypothesis_id = hypothesis.hypothesis_id
                     item.hypothesis.baseline = hypothesis.baseline
                     item = owned_group(item, hypothesis)
-                    if batch.agent_notes:
+                    if batch and batch.agent_notes:
                         import copy
                         item.agent_notes['batch'] = copy.deepcopy(batch.agent_notes)
                     if initial_resources:
@@ -274,7 +276,11 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.memory_gb = initial_resources['memory_gb']
                     # Definitions come from runtime memory, never from a planner-written formula.
                     registry={v['definition']['feature_set_id']:v['definition'] for v in state['payload'].get('feature_sets',[])}
-                    if item.feature_set_id:
+                    current=(state['payload'].get('champion') or {}).get('plan',{}).get('feature_set')
+                    if current:registry[current['feature_set_id']]=current
+                    if saved:
+                        pass  # Already materialized controller plan; do not reapply removals on retry.
+                    elif item.feature_set_id:
                         if item.feature_set_id not in registry:
                             raise ValueError('Unknown/unaccepted feature_set_id')
                         from .feature_contracts import FeatureSet
@@ -282,6 +288,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         item.feature_set=registered
                     elif item.feature_set is not None:
                         raise ValueError('Planner must select a registered feature_set_id')
+                    if not saved:
+                        from .planning_inheritance import inherit_champion
+                        item=inherit_champion(item,state['payload'].get('champion'),supplied)
                     if state['payload'].get('ensemble_sources'):
                         item.model_params = dict(state['payload'].get('ensemble_recipe',{}), **item.model_params)
                         item=configure_composite(item,state['payload']['ensemble_sources'],
@@ -359,6 +368,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Explain blocking issues in errors; issues and source citations are optional. '
                         'Unproven library incompatibilities are warnings. Runtime executes declared target/weight/output policies.',
                         dict(round_number=state['payload'].get('round_number',1),
+                             champion=state['payload'].get('champion'),evidence_refs=state['payload'].get('evidence_refs',[]),
                              planning_brief=state['payload'].get('planning_brief'),
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
                              task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else
@@ -377,9 +387,10 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                                      if item.search_group_kind=='family' and plan.get('search_group_id')==item.search_group_id],
                                  family_coverage_owner='runtime',sibling_plans_in_payload=False),
                              execution_contract=execution_contract(item),
+                             execution_context=execution_context(item),
                              capability_probes=probes,
                              hypotheses={'hypotheses':[hypothesis.model_dump(mode='json')]},
-                             skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport)
+                             skill_instructions=[s for s in instructions if s['skill_id']!='candidate_sdk']),ValidationReport,role_tools)
                     warnings.extend(report.warnings)
                     if not report.valid or report.errors:
                         raise ValueError('; '.join(report.errors) or 'Semantic validator rejected the plan without an explanation')

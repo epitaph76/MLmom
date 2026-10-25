@@ -1,6 +1,8 @@
 """Bounded coding graph; every source revision is preserved before verification."""
 from __future__ import annotations
 
+from .execution_facts import execution_context
+
 from .agents import GlobalAPIError
 from .resources import WorkerInfrastructureError
 
@@ -117,6 +119,13 @@ def reuse_assignment(previous, plan):
                 and set(old.get('model_params',{}))==set(plan.model_params)
                 and (old.get('model_params')!=plan.model_params or
                      old.get('hypothesis',{}).get('hypothesis_id')==plan.hypothesis.hypothesis_id))
+    difference=plan.configuration_diff
+    if difference and 'model_params' not in plan.reset_fields and old.get('tool_id')==plan.tool_id:
+        actual_changes={key for key in difference if key in {'tool_id','model_params','preprocessing',
+            'target_transform','weight_policy','prediction_policy','ensemble_sources'}}
+        feature_change=any(difference.get('features',{}).values())
+        if (actual_changes or feature_change) and actual_changes <= {'preprocessing','target_transform','weight_policy','prediction_policy'}:
+            same_model=True
     return same_pre,same_model
 
 
@@ -142,15 +151,15 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                               writable=lambda name:name == 'preprocessing.py')
     budget_key=f'{round_id}-{plan.hypothesis.hypothesis_id}'
     reuse_pre,reuse_estimator=reuse_assignment(previous,plan)
-    if reuse_pre and not runtime_feedback and not (workspace.root/'preprocessing.py').is_file():
+    if (reuse_pre or reuse_estimator) and not runtime_feedback and not (workspace.root/'candidate.py').is_file():
         for name,source in previous['files'].items():
             if name=='preprocessing.py':
-                pre_workspace.write_file(name,source)
+                if reuse_pre:pre_workspace.write_file(name,source)
             elif reuse_estimator:
                 workspace.write_file(name,source)
         from .persistence import file_hash
-        store.put('preprocessing',budget_key,dict(spec=previous['preprocessing_spec'],sha256=file_hash(workspace.root/'preprocessing.py')))
-        store.event('source_reused',budget_key,dict(preprocessing=True,estimator=reuse_estimator))
+        if reuse_pre:store.put('preprocessing',budget_key,dict(spec=previous['preprocessing_spec'],sha256=file_hash(workspace.root/'preprocessing.py')))
+        store.event('source_reused',budget_key,dict(preprocessing=reuse_pre,estimator=reuse_estimator))
     def remember_notes(role, bundle):
         notes = getattr(bundle, 'agent_notes', {})
         if notes:
@@ -202,6 +211,9 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
                 prompt+=' Repair the supplied existing preprocessing.py using CodePatch only; do not return source/spec or replace the whole file.'
             bundle=client.generate('preprocessing_agent',prompt,
                 dict(plan=plan.model_dump(mode='json'),task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else vars(context.task),
+                     execution_context=execution_context(plan),
+                     base_assignment=previous,
+                     base_execution_context=previous.get('execution_context') if previous else None,
                      feature_schema=schema,skills=preprocessing_skills or [],feedback=state.get('errors',[]),
                      runtime_feedback=runtime_feedback,previous_spec=saved['spec'] if saved else None,
                      previous={'source':path.read_text(encoding='utf-8'),'sha256':file_hash(path)} if repairing else None),CodePatch if repairing else PreprocessingBundle,None)
@@ -221,7 +233,8 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             pre_workspace.write_file('preprocessing.py',bundle.source+'\nMLMOM_PREPROCESSOR_V1 = True\n')
             errors=[e for e in verify_source(workspace.root).errors if e.startswith('preprocessing.py:')]
             if errors:raise ValueError('; '.join(errors))
-            reuse=bool(repair and saved and saved['spec']==bundle.spec.model_dump(mode='json') and verify_source(workspace.root).valid)
+            reuse=bool((reuse_estimator and not runtime_feedback and (workspace.root/'candidate.py').is_file()) or
+                (repair and saved and saved['spec']==bundle.spec.model_dump(mode='json') and verify_source(workspace.root).valid))
             saved=dict(spec=bundle.spec.model_dump(mode='json'),sha256=file_hash(path))
             store.put('preprocessing',budget_key,saved)
             return dict(preprocessing_valid=True,preprocessing_spec=saved['spec'],preprocessing_hash=saved['sha256'],
@@ -289,6 +302,7 @@ def build_coding_graph(client, *, workspace, store, plan, plan_ref, skill_data, 
             import hashlib
             repairing=(workspace.root/'candidate.py').is_file()
             payload=dict(state['payload'])
+            payload['base_execution_context']=previous.get('execution_context') if previous else None
             payload.pop('previous',None)
             current={name:workspace.read_file(name) for name in workspace.list_files() if name.endswith('.py') and name!='preprocessing.py' and not name.startswith('components/')}
             repair_tools=workspace.tools(repair=True)

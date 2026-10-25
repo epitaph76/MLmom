@@ -10,6 +10,8 @@ def plan_field_sources(plan):
         weight_policy='Planner declaration; SDK execution',prediction_policy='Planner declaration; SDK execution')
     sources.update(search_group_id='Controller-owned containing group',
         search_group_kind='Controller-owned containing group',parent_hypothesis='Controller-owned containing group')
+    if plan.configuration_diff:
+        sources['inheritance']='Controller-resolved saved champion; reset_fields/remove_feature_names are explicit changes'
     for source in plan.ensemble_sources:
         sources['model_params.'+source['name']]='Runtime frozen configuration: '+source.get('experiment_id',source['name'])
     if plan.ensemble_sources:

@@ -4,6 +4,8 @@ description: Fit fold-local tabular and sparse text transforms and preserve infe
 ---
 # Preprocessing
 
+Use execution_context/base_assignment; preserve unchanged base operations.
+
 An assigned feature_set is executed and appended by the SDK after this module. Implement
 only base preprocessing; do not duplicate its Python programs/DSL or fit their statistics here.
 

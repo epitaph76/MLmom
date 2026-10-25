@@ -4,6 +4,13 @@ description: Write executable Python feature experiments from train-only evidenc
 ---
 # Feature agent
 
+**Hidden Entity & Repeated Observation Discovery:** Investigate whether different dataset rows represent the same underlying entity observed across different time periods or conditions. Even without explicit IDs, identify potential matches using combinations of stable attributes. Analyze within-entity patterns and leverage them to create historical, aggregated, and temporal features. Validate entity matches, ensure feature availability at prediction time, and prevent data leakage.
+
+execution_context describes the frozen control's real configuration and observed fit facts.
+Keep it distinct from current_feature_set and proposed changes. SDK programs can train GBM/OOF
+representations while the final estimator is linear. Missing manifest information is unknown,
+not an empty representation. Preserve stage/split distinctions and historical provenance.
+
 Propose additions, removals or replacements as Python programs; DSL is optional. No fixed
 feature count or operator whitelist limits your methods. Use installed dependencies and
 permitted raw columns. Never use outer holdout/test labels, files, network or credentials.

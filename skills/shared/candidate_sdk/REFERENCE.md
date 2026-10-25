@@ -1,5 +1,23 @@
 # Generated candidate persistence
 
+Runtime v7 preserves facts without an additional fit. Example of an observed submission:
+```python
+from mlmom.execution_facts import FitExecutionFacts
+
+facts = FitExecutionFacts(
+    fit_id="submission-example", stage="submission_refit", split_id="all-train",
+    status="observed", estimator="Ridge", base_columns=28,
+    derived_columns=282, total_columns=310, feature_execution_owner="SDK",
+    feature_programs=[{"name": name, "config": {}} for name in (
+        "diamond_domain_features", "carat_spline_quality_interactions",
+        "rbf_kernel_diamond", "gbm_oof_representation")],
+)
+assert facts.total_columns == facts.base_columns + facts.derived_columns
+```
+This illustrates the schema; production values come from the executing SDK, not the coder.
+feature_programs=None means unknown; [] means observed absence. Source hashes and the exact
+program configs accompany real observations. Candidate fit/predict/save remain unchanged.
+
 Implement your own Candidate with fit/predict/save and module factories:
 ```python
 from pathlib import Path

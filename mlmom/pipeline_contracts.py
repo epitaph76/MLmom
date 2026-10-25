@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 from .contracts import StrictModel, TaskDefinition, TaskType, TableReadOptions
 from .agent_contracts import AgentNarrative
 from .model_spec import TargetTransform, WeightPolicy, PredictionPolicy, Intervention
 from .feature_contracts import FeatureSpec, FeatureSet, FeatureEvidence, FeatureSession
+from .execution_facts import FitExecutionFacts
 
 
 class RunConfig(StrictModel):
@@ -186,6 +188,9 @@ class PlannerPlan(AgentNarrative):
     priority: int = Field(100, ge=0, description='Lower values run first; the first baseline remains the initial control.')
     feature_set_id: str | None = None
     feature_set: FeatureSet | None = None
+    reset_fields: list[Literal['model_params', 'preprocessing', 'feature_set', 'target_transform',
+                              'weight_policy', 'prediction_policy']] = Field(default_factory=list)
+    remove_feature_names: list[str] = Field(default_factory=list)
     contract_version: Literal[2] = 2
     target_transform: TargetTransform = Field(default_factory=TargetTransform)
     weight_policy: WeightPolicy = Field(default_factory=WeightPolicy)
@@ -223,6 +228,9 @@ class PlannerPlan(AgentNarrative):
     def normalize_plan_labels(cls, value):
         if not isinstance(value, dict):return value
         value = dict(value)
+        for key in ('model_params', 'preprocessing', 'target_transform', 'weight_policy', 'prediction_policy'):
+            if value.get(key, 'absent') is None:
+                value.pop(key)
         label = value.get('change_kind')
         if isinstance(label, str) and label in {'baseline', 'model_change', 'hpo', 'single_configuration', 'ablation'}:
             value['change_kind'] = 'single_change_ablation' if label == 'ablation' else 'experiment'
@@ -236,6 +244,7 @@ class PlannerPlan(AgentNarrative):
 
 class HypothesisPlan(PlannerPlan):
     """Executable plan with a controller-derived view of its owning group."""
+    configuration_diff: dict[str, Any] = Field(default_factory=dict)
     search_group_id: str | None = None
     search_group_kind: Literal['single', 'family', 'ensemble'] = 'single'
     parent_hypothesis: Hypothesis | None = None
@@ -291,11 +300,11 @@ class PlanBatch(AgentNarrative):
         if isinstance(value, dict) and isinstance(value.get('plans'), list):
             # Old clients/cached responses may still include these obsolete hints.
             # They have no authority and must not turn a valid recipe into a refusal.
-            runtime_fields = {'search_group_id', 'search_group_kind', 'parent_hypothesis'}
+            runtime_fields = {'search_group_id', 'search_group_kind', 'parent_hypothesis', 'configuration_diff'}
             plans = []
             for plan in value['plans']:
                 if isinstance(plan, PlannerPlan):
-                    plan = plan.model_dump(mode='python')
+                    plan = plan.model_dump(mode='python', exclude_unset=True)
                 if isinstance(plan, dict):
                     plan = {key: item for key, item in plan.items() if key not in runtime_fields}
                 plans.append(plan)
@@ -363,6 +372,8 @@ class TrialResult(StrictModel):
 
 
 class ExperimentRun(StrictModel):
+    execution_facts: list[FitExecutionFacts] = Field(default_factory=list)
+    configuration_diff: dict[str, Any] = Field(default_factory=dict)
     validation_scope: Literal['model', 'feature'] = 'model'
     oof_score_kind: str = 'inner_oof'
     model_spec: dict[str, Any] | None = None
@@ -518,6 +529,7 @@ class PlannerContextDraft(AgentNarrative):
 
 
 class ResultReview(AgentNarrative):
+    execution_context: SkipJsonSchema[dict[str, Any]] = Field(default_factory=dict)
     implementation: Literal['matches', 'partial', 'mismatch', 'unknown']
     effect: Literal['supported', 'not_supported', 'inconclusive']
     evidence_refs: list[str] = Field(default_factory=list)
@@ -539,6 +551,7 @@ class PreprocessingBundle(AgentNarrative):
 
 
 class TrainingCheckpoint(StrictModel):
+    execution_facts: list[dict[str, Any]] = Field(default_factory=list)
     checkpoint_id: str
     stage: Literal['initial_fit', 'batch', 'failure']
     plan: dict[str, Any]

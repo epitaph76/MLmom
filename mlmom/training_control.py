@@ -47,6 +47,7 @@ def fallback(checkpoint, reason):
 
 
 def decide(client, checkpoint, skills, *, seconds=30):
+    from .execution_facts import execution_context
     try:
         allowance = min(seconds, checkpoint.remaining_seconds) if checkpoint.remaining_seconds is not None else seconds
         with role_window(client, 'training_agent', checkpoint.checkpoint_id, allowance):
@@ -59,7 +60,11 @@ def decide(client, checkpoint, skills, *, seconds=30):
                 'return additional_trials with continue; respect trial_limit when supplied. '
                 'A null remaining_seconds means no time deadline; use measured duration and progress. '
                 'Respect remaining budgets. Explain decisions and put future model changes in recommendations.',
-                dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills), TrainingDecision, None)
+                dict(checkpoint=checkpoint.model_dump(mode='json'), skills=skills,
+                     execution_context=execution_context(checkpoint.plan,dict(execution_facts=checkpoint.execution_facts,
+                         best_params=checkpoint.best_params,internal_score=checkpoint.best_score,
+                         score_kind=checkpoint.score_kind,split_id=checkpoint.outer_split_id,
+                         validation_protocol_ref=checkpoint.validation_protocol_ref))), TrainingDecision, None)
         return validate_decision(answer, checkpoint)
     except (GlobalAPIError, WorkerInfrastructureError):
         raise

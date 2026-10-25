@@ -38,6 +38,12 @@ class FitContext:
     started: float = field(default_factory=time.monotonic)
     timeouts_enabled: bool = True
     fit_rows: int = 0
+    execution_facts_dir: str | None = None
+    outer_split_id: str | None = None
+    trial_number: int | None = None
+    fold_number: int | None = None
+    component_name: str | None = None
+    parent_fit_id: str | None = None
     @property
     def remaining_seconds(self):
         if not self.timeouts_enabled:
@@ -149,6 +155,7 @@ class PreparedCandidate:
             train_context = replace(context, validation_X=None, validation_y=None,
                                     validation_groups=None, validation_weight=None)
             values = self.preprocessor.fit_transform(X, y, train_context)
+            self.base_width = values.shape[1]
             if values.shape[0] != len(X):
                 raise ValueError('Preprocessing must preserve training rows')
             valid = self.preprocessor.transform(context.validation_X) if context.validation_X is not None else None
@@ -164,9 +171,11 @@ class PreparedCandidate:
 
     def feature_manifest(self):
         from .feature_engineering import FeatureAugmentingPreprocessor
-        if isinstance(self.preprocessor, FeatureAugmentingPreprocessor):
+        if isinstance(getattr(self, 'preprocessor', None), FeatureAugmentingPreprocessor):
             return self.preprocessor.manifest()
-        return None
+        if getattr(self, 'preprocessor', None) is not None and hasattr(self, 'base_width'):
+            return dict(base_width=self.base_width, output_width=self.base_width, names=[], programs=[], feature_set_hash=None)
+        return getattr(self, '_saved_feature_manifest', None)
 
     def predict(self, X, prediction_spec):
         if self.preprocessor is None:
@@ -203,6 +212,11 @@ class PreparedCandidate:
         self.estimator.save(str(model_dir))
         (root/'preprocessing.pkl').write_bytes(cloudpickle.dumps(self.preprocessor))
         (root/'prepared-config.pkl').write_bytes(cloudpickle.dumps(self.config))
+        try:
+            from .persistence import atomic_json
+            atomic_json(root/'feature-manifest.json',self.feature_manifest())
+        except Exception:
+            pass  # Optional descriptive metadata must not prevent saving a trained model.
         if hasattr(self,'stack_policy'):
             (root/'stack-policy.pkl').write_bytes(cloudpickle.dumps((self.stack_policy,self.stack_apply_policy)))
 
@@ -265,6 +279,9 @@ def load_module(code_dir: str | Path):
             obj = create(cloudpickle.loads((directory/'prepared-config.pkl').read_bytes()))
             obj.preprocessor = cloudpickle.loads((directory/'preprocessing.pkl').read_bytes())
             obj.estimator = _load_policy(load_model(str(directory/'estimator')), directory/'estimator')
+            if (directory/'feature-manifest.json').is_file():
+                import json
+                obj._saved_feature_manifest=json.loads((directory/'feature-manifest.json').read_text(encoding='utf-8'))
             if (directory/'stack-policy.pkl').is_file():
                 obj.stack_policy,obj.stack_apply_policy=cloudpickle.loads((directory/'stack-policy.pkl').read_bytes())
             return obj

@@ -1,6 +1,7 @@
 """Fold-fitted Python feature programs and optional declarative shortcuts."""
 from __future__ import annotations
 
+import hashlib
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -175,5 +176,9 @@ class FeatureAugmentingPreprocessor:
 
     def manifest(self):
         return dict(feature_set_hash=feature_hash(self.features.definition),
+                    programs=[dict(name=p.name, config=p.config,
+                        source_hash=hashlib.sha256(p.source.encode()).hexdigest(),
+                        columns=len(names)) for p, (_, _, names) in
+                        zip(self.features.definition.programs, getattr(self.features, 'program_instances', []))],
                     names=getattr(self.features, 'output_names', [f.name for f in self.features.definition.features]),
                     base_width=self.base_width, output_width=self.output_width)

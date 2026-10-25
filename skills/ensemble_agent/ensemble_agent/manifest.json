@@ -1,6 +1,6 @@
 {
   "skill_id": "ensemble_agent",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "title": "Ensemble composition agent",
   "status": "ready",
   "task_types": [],

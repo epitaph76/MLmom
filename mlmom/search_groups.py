@@ -135,7 +135,10 @@ def component_pool(store, round_number):
 
 def component_brief(row):
     from .planning_context import evaluation_summary
+    from .execution_facts import execution_context
     return dict(experiment_id=row['experiment_id'], candidate_id=row['candidate']['candidate_id'],
+        execution_context=execution_context(row['plan'],row['run'],
+            evaluation_summary(row['evaluation']) if row.get('evaluation') else None,candidate=row['candidate']),
         tool_id=row['plan']['tool_id'], hypothesis=row['plan']['hypothesis']['description'],
         model_params=row['run']['best_params'], round_id=row['round_id'], split_id=row['run']['split_id'],
         internal_score=row['run']['internal_score'], score_kind=row['run'].get('score_kind'),

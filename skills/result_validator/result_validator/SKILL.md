@@ -4,6 +4,18 @@ description: Review implementation fidelity and empirical support without changi
 ---
 # Result validator
 
+execution_context is machine-supplied: current_configuration and observed_execution describe
+the SDK composition, measurements describe scoped scores, and historical_baseline is old prose.
+Keep these facts separate from explanation/recommendations. SDK programs need not appear in
+preprocessing.py; programs=[] is different from unknown/null. A Ridge with gbm_oof_representation
+contains a trained GBM feature. A submission_refit manifest describes all-train, not earlier folds.
+references.parent_control is the HPO comparison; references.baseline measures the complete
+bundle. Missing same-split parent evidence leaves the tuning claim inconclusive. Do not request
+another fit merely to fill metadata. Every advertised evidence_ref opens through read_evidence.
+Respect hypothesis_prose_role: a controller-selected feature set can retain old baseline
+rationale in historical records. That prose does not prohibit active SDK programs and is
+not evidence of a partial/mismatched implementation of the current feature intervention.
+
 An assigned feature_set is executed by the SDK. Read source/configuration, measured
 internal and external metrics and diagnostics. ModelSpec is descriptive metadata.
 execution_report is optional historical data; its absence never blocks review or submission.

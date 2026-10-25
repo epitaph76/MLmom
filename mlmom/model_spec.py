@@ -140,11 +140,18 @@ def hpo_child(plan, parent_experiment_id=None):
     item.hypothesis.baseline = False
     item.hypothesis.based_on_hypothesis_id = plan.hypothesis.hypothesis_id
     item.hypothesis.description = 'Tune backend/policy parameters of: ' + original
+    item.agent_notes['historical_parent_hypothesis']=plan.hypothesis.model_dump(mode='json')
+    item.hypothesis.rationale = ('Tune the declared backend/policy parameters while preserving candidate code, '
+        'base preprocessing and SDK feature programs. Assess tuning against the comparable immediate parent; '
+        'a gain against a different baseline measures the complete bundle.')
     item.intervention = Intervention(kind='hpo', parent_experiment_id=parent_experiment_id,
         base_candidate_id=plan.hypothesis.based_on, changed_fields=list(item.search_space),
         preserved_conditions=['candidate code', 'preprocessing', 'validation protocol', 'metric'],
         success_conditions=['Improve the declared primary metric against the paired parent/control'],
         rejection_conditions=['No improvement on the comparable outer split'])
+    item.configuration_diff = dict(base_candidate_id=plan.hypothesis.based_on,
+        base_experiment_id=parent_experiment_id,base_parameters=copy.deepcopy(plan.model_params),
+        features=dict(added=[],removed=[],replaced=[]))
     return item
 
 

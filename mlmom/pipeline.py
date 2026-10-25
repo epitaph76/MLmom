@@ -39,6 +39,7 @@ from .tracing import TraceSink, bind, emit, span
 from .pipeline_contracts import TrainingCheckpoint,TrainingDecision,Observation
 from .training_control import decide,validate_decision,commit_mailbox
 from .research import data_observations,ReconnaissanceSession,review_result
+from .execution_facts import RUNTIME_CONTRACT_VERSION, execution_context, related_fit_observations
 
 
 class RunState(TypedDict, total=False):
@@ -74,7 +75,7 @@ class Pipeline:
         if session_path.exists():
             if not resume: raise ValueError('Run already exists; use --resume')
             session = json.loads(session_path.read_text(encoding='utf-8'))
-            if session.get('runtime_contract_version') != 6:
+            if session.get('runtime_contract_version') != RUNTIME_CONTRACT_VERSION:
                 raise ValueError('This run uses an older runtime contract. Start a new run; saved models remain available for inference.')
             legacy_policy = 'timeouts_enabled' not in session['config']
             if legacy_policy:
@@ -106,7 +107,7 @@ class Pipeline:
             if legacy_policy or legacy_features or legacy_boosting or legacy_cycle_refit: atomic_json(session_path, session)
         else:
             if resume: raise ValueError('Cannot resume a run without session.json')
-            session = dict(runtime_contract_version=6,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
+            session = dict(runtime_contract_version=RUNTIME_CONTRACT_VERSION,run_id=uuid.uuid4().hex,task=self.files.task,started=started or time.time(),config=config.model_dump(mode='json'),input_hashes=self.input_hashes())
             atomic_json(session_path,session)
         if 'run_id' not in session:
             session['run_id']=uuid.uuid4().hex
@@ -157,12 +158,12 @@ class Pipeline:
 
     def read_planning_evidence(self, reference: str, offset: int=0, chars: int=8000):
         from .context_views import paged_evidence
-        values={'profile':json.loads(Path(self.context.profile_ref).read_text(encoding='utf-8'))} if self.context else {}
-        if reference.startswith('reconnaissance:'):
-            key=reference.split(':',1)[1]
-            report=self.store.get('reconnaissance',key)
-            if report:values['reconnaissance:'+key]=report
-        return paged_evidence(values).tools['read_evidence'][0](reference,offset,chars)
+        return paged_evidence(self.planning_evidence()).tools['read_evidence'][0](reference,offset,chars)
+
+    def planning_evidence(self):
+        from .context_views import stored_evidence
+        profile=json.loads(Path(self.context.profile_ref).read_text(encoding='utf-8')) if self.context else None
+        return stored_evidence(self.store,profile=profile)
 
     def read_task(self, offset: int=0, chars: int=8000) -> dict:
         if offset<0 or not 1<=chars<=8000:raise ValueError('Use non-negative offset and 1..8000 characters')
@@ -311,7 +312,8 @@ class Pipeline:
             budget=self.budget.snapshot().model_dump(),
             previous=dict(round_id=previous.get('round_id'),failures=previous.get('failures',[])[-5:],
                 search_groups=previous.get('search_groups',[]),
-                decisions=[{k:d[k] for k in ('candidate_id','experiment_id','accepted','reason','score','reference_score') if k in d}
+                decisions=[{k:d[k] for k in ('candidate_id','experiment_id','accepted','reason','score','reference_score',
+                    'evaluation','configuration_diff') if k in d}
                            for d in decisions[-5:] if d.get('experiment_id')!=champion_id]),
             champion=None,defaults=dict(max_trials=self.config.max_trials,patience_trials=self.config.patience_trials,
                 experiment_seconds=self.config.experiment_seconds,first_submission_seconds=self.config.first_submission_seconds))
@@ -332,13 +334,20 @@ class Pipeline:
         payload['first_candidate_required']=not bool(self.last_submission)
         payload['artifact_refs']=dict(profile=context.profile_ref,history='experiments.sqlite3',
                                      previous_analysis=f"analysis:{previous.get('round_id','none')}")
+        if state.get('champion'):
+            champ = Champion.model_validate(state['champion'])
+            from .planning_context import champion_snapshot
+            search=experiment_summary(champ.run.model_dump(mode='json'))
+            search={k:v for k,v in search.items() if k not in {'candidate_id','best_params','observed_execution'}}
+            payload['champion'] = dict(champion_snapshot(champ,self.store),search=search)
+            payload['execution_context'] = payload['champion']['execution_context']
         payload['reconnaissance']=self.scout('initial' if state['round_number']==1 else f"r{state['round_number']-1}",previous)
         reports={'initial':self.store.get('reconnaissance','initial') or payload['reconnaissance']}
         if state['round_number']>1:reports[f"r{state['round_number']-1}"]=payload['reconnaissance']
         payload['planning_brief']=prepare_planner_context(client=self.client,context=context,profile=profile,
             reports=reports,store=self.store,budget=self.budget,config=self.config,round_number=state['round_number'],
             skills=self.skills.load([],context.task.task_type,role='context_agent'),
-            seconds=max(0,self.budget.snapshot().research_seconds))
+            seconds=max(0,self.budget.snapshot().research_seconds),champion=payload['champion'])
         if state['round_number'] == 1:
             from .feature_search import prepare_initial_proposal
             prepare_initial_proposal(self,payload['planning_brief'])
@@ -348,16 +357,11 @@ class Pipeline:
             validation_scope='feature') for e in self.store.list('feature_evidence')]
         payload['training_recommendations']=[d.get('recommendations',[]) for d in self.store.list('training_decision',limit=4)]
         # Never put model artifact paths or the full run archive into a prompt.
-        if state.get('champion'):
-            champ = Champion.model_validate(state['champion'])
-            from .planning_context import champion_snapshot
-            search=experiment_summary(champ.run.model_dump(mode='json'))
-            search={k:v for k,v in search.items() if k not in {'candidate_id','best_params'}}
-            payload['champion'] = dict(champion_snapshot(champ),search=search)
         from .context_views import compact_planning_payload, observation_index
         payload=compact_planning_payload(payload)
         payload['observation_index']=observation_index(reports)
         payload['artifact_refs']['reconnaissance']=['reconnaissance:'+key for key in reports]
+        payload['evidence_refs']=list(self.planning_evidence())
         return payload
 
     def scout(self,key,history):
@@ -483,6 +487,9 @@ class Pipeline:
                 variants={p['hypothesis']['hypothesis_id']:p for p in [*old['variants'],*group['variants']]}
                 group=dict(group,variants=list(variants.values()),skipped=[*old.get('skipped',[]),*group.get('skipped',[])])
             self.store.put('search_group',identity,group)
+        for plan in output.get('plans',[]):
+            if plan.get('feature_set'):
+                self.store.put('feature_set',plan['feature_set_id'],plan['feature_set'],immutable=True)
         self.store.put('planning',key,output)
         if output.get('warnings'):
             self.store.put('warning',key,{'warnings':output['warnings']})
@@ -575,9 +582,18 @@ class Pipeline:
                 if isinstance(previous_candidate,CandidateVersion): previous_candidate=previous_candidate.model_dump()
                 source = Path(previous_candidate['code_dir'])
                 old_plan=json.loads(Path(previous_candidate['plan_ref']).read_text(encoding='utf-8'))
+                parent_id=plan.configuration_diff.get('base_experiment_id')
+                parent_run=self.store.get('experiment',parent_id) if parent_id else None
+                if parent_run:
+                    from .model_spec import frozen_plan
+                    old_plan=frozen_plan(HypothesisPlan.model_validate(old_plan),ExperimentRun.model_validate(parent_run)).model_dump(mode='json')
                 pre=self.store.get('preprocessing',Path(previous_candidate['plan_ref']).stem) or {}
+                if not pre and (source/'preprocessing.py').is_file():
+                    pre=next((p for p in self.store.list('preprocessing') if p.get('sha256')==file_hash(source/'preprocessing.py')), {})
                 dependencies={k:v.version for k,v in self.tools.items() if v.available and v.version}
                 previous = {'candidate_id':previous_candidate['candidate_id'],'plan':old_plan,
+                    'execution_context':execution_context(old_plan,parent_run,candidate=previous_candidate,
+                        related_fits=related_fit_observations(self.store,parent_id)) if parent_run else execution_context(old_plan),
                     'preprocessing_spec':pre.get('spec'),
                     'dependencies_match':previous_candidate.get('dependencies',{})==dependencies,
                     'files':{p.relative_to(source).as_posix():p.read_text(encoding='utf-8') for p in source.rglob('*.py')}}
@@ -594,7 +610,8 @@ class Pipeline:
             skill_data=skills,tools=self.tools,context=self.context,sandbox=self.sandbox,budget=self.budget,
             config=coding_config or self.config,round_id=round_id,previous=previous,runtime_feedback=feedback,preprocessing_skills=preprocessing_skills)
         output = graph.invoke({'payload':dict(plan=plan.model_dump(mode='json'),task=self.context.task.model_dump(mode='json'),
-            features=self.context.feature_columns,classes=self.context.classes,skills=skills,previous=previous),
+            features=self.context.feature_columns,classes=self.context.classes,skills=skills,previous=previous,
+            execution_context=execution_context(plan)),
             'attempts':0,'errors':[]},{'recursion_limit':100})
         if output.get('candidate') and output['valid']: return CandidateVersion.model_validate(output['candidate'])
         self.store.event('coding_failed',plan.hypothesis.hypothesis_id,{'round_id':round_id,'errors':output.get('errors',[])})
@@ -647,6 +664,7 @@ class Pipeline:
             saved.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(artifact.path,saved)
             atomic_json(saved.with_suffix('.json'),dict(artifact=artifact.model_dump(mode='json'),
+                execution_facts=run.model_dump(mode='json')['execution_facts'],configuration_diff=run.configuration_diff,
                 saved_path=str(saved),model_artifact=run.model_artifact,
                 code_dir=candidate.code_dir,code_hash=candidate.code_hash,
                 plan=plan.model_dump(mode='json'),best_params=run.best_params))
@@ -922,7 +940,8 @@ class Pipeline:
                     self.store.put('training_plan',experiment_id,plan)
                     req=dict(action='train',code_dir=candidate.code_dir,code_hash=candidate.code_hash,context=self.sanitized_context(train_path),
                         plan=plan.model_dump(mode='json'),train_path=str(train_path),seed=split.seed,inner_fraction=self.config.inner_fraction,fixed=incumbent,
-                        outer_split_id=split.split_id, outer_train_indices=split.train_indices)
+                        outer_split_id=split.split_id, outer_train_indices=split.train_indices,
+                        fit_stage='incumbent_recheck' if incumbent else 'full_refit')
                     req.update({key:getattr(self.config,key) for key in ('hpo_batch_size','hpo_max_trials','hpo_startup_trials','hpo_gain_threshold','hpo_seconds')})
                     req.update(training_control=not incumbent,training_control_seconds=self.config.training_control_seconds)
                     initial=next((r for r in trained.values() if r['candidate']['candidate_id']==candidate.candidate_id and
@@ -1096,8 +1115,10 @@ class Pipeline:
             if winner and group.kind=='family' and self.config.hpo_enabled:
                 selected_plan=HypothesisPlan.model_validate(winner['plan'])
                 if selected_plan.search_space and min(group_remaining(selected_plan),self.budget.snapshot().research_seconds)>.5:
-                    from .model_spec import hpo_child
-                    search=hpo_child(selected_plan,winner['run']['experiment_id'])
+                    from .model_spec import hpo_child, frozen_plan
+                    frozen=frozen_plan(selected_plan,ExperimentRun.model_validate(winner['run']))
+                    frozen.search_space=selected_plan.search_space
+                    search=hpo_child(frozen,winner['run']['experiment_id'])
                     search.strategy='optuna';search.max_trials=selected_plan.hpo_trial_budget or self.config.hpo_initial_trials
                     search.time_limit_seconds=min(self.config.experiment_seconds,self.config.hpo_seconds*1.35,group_remaining(selected_plan))
                     search.hypothesis.based_on=winner['candidate']['candidate_id']
@@ -1166,6 +1187,7 @@ class Pipeline:
                 score=row['evaluation']['score']; gap=abs(best_score-score)
                 if gap/max(abs(best_score),1e-12)>self.config.selection_threshold or len(selected)>=3: continue
                 selected.append(dict(candidate_id=row['candidate']['candidate_id'],rank=rank,relative_gap=gap/max(abs(best_score),1e-12),
+                    execution_context=execution_context(row['plan'],row['run'],row['evaluation'],candidate=row['candidate']),
                     plan=row['plan'],evaluation=row['evaluation'],trials=row['run']['trials'],duration_seconds=row['run']['duration_seconds'],stop_reason=row['run']['stop_reason']))
         failures=[{'candidate_id':r['candidate_id'],'error':r.get('error'),'stop_reason':r.get('stop_reason')}
                   for r in self.store.list('experiment') if r['round_id']==round_id and r['status']=='failed'][-10:]
@@ -1180,6 +1202,7 @@ class Pipeline:
             reason=('incumbent_recheck_failed' if not state.get('incumbent_succeeded',True) else
                     'selected_best_on_cycle_holdout' if r['run']['experiment_id']==champion_experiment else 'no_outer_gain'),
             score=r['evaluation']['score'],reference_score=reference,parameters=r['run']['best_params'],
+            evaluation=evaluation_summary(r['evaluation']),configuration_diff=r['run'].get('configuration_diff',{}),
             internal_score=r['run']['internal_score'],hpo_stop_reason=r['run']['stop_reason'],
             diagnostics=compact_diagnostics(r['evaluation']['diagnostics'])) for r in rows if not r['run']['incumbent']]
         previous=SelectedPreviousResults(round_id=round_id,selected=selected,failures=failures,
@@ -1239,23 +1262,8 @@ class Pipeline:
             if seconds<.5:continue
             code_root=Path(row['candidate']['code_dir'])
             sources={p.relative_to(code_root).as_posix():p.read_text(encoding='utf-8') for p in code_root.rglob('*.py')}
-            reference=next((r['evaluation'] for r in rows if r['run']['incumbent']),None)
-            if reference is None:
-                reference=next((r['evaluation'] for r in rows if r['run']['experiment_id']!=key and
-                    r['plan']['hypothesis']['baseline'] and r['plan']['strategy']=='single' and
-                    r['evaluation']['split_id']==row['evaluation']['split_id']),None)
-            review=review_result(self.client,dict(hypothesis=row['plan']['hypothesis'],plan=row['plan'],
-                source=sources,code_hash=row['candidate']['code_hash'],parameters=row['run']['best_params'],
-                model_spec=row['run'].get('model_spec'),intervention=row['plan'].get('intervention'),
-                internal_validation={key:row['run'].get(key) for key in ('score_kind','internal_score','validation_protocol_ref','fold_results','score_std','oof_score','oof_ref')},
-                stages={'smoke':'synthetic API/save/load check; not a full-data training result',
-                        'inner_validation':'fold training and held-out inner scores',
-                        'refit':'all rows of the outer training partition; outer holdout excluded'},
-                execution_report=row['run'].get('execution_report'),
-                smoke_execution_report=row['candidate'].get('execution_report'),
-                evaluation=row['evaluation'],comparable_reference=reference,
-                relative_gain=relative_gain(row['evaluation'],reference),
-                evidence_refs=[f'evaluation:{key}',f'candidate:{row["candidate"]["candidate_id"]}']),
+            from .review_context import review_payload
+            review=review_result(self.client,review_payload(row,rows,sources=sources,store=self.store),
                 self.skills.load([],context.task.task_type,role='result_validator'),key,seconds)
             self.store.put('result_review',key,review,immutable=True)
             atomic_json(self.run_dir/'reviews'/f'{key}.json',review)

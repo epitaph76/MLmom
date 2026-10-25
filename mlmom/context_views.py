@@ -59,3 +59,24 @@ def paged_evidence(values):
     tools=ToolSet()
     tools.register('read_evidence',read_evidence,'Read a page of an explicitly supplied source/evidence reference.')
     return tools
+
+
+def stored_evidence(store, *, profile=None):
+    """The same material map advertises references and serves their content."""
+    values={'profile':profile} if profile is not None else {}
+    for kind, identity in (('candidate','candidate_id'), ('evaluation','experiment_id'),
+                           ('reconnaissance',None), ('analysis','round_id')):
+        if identity:
+            for value in store.list(kind):
+                values[kind+':'+value[identity]]=value
+    for run in [*store.list('experiment'),*store.list('submission_refit')]:
+        values['execution:'+run['experiment_id']]=run
+    # These objects do not carry their store key in their body.
+    if hasattr(store,'items'):
+        for key,report in store.items('reconnaissance'):
+            values['reconnaissance:'+key]=report
+    else:
+        for key in ('initial', *[cycle['round_id'] for cycle in store.list('cycle')]):
+            report=store.get('reconnaissance',key)
+            if report:values['reconnaissance:'+key]=report
+    return values

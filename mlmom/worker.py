@@ -12,6 +12,7 @@ import copy
 from dataclasses import replace
 from pathlib import Path
 from .execution_resources import execution_config
+from .execution_facts import record_fit, read_fit_facts
 
 
 def failure_result(error, root):
@@ -27,6 +28,7 @@ def failure_result(error, root):
     if source: message += f' [{Path(source["file"]).name}:{source["line"]}]'
     result = dict(status='failed',error=message,error_code='worker_runtime_error',
                   error_details=dict(type=type(error).__name__,source=source,hint=hint),traceback_ref=str(path))
+    result['execution_facts'] = read_fit_facts(root)
     return result
 
 
@@ -67,7 +69,9 @@ def fit_context(context, request, *, work_dir, X_valid=None, y_valid=None, group
         time_limit_seconds=allowance,classes=context.classes,
         groups=groups,sample_weight=weights,validation_X=X_valid,validation_y=y_valid,
         validation_groups=validation_groups,validation_weight=validation_weight,work_dir=str(work_dir),task_context=context,
-        timeouts_enabled=request.get('timeouts_enabled',True))
+        timeouts_enabled=request.get('timeouts_enabled',True),
+        execution_facts_dir=request.get('_execution_facts_dir'),
+        outer_split_id=request.get('outer_split_id') or ('all-train' if request.get('phase') in {'final','submission'} else None))
 
 
 def write_predictions(model, X, kinds, root):
@@ -147,17 +151,20 @@ def smoke(request, root):
         seed=42,cpus=request['worker_cpus'],memory_gb=request['worker_memory_gb'],
         time_limit_seconds=max(1,request['worker_seconds']*.5),
         classes=sorted(y.unique().tolist()) if y is not None and getattr(y,'ndim',1)==1 and ('classification' in kind) else [],
-        groups=groups,work_dir=str(root/'native'),timeouts_enabled=request.get('timeouts_enabled',True),stage='smoke')
+        groups=groups,work_dir=str(root/'native'),timeouts_enabled=request.get('timeouts_enabled',True),stage='smoke',
+        execution_facts_dir=str(root/'fit-execution'))
     Path(context.work_dir).mkdir(parents=True,exist_ok=True)
     if request.get('native_holdout'):
         from sklearn.model_selection import train_test_split
         a,b=train_test_split(np.arange(len(X)),test_size=.25,random_state=42,
                             stratify=y if 'classification' in kind else None)
         context.fit_rows=len(a)
-        model.fit(X.iloc[a],y.iloc[a],replace(context,validation_X=X.iloc[b],validation_y=y.iloc[b]))
+        context=replace(context,validation_X=X.iloc[b],validation_y=y.iloc[b])
+        model.fit(X.iloc[a],y.iloc[a],context)
     else:
         context.fit_rows=len(X)
         model.fit(X,y,context)
+    record_fit(model, config, context)
     kinds = [request.get('prediction_kind','value')]
     for prediction in kinds: checked_predictions(model.predict(X.iloc[:5],{'kind':prediction}),5,prediction)
     (root/'model').mkdir(parents=True,exist_ok=True)
@@ -171,10 +178,11 @@ def smoke(request, root):
         if original.shape != after.shape or not np.array_equal(original,after):
             if not np.issubdtype(original.dtype,np.number) or not np.allclose(original,after):
                 raise ValueError('Model save/load changes predictions')
-    return {'status':'completed'}
+    return {'status':'completed', 'execution_facts':read_fit_facts(root)}
 
 
 def train(request, root):
+    request = dict(request, _execution_facts_dir=str(root/'fit-execution'))
     from .model_spec import apply_overrides, with_spec
     import numpy as np
     import optuna
@@ -249,6 +257,7 @@ def train(request, root):
             remaining_trials=details.get('remaining_trials',max(0,min(plan.max_trials,request.get('hpo_max_trials') or plan.max_trials)-len(trials))) if plan.strategy=='optuna' else 0,
             default_action=details.get('default_action','continue' if plan.strategy=='optuna' else 'refit'),error=error)
         checkpoint=checkpoint.model_copy(update=dict(score_kind='inner_holdout' if context.task.validation_strategy=='holdout' else 'inner_cv_mean',
+            execution_facts=read_fit_facts(root),
             outer_split_id=request.get('outer_split_id'),validation_protocol_ref=protocol_ref,
             metric_options=context.metric_options,weighting='sample_weight' if weights is not None else 'unweighted'))
         if not request.get('training_control'):
@@ -261,6 +270,16 @@ def train(request, root):
         from .execution import export_params
         from .model_spec import model_spec
         params = export_params(model, params)
+        difference=dict(plan.configuration_diff, executed_parameters=params,
+            code_hash=request.get('code_hash'),preprocessing_hash=getattr(model,'config',{}).get('_preprocessing_hash'))
+        if 'base_code_hash' in difference:
+            difference['source_changes']={name:dict(before=difference.get('base_'+name),after=difference.get(name))
+                for name in ('code_hash','preprocessing_hash') if difference.get('base_'+name)!=difference.get(name)}
+        if 'base_parameters' in difference:
+            if difference['base_parameters'] != params:
+                difference['model_params']=dict(before=difference['base_parameters'],after=params)
+            else:
+                difference.pop('model_params',None)
         spec = model_spec(config, params)
         artifact=root/f'model-{uuid.uuid4().hex[:12]}'
         artifact.mkdir(parents=True)
@@ -271,6 +290,8 @@ def train(request, root):
             history_ref=str(artifact/'native-history.json')
             atomic_json(Path(history_ref),history)
         atomic_json(root/'progress.json',dict(status='completed',model_artifact=str(artifact),
+            execution_facts=read_fit_facts(root),
+            configuration_diff=difference,
             validation_scope='feature' if feature_mode else 'model',
             oof_score_kind='feature_inner_oof' if feature_mode else 'inner_oof',
             model_spec=spec,
@@ -286,8 +307,9 @@ def train(request, root):
         model = module.create_candidate(execution_config(config, request['worker_cpus']))
         c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
         c.fit_rows=len(X)
-        c.stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else 'full_refit'
+        c.stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else request.get('fit_stage','full_refit')
         model.fit(X,None if unsupervised else y,c)
+        record_fit(model, config, c)
         c_final=c
         if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')
         save_progress(model,best_params,None,'fixed_configuration')
@@ -349,12 +371,14 @@ def train(request, root):
                     fold_started=time.monotonic()
                     c.fit_rows=len(a)
                     c.stage='inner_fold'
+                    c.trial_number, c.fold_number = trial_number, fold['number']
                     model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
+                    record_fit(model, trial_config, c)
                     prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
                     score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
                         groups=groups[b] if groups is not None else None,weights=weights[b] if weights is not None else None)
                     if time.time() >= until: raise TimeoutError('Internal fold exceeded validation deadline')
-                    trial.fold_results.append(dict(number=fold['number'],score=score,status='completed',
+                    trial.fold_results.append(dict(number=fold['number'],score=score,status='completed',execution_fit_id=c.fit_id,
                         duration_seconds=time.monotonic()-fold_started,
                         score_kind='feature_inner_fold' if feature_mode else 'inner_fold',weighting='sample_weight' if weights is not None else 'unweighted'))
                     trial.duration_seconds=time.monotonic()-t0
@@ -444,6 +468,7 @@ def train(request, root):
         c_final.fit_rows=len(X)
         c_final.stage='full_refit'
         model.fit(X,None if unsupervised else y,c_final)
+        record_fit(model, dict(config,model_params=best_params), c_final)
         if time.time() >= deadline: raise TimeoutError('Full-train refit exceeded original deadline')
         save_progress(model,best_params,best_score,search_result.get('stop_reason') or
                       ('training_agent_stop' if control_action=='stop' else 'completed'))

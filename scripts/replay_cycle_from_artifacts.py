@@ -21,6 +21,7 @@ from mlmom.persistence import atomic_json, file_hash, tree_hash
 from mlmom.pipeline import Pipeline
 from mlmom.pipeline_contracts import RunConfig, TaskContext, Champion, CandidateVersion, ExperimentRun
 from mlmom.inputs import read_table
+from mlmom.execution_facts import RUNTIME_CONTRACT_VERSION
 from mlmom.submission import validate_submission_file
 
 
@@ -146,7 +147,7 @@ def seed(source_case: Path, work: Path):
     state = rebase(state, old_case, str(work))
     atomic_json(work / 'seed-state.json', state)
     manifest = dict(status='preparing', source_runtime_contract=source_session['runtime_contract_version'],
-        new_runtime_contract=6, boundary='after completed r1; before planning r2',
+        new_runtime_contract=RUNTIME_CONTRACT_VERSION, boundary='after completed r1; before planning r2',
         source_case=str(source_case), imported_objects=dict(Counter(kind for kind, _ in kept)),
         imported_keys=[dict(kind=kind, id=key) for kind, key in sorted(kept)],
         excluded_state=['session', 'checkpoints', 'old deadlines', 'workers', 'planning caches',
@@ -154,7 +155,7 @@ def seed(source_case: Path, work: Path):
         copied_files=len(copied), unresolved_optional_references=sorted(missing), inputs=inputs,
         first_cycle_retrained=False, live_model='deepseek/deepseek-v4.1-flash-1017')
     atomic_json(work / 'seed-manifest.json', manifest)
-    # A NEW v5 session/checkpointer is built from validated, completed evidence.
+    # A fresh current-version session imports completed historical evidence only.
     p = Pipeline(task / Path(source_session['task']).name, config, run_dir=work / 'run',
                  client=SimpleNamespace(model='offline/seed-verification'))
     try:

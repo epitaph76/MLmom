@@ -197,6 +197,9 @@ class Job:
             result = dict(result,status='failed',stop_reason=self.reason or 'worker_error',
                           error=artifact_error or result.get('error') or stderr)
         result.update(duration_seconds=time.monotonic()-self.started,peak_memory_gb=self.peak_memory_gb)
+        from .execution_facts import read_fit_facts
+        facts=read_fit_facts(self.directory)
+        if facts:result['execution_facts']=facts
         self.result = result
         self.released = True
         if self.release_callback: self.release_callback(self, result)

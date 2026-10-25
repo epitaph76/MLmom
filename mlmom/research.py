@@ -330,9 +330,14 @@ def error_slices(y, prediction, X, reference_X, reference_y, task_type):
 def review_result(client,payload,skills,key,seconds):
     from .context_views import paged_evidence
     sources=payload.get('source',{})
-    values={f'source:{name}':text for name,text in sources.items()}
+    values=dict(payload.get('evidence',{}))
+    values.update({f'source:{name}':text for name,text in sources.items()})
+    evaluation=payload.get('evaluation') or {}
+    if evaluation.get('experiment_id'):
+        values['evaluation:'+evaluation['experiment_id']]=evaluation
     payload=dict(payload,source={name:dict(evidence_ref=f'source:{name}',characters=len(text)) for name,text in sources.items()},
-                 evidence_refs=list(dict.fromkeys([*payload.get('evidence_refs',[]),*values])))
+                 evidence_refs=list(values))
+    payload.pop('evidence',None)
     review_tools=paged_evidence(values) if values else None
     from .evaluation import comparable_scores,relative_gain
     reference=payload.get('comparable_reference')
@@ -347,10 +352,18 @@ def review_result(client,payload,skills,key,seconds):
                 'evidence_refs, scores and slices. An overall score gain does not prove a subgroup claim. '
                 'Cross-split historical scores are not comparable. Missing baseline/support means inconclusive. '
                 'Use internal_validation for fold stability and OOF; smoke is synthetic and cannot establish full refit. '
+                'execution_context contains runtime facts and the actual SDK composition, including feature programs. '
+                'Their absence from preprocessing.py does not mean they were skipped. Never rewrite these facts in your report. '
+                'Respect hypothesis_prose_role: inherited historical baseline prose is not a current requirement '
+                'and cannot establish an implementation mismatch. Judge the controller-selected feature bundle '
+                'from its actual intervention/configuration and distinguish it from the old baseline mechanism. '
+                'references.parent_control tests HPO; a gain against references.baseline only measures the whole bundle. '
+                'Use trial_history for observed trial counts; plan.max_trials is an initial renewable budget, not a measured count. '
                 'Missing metrics are unknown. Read source evidence through read_evidence when needed. '
                 'Never change code, champion selection or submission.',dict(payload,skills=skills),ResultReview,review_tools)
-        return result
+        return ResultReview.model_validate(result).model_copy(update=dict(execution_context=payload.get('execution_context',{})))
     except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except Exception as error:
-        return ResultReview(implementation='unknown',effect='inconclusive',explanation='Review unavailable: '+str(error)[:300])
+        return ResultReview(implementation='unknown',effect='inconclusive',explanation='Review unavailable: '+str(error)[:300],
+                            execution_context=payload.get('execution_context',{}))

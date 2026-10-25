@@ -54,7 +54,7 @@ def finding_catalog(profile, reports):
 
 
 def prepare_planner_context(*, client, context, profile, reports, store, budget, config,
-                            round_number, skills, seconds=None):
+                            round_number, skills, seconds=None, champion=None):
     task_text = Path(context.files.task).read_text(encoding='utf-8-sig')
     catalog = finding_catalog(profile,reports)
     previous = store.get('planning_brief',f'r{round_number-1}') if round_number>1 else None
@@ -64,7 +64,11 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
     inputs = dict(task_description=task_text, requirements=requirements, dataset_profile=profile_summary(profile),dataset_facts=catalog,
                   reconnaissance_status={key:dict(status=r.get('status'),reason=r.get('reason'),
                     unfinished_checks=r.get('unfinished_checks',[])) for key,r in reports.items()},
-                  previous_brief=previous_brief_summary(previous), dataset_hash=context.dataset_hash)
+                  previous_brief=previous_brief_summary(previous), dataset_hash=context.dataset_hash,champion=champion)
+    from .context_views import stored_evidence, paged_evidence
+    evidence=stored_evidence(store,profile=profile.model_dump(mode='json'))
+    evidence.update({'reconnaissance:'+key:value for key,value in reports.items()})
+    inputs['evidence_refs']=list(evidence)
     digest = hashlib.sha256(json.dumps(inputs,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     key=f'r{round_number}-{digest[:20]}'
     cached=store.get('planning_brief_version',key)
@@ -93,7 +97,7 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
             try:
                 with role_window(client,'context_agent',key,remaining):
                     answer=client.generate('context_agent',PROMPT,dict(inputs,skills=skills,
-                        validation_feedback=error),PlannerContextDraft,None)
+                        validation_feedback=error),PlannerContextDraft,paged_evidence(evidence))
                 if budget.now()>=window['deadline']:raise ValueError('Context preparation deadline reached')
                 draft=PlannerContextDraft.model_validate(answer)
                 break
@@ -125,6 +129,7 @@ def prepare_planner_context(*, client, context, profile, reports, store, budget,
         assumptions=draft.assumptions if draft else ['Context agent unavailable; use the complete original task.'],
         agent_notes=draft.agent_notes if draft else {},
         reconnaissance_status=inputs['reconnaissance_status'],
+        champion=champion,
         input_hash=digest, input_ref=str(directory/'input.json'),
         original_task_available_via='read_task',reason=error if draft is None else None)
     if draft is None:result['original_task_description']=task_text

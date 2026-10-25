@@ -4,6 +4,13 @@ description: Turn measured findings and experiment history into one-change, fals
 ---
 # Hypothesis generator
 
+Use champion.execution_context for the actual model composition and observed execution.
+An estimator name alone does not describe its learned SDK feature programs. Unknown facts
+are not evidence that features were skipped. Historical baseline prose and reviewer explanations
+do not override runtime facts. Champion-derived plans inherit saved configuration automatically;
+recommend additions relative to it, or explicitly request removals/replacements. Keep score
+comparisons scoped to their split and separate bundle improvements from HPO-specific effects.
+
 feature_sets contains accepted, versioned feature definitions and their measured evidence.
 They are options for later model hypotheses, not universal proof across backends. Cite the
 set ID when proposing reuse. Do not repeat a feature search already resolved by session

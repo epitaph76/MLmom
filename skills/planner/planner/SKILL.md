@@ -4,8 +4,20 @@ description: Convert one approved ML hypothesis into an explicit, compatible and
 ---
 # Planner
 
+For based_on=current champion candidate_id, the controller starts from its frozen saved
+configuration BEFORE validation/coding. Missing/null fields inherit; empty model_params
+and preprocessing retain the base. model_params overlays keys; a nonempty preprocessing
+list is the complete updated specification. feature_set_id=null inherits SDK programs.
+Use reset_fields to explicitly clear model_params/preprocessing/feature_set or policies;
+remove_feature_names removes named programs/DSL features. A nonnull registered feature_set_id
+replaces the set. A different backend starts with fresh backend parameters; for a different
+estimator within the same backend reset model_params explicitly. based_on=null is independent.
+Read execution_context.current_configuration, observed_execution and scoped measurements.
+The controller records configuration_diff; historical baseline prose and reviewer opinions
+cannot change it. A program may train a GBM representation even when the estimator is Ridge.
+
 When feature_sets are supplied, choose a registered feature_set_id explicitly for a new
-model, or null for raw features. Runtime attaches its immutable definition. Do not copy
+independent model, or null for raw features on an independent model. Runtime attaches its immutable definition. Do not copy
 registered Python feature programs or DSL operations into preprocessing.py: SDK appends them once. Preserve a champion's
 feature_set_id when the experiment claims to retain its representation. A scoped
 FeatureExperimentPlan only frames the supplied frozen feature/reference pair.
@@ -101,7 +113,7 @@ search_space uses typed dictionaries, never grid lists. Example:
 Only include dimensions actually consumed by the candidate.
 
 ## Executable evidence contracts
-Champion.configuration_hash/model_params and its actual plan are authoritative. original_hypothesis is historical prose; do not copy its old score or configuration. For lineage based on current Champion use its configuration_hash as base_config_hash. A preprocessing-only single-change ablation uses change_kind=single_change_ablation: runtime inherits all Champion parameters and disables HPO. Use change_kind=experiment for a bundled intervention or additional tuning.
+Champion.configuration_hash/model_params and its actual plan are authoritative. original_hypothesis is historical prose; do not copy its old score or configuration. Inheritance applies to every champion-derived plan, not only ablations. A preprocessing-only single-change ablation preserves other configuration and uses fixed strategy=single; additional tuning is a bundled experiment. The controller reports the actual differences without imposing a new experiment gate.
 
 validation_protocol must match confirmed strategy/folds/duplicate_policy. duplicate_policy=group_features is a real runner protocol; prose cannot enable it after task confirmation. Do not promise unsupported component ablations as completed tests.
 

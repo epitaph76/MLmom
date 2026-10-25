@@ -30,12 +30,16 @@ def plan_summary(plan):
     return {key:plan[key] for key in ('hypothesis','tool_id','skill_ids','model_params','preprocessing','agent_notes',
         'strategy','search_space','execution_mode','prediction_kind','contract_version','target_transform',
         'weight_policy','prediction_policy','intervention','ensemble_components','stopping_policy',
-        'search_group_id','search_group_kind','parent_hypothesis','ensemble_sources','feature_set_id','feature_set') if key in plan}
+        'search_group_id','search_group_kind','parent_hypothesis','ensemble_sources','feature_set_id','feature_set',
+        'configuration_diff','component_stopping_policies','parameter_routes') if key in plan}
 
 
 def experiment_summary(run):
+    from .execution_facts import observed_execution
     trials=run.get('trials',[])
     return dict(experiment_id=run['experiment_id'],candidate_id=run.get('candidate_id'),
+        observed_execution=observed_execution(run.get('execution_facts',[]),run['experiment_id']),
+        configuration_diff=run.get('configuration_diff',{}),
         round_id=run.get('round_id'),status=run.get('status'),stop_reason=run.get('stop_reason'),
         error=run.get('error'),internal_score=run.get('internal_score'),
         score_kind=run.get('score_kind','unknown_legacy'),outer_split_id=run.get('split_id'),
@@ -52,18 +56,19 @@ def evaluation_summary(evaluation):
             'diagnostics':compact_diagnostics(evaluation.get('diagnostics',{}))}
 
 
-def champion_snapshot(champion):
+def champion_snapshot(champion, store=None):
     from .execution import config_hash
+    from .model_spec import frozen_plan
     params=champion.run.best_params
-    plan=plan_summary(champion.plan.model_dump(mode='json'))
+    plan=frozen_plan(champion.plan,champion.run).model_dump(mode='json')
     original=plan.pop('hypothesis',None)
-    plan.update(model_params=params,strategy='single',search_space={})
+    plan.pop('agent_notes',None)
     spec=champion.run.model_spec
-    if spec:
-        from .model_spec import with_spec
-        plan=with_spec(plan,spec)
-    return dict(candidate_id=champion.candidate.candidate_id,code_hash=champion.candidate.code_hash,
+    from .execution_facts import execution_context, related_fit_observations
+    return dict(candidate_id=champion.candidate.candidate_id,experiment_id=champion.run.experiment_id,code_hash=champion.candidate.code_hash,
         preprocessing_hash=champion.candidate.preprocessing_hash,configuration_hash=config_hash(spec or params),model_spec=spec,
         model_params=params,plan=plan,original_hypothesis=original,
         evaluation=evaluation_summary(champion.evaluation.model_dump()),
+        execution_context=execution_context(champion.plan,champion.run,evaluation_summary(champion.evaluation.model_dump()),
+            candidate=champion.candidate.model_dump(mode='json'),related_fits=related_fit_observations(store,champion.run.experiment_id)),
         execution_status=(champion.run.execution_report or {}).get('status','unknown_legacy'))

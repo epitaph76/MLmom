@@ -21,6 +21,7 @@ from .model_spec import frozen_plan, Intervention
 from .pipeline_contracts import CandidateVersion, HypothesisPlan, ExperimentRun, TaskContext
 from .splitting import inner_protocol, feature_context
 from .tracing import emit
+from .execution_facts import execution_context, configuration_diff
 
 
 def feature_session_key(round_id='r1'):
@@ -382,6 +383,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                     if profile.get('status') != 'completed':
                         raise ValueError('Train-only feature profile is unavailable')
                     payload = dict(task=feature_task_view(context.task),
+                        execution_context=execution_context(baseline.plan,baseline.run),
                         feature_runtime=feature_runtime_info(), frozen_model=spec,
                         base_preprocessing=(p.store.get('preprocessing', Path(baseline.candidate.plan_ref).stem) or {}).get('spec'),
                         dictionary_metadata=dictionary_metadata(context),
@@ -505,8 +507,16 @@ def run_feature_session(pipeline, baseline, split, train_path):
     winner_plan.feature_set_id, winner_plan.feature_set = definition.feature_set_id, definition
     winner_plan.hypothesis.hypothesis_id = definition.feature_set_id
     winner_plan.hypothesis.description = 'Selected stable feature set ' + definition.feature_set_id
+    winner_plan.agent_notes['historical_baseline_hypothesis']=baseline.plan.hypothesis.model_dump(mode='json')
+    winner_plan.hypothesis.rationale = ('Compare the selected SDK feature bundle against the frozen baseline; '
+        'constituent proposals and their rationales are recorded in feature evidence. '
+        'The bundle score does not establish the effect of individual programs.')
     winner_plan.intervention = Intervention(kind='ablation', base_candidate_id=baseline.candidate.candidate_id,
         changed_fields=['feature_set'], operations=[f.expression_key() for f in [*definition.features, *definition.programs]])
+    winner_plan.configuration_diff=dict(base_candidate_id=baseline.candidate.candidate_id,
+        base_experiment_id=baseline.run.experiment_id,base_parameters=plan.model_params,
+        base_code_hash=baseline.candidate.code_hash,base_preprocessing_hash=baseline.candidate.preprocessing_hash,
+        **configuration_diff(plan.model_dump(mode='json'),winner_plan.model_dump(mode='json')))
     plan_ref = p.run_dir / 'plans' / (round_id + '-' + definition.feature_set_id + '.json')
     atomic_json(plan_ref, winner_plan)
     # Same immutable estimator/preprocessing source, a new feature assignment.
