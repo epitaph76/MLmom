@@ -138,7 +138,9 @@ class ScoutingTests(unittest.TestCase):
                  dict(role='assistant',content=json.dumps(dict(observations=[],proposals=[],unfinished_checks=[])))]
         with patch.object(client,'_request',side_effect=replies) as request:
             report=self.session(client).run()
-        self.assertEqual(report.status,'completed',report)
+        self.assertEqual(report.status,'partial',report)  # Task repaired, EDA coverage not reported.
+        self.assertIsNotNone(self.store.get('confirmed_task','task'))
+        self.assertEqual(report.agent_notes['eda_coverage']['reviewed'],0)
         self.assertEqual(request.call_count,3)
         messages=request.call_args_list[1].args[0]
         # API requests share one conversation; a failed tool reports concrete validator feedback.
@@ -208,7 +210,7 @@ class ScoutingTests(unittest.TestCase):
         self.clock[0]+=10
         resumed=self.session()
         self.assertEqual(resumed.deadline,session.deadline)
-        self.assertEqual(resumed.run().status,'completed')
+        self.assertEqual(resumed.run().status,'partial')  # Saved task survives; screening is still pending.
 
     def test_measured_numbers_are_checked_but_proposal_references_are_not(self):
         session=self.session()
@@ -220,7 +222,8 @@ class ScoutingTests(unittest.TestCase):
                 super().generate(*args)
                 return args[3](proposals=[dict(description='invented',evidence_ids=['missing'],expected_effect='gain',verification='metric')])
         report=self.session(Client()).run()
-        self.assertEqual(report.status,'completed')
+        self.assertEqual(report.status,'partial')
+        self.assertEqual(report.agent_notes['eda_coverage']['total'],10)
         self.assertEqual(len(report.proposals),1)
         self.assertEqual(report.proposals[0].evidence_ids,['missing'])
         self.assertIsNone(report.reason)
@@ -259,7 +262,7 @@ class ScoutingTests(unittest.TestCase):
             saved_train=train_path.read_bytes()
             with patch.object(pd.DataFrame,'to_csv',side_effect=AssertionError('Existing train split must be reused')):
                 report=pipeline.scout('r1',{})
-            self.assertEqual(report['status'],'completed',report)
+            self.assertEqual(report['status'],'partial',report)
             self.assertEqual(set(skill_payloads),{True,False})
             self.assertTrue((pipeline.run_dir/'splits'/'r1'/'train.csv').is_file())
             self.assertEqual(train_path.read_bytes(),saved_train)

@@ -1,3 +1,58 @@
+# Diversity Evidence ансамблей — 26.10.2026
+
+ensemble_agent 1.1.0: compare_oof_components, корреляция/пересечение ошибок на совместимых
+исторических OOF, primary-metric gain фиксированного среднего и leave-one-component-out
+для тройки, advisory refit cost и явные статусы неизвестных данных. Отчёт сохранён и
+доставляется Planner и plan validator. Новые worker artifacts имеют version=2; старые
+OOF и runs не переписываются. Схема runtime v8 сохраняется с необязательным fit duration.
+
+Проверки: 76 регрессионных тестов, 40 проверок остальных задач/контрактов/исследовательских
+карточек и финальные 9 тестов Diversity Evidence прошли. После уточнения связанных
+карточек повторно прошли 19 тестов карточек/доставки/упаковки. Это 119 разных тестов.
+Полный suite повторно не запускался. Реальные worker
+fit/save/load, original-scale weights/targets, class order, разные probability shapes,
+metric options/direction, multioutput, несовместимые/legacy OOF, восстановление и отсутствие
+новых cost gates проверены. Новых платных LLM-запросов нет.
+
+Промежуточный final-card-check выявил превышение старого combined context на 197 символов.
+Повторяющаяся формулировка validation сокращена; лимиты не увеличивались, итоговый повтор
+успешен. Первоначальный лог ошибки сохранён вместе с card-check-accepted.log.
+
+В каталоге по-прежнему 33 карточки и 14 справочников; ensemble instructions — 6 122 символа
+из 24 000. Проверки документации, формата карточки, упаковки и diff пройдены; граф обновлён.
+Отчёт: [ENSEMBLE_DIVERSITY_RU.md](docs/ENSEMBLE_DIVERSITY_RU.md). Результаты и SHA256:
+`artifacts/ensemble-diversity-2026-10-26/summary.json`.
+
+Согласованные архивы включают также предыдущие дополнения исследовательской методики:
+
+- `dist/mlmom-all-skills-v8-ensemble-diversity-2026-10-26.zip`.
+- `dist/mlmom-runtime-v8-ensemble-diversity-2026-10-26.zip`.
+
+Предыдущие архивы и результаты сохранены.
+
+# Уточнение исследовательской методики — 26.10.2026
+
+Feature Agent 1.2.0, reconnaissance_agent 2.4.0, feature_engineering/feature_selection 1.1.0:
+иерархия исследования сущностей, обязательная EDA-матрица и диагностика вклада признаков.
+Проверены 93 затронутых теста; после окончательных уточнений отчётности успешно повторены
+40 тестов и затем 8 тестов формата инструмента. Полный suite повторно не запускался.
+SQL, независимый pair oracle, repeated/joint permutation, восстановление EDA-прогресса,
+сохранение подтверждённой задачи и доставка references/хешей проверены непосредственно.
+
+В каталоге 33 карточки и 14 REFERENCE.md. Лимиты соблюдены: Feature Agent с reference —
+23 259 символов из 24 000; все preprocessing cards с references — 43 836 из 48 000.
+Новых платных LLM-вызовов нет. Граф обновлён локально. API исполнителя v8 сохраняется;
+неполное исследование имеет partial, а подтверждённая задача может продолжать обучение.
+
+Отчёт: [RESEARCH_METHODOLOGY_RU.md](docs/RESEARCH_METHODOLOGY_RU.md).
+Доказательства: `artifacts/entity-discovery-procedure-2026-10-25/research-methodology-summary.json`.
+Согласованные архивы:
+
+- `dist/mlmom-all-skills-v8-research-methodology-2026-10-26.zip` — 33 карточки и 14 справочников.
+- `dist/mlmom-runtime-v8-research-methodology-2026-10-26.zip` — runtime с новыми инструментами/карточками.
+
+Старые отчёты, runs и архивы сохранены; результаты первоначальной приёмки v8 приведены ниже.
+
 # Приёмка скиллов и runtime v8 — 25.10.2026
 
 Ветка: `codex/skill-contracts-v8`; исходный commit:

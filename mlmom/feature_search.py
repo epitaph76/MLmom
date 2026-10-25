@@ -83,7 +83,8 @@ def dictionary_metadata(context):
 def feature_runtime_info():
     from importlib.metadata import version, PackageNotFoundError
     installed = {}
-    for package in ['numpy', 'pandas', 'scipy', 'scikit-learn', 'polars', 'lightgbm', 'catboost', 'xgboost']:
+    for package in ['numpy', 'pandas', 'scipy', 'scikit-learn', 'polars', 'lightgbm', 'catboost', 'xgboost',
+                    'featuretools', 'splink']:
         try:
             installed[package] = version(package)
         except PackageNotFoundError:
@@ -126,7 +127,7 @@ def prepare_initial_proposal(p, planning_brief):
             current_feature_set=FeatureSet(feature_set_id='empty').model_dump(mode='json'), history=[],
             phase='proposal_before_baseline', remaining_configurations=p.config.feature_max_configurations,
             feature_runtime=feature_runtime_info(),
-            skill_instructions=p.skills.load([],p.context.task.task_type,role='feature_agent'))
+            skill_instructions=p.skills.load([],p.context.task.task_type,role='feature_agent',include_references=True))
         with role_window(p.client,'feature_agent','initial:0',p.config.feature_agent_seconds):
             proposal = p.client.generate('feature_agent',FEATURE_PROMPT+' No fitted model or OOF evidence exists yet; '
                 'propose a testable feature intervention from train-only facts, or stop.',payload,FeatureProposal,role_tools)
@@ -409,7 +410,7 @@ def run_feature_session(pipeline, baseline, split, train_path):
                         proposal_errors=[e for e in p.store.list('feature_proposal_error')
                                          if e.get('session_id', 'initial') == session_id][-3:],
                         remaining_configurations=session.max_configurations-session.attempts,
-                        skill_instructions=p.skills.load([], context.task.task_type, role='feature_agent'))
+                        skill_instructions=p.skills.load([], context.task.task_type, role='feature_agent',include_references=True))
                     with role_window(p.client, 'feature_agent', session_id + ':' + key,
                                      min(p.config.feature_agent_seconds,p.budget.snapshot().research_seconds)):
                         draft = p.client.generate('feature_agent', FEATURE_PROMPT, payload, FeatureProposal,role_tools).model_dump(mode='json')
@@ -582,6 +583,10 @@ def complete_feature_session(pipeline, winner, promoted):
 
 
 FEATURE_PROMPT = '''Design one executable feature experiment on the frozen control model.
+For an entity/history hypothesis follow the supplied skill's structure -> invariants ->
+key/linkage quality -> relationships/time -> inference-safe family -> segmented ablation procedure.
+Prioritize a short evidence/cost queue instead of enumerating every combination. Without
+independent linkage labels, retain unknown error rates; feature gains do not prove identity.
 Return FeatureProposal: add, remove, replace, or stop. You may write Python in programs;
 the optional features DSL is a shortcut, not a limit on your methods or feature count.
 Each program has name, source and config. source defines create_features(config), returning

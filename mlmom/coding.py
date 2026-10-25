@@ -90,6 +90,9 @@ You can read your role's cards, inspect_api and optionally check_preprocessing(s
 do not impose a smoke requirement. A plan's profile is incomplete when it advertises truncation.
 Use only installed allowed libraries and X/y/context; no files, network or environment access.
 Planned train-only feature selectors may be fitted; do not train the predictive estimator or change y.
+For engineering/selection, record semantic reasons and requested individual baseline or importance/
+ablation comparisons in agent_notes. Mark unavailable diagnostics unmeasured; a one-shot near-zero
+importance is not a removal decision. Implement the assigned plan rather than unreviewed experiments.
 State must be cloudpickle serializable. No import-time training. Support unseen categories,
 missing values, empty text, and stable feature order. The SDK owns fitting and persistence.
 When feature_set is assigned, implement only the base preprocessing: the SDK appends the

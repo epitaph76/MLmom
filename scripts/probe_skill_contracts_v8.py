@@ -105,7 +105,7 @@ def feature(client, registry, root, config, budget, sandbox, store):
         current_feature_set=FeatureSet(feature_set_id='empty').model_dump(mode='json'), history=[],
         feature_runtime=feature_runtime_info(), remaining_configurations=1,
         phase='proposal_before_baseline', train_evidence_refs=tools.evidence_refs,
-        skill_instructions=registry.load([],context.task.task_type,role='feature_agent'),
+        skill_instructions=registry.load([],context.task.task_type,role='feature_agent',include_references=True),
         diagnostic='Use a train query to investigate a concrete feature hypothesis, then propose one '
             'small executable Python feature program. This diagnostic checks tool delivery and '
             'fold-fitted state, not whether it improves a benchmark. Do not stop before proposing.')

@@ -4,7 +4,38 @@ description: Write executable Python feature experiments from train-only evidenc
 ---
 # Feature agent
 
-**Hidden Entity & Repeated Observation Discovery:** Investigate whether different dataset rows represent the same underlying entity observed across different time periods or conditions. Even without explicit IDs, identify potential matches using combinations of stable attributes. Analyze within-entity patterns and leverage them to create historical, aggregated, and temporal features. Validate entity matches, ensure feature availability at prediction time, and prevent data leakage.
+## Entity, relationship and event research
+
+Use this hierarchy when repeated objects, related records or history could explain the task.
+The detailed [research procedure](REFERENCE.md), including executable SQL diagnostics, is
+included in this role's payload. Treat a stage as inapplicable when evidence says so;
+do not invent entities or relations to complete a checklist.
+
+1. Identify row grain, entities, events, groups, sequences, units and prediction time.
+   Distinguish event/availability times and observation/entity IDs; measure relation fan-out.
+2. Find invariant/quasi-invariant attributes with repeated independent anchors, within/between
+   variation, missingness and unit-based tolerances. Singletons cannot establish invariance.
+3. Compare plausible composite keys by coverage, cross-period repeats, collisions, ambiguity
+   and pair cost. Measure FP/FN separately with independent labels; otherwise keep accuracy
+   unknown and report proxies. A stable attribute need not distinguish objects. Never link by y.
+4. Check object relationships, temporal changes, delayed information and contradictory clusters.
+   Pairwise matches do not validate transitive closure; retain ambiguity and unmatchedness.
+5. Define an inference-safe family: fold-fitted reference state, cutoff-valid inputs, OOF target
+   use, frozen matching rules and unseen/ambiguous fallbacks. Never learn from query batches.
+6. Ablate on the frozen control's internal splits and primary metric. Inspect predeclared
+   confidence/coverage/new-entity/history/time segments. Gain does not certify identity accuracy.
+
+Keep hypothesis, source_refs, support, ambiguity, availability, cost and next query in a short
+agent_notes queue. Resolve schema/cutoff uncertainties, profile a small stable-key frontier,
+then check independent contradictions before costly comparisons. Extend keys only for measured
+problems; avoid the column powerset and duplicate partitions. Within comparable evidence tiers,
+prefer supported task mechanisms and non-dominated coverage/ambiguity/cost; break ties by usable
+segment size, then marginal cost. Use only supplied OOF residuals. Test one coherent family;
+estimates prioritize work and do not become automatic experiment refusal.
+
+Featuretools DFS is a method for composing features over validated relationships; Splink is
+a method for probabilistic record linkage. They are optional implementations, not installed
+capabilities by assertion. The reference describes bounded SQL/Python alternatives.
 
 execution_context describes the frozen control's real configuration and observed fit facts.
 Keep it distinct from current_feature_set and proposed changes. SDK programs can train GBM/OOF
@@ -27,6 +58,9 @@ Explain why each feature could help the requested metric. You may stop when furt
 unlikely to help. Your first proposal is requested immediately after context, before model preparation; there is no fitted control or OOF evidence yet. Runtime later measures proposals with a frozen control and identical internal splits before long HPO. A proposal is not a measured gain.
 Selection uses the measured internal mean; fold dispersion is diagnostic and is not a stability
 veto. No provenance, estimator identity or mandatory synthetic smoke report is required.
+Give each semantic transformation its own baseline comparison; a bundle's gain does not prove
+each member's value. For removal, seek repeated/joint importance or a refitted ablation rather
+than one near-zero importance estimate. Explain coupled operations and unmeasured comparisons.
 
 Use action=replace with remove names and new programs/features for one atomic replacement.
 Runtime measures the final set against the current accepted set with the same model/folds;

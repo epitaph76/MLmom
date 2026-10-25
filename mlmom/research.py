@@ -19,6 +19,7 @@ from .inputs import read_table
 from .persistence import atomic_json, file_hash
 from .task_validator import TaskValidator
 from .tools import ToolSet, ToolInputError
+from .eda import EDA_TOPICS, EDA_STATUSES, eda_matrix, eda_plan, pending_eda
 
 
 RECONNAISSANCE_PROMPT = '''Read the supplied task description and deterministic profile first.
@@ -35,14 +36,24 @@ Use Polars 1.26 SQL SELECT/WITH, e.g. SELECT category, COUNT(*) AS n, AVG(target
 FROM train GROUP BY category. Quote column names with double quotes. Only registered tables exist.
 No file functions, paths or mutations. SQL aggregates can scan every row; tool output is bounded.
 Use correlate_csv for Pearson correlations: CORR is unavailable in Polars 1.26 SQL.
-Inspect missingness, duplicates, rare classes/categories, tails, suspicious values, feature-target
-relationships and train/test distribution shifts where relevant. Never use sample submission
+Use eda_research_plan as a required screening matrix: target, missingness, feature distributions,
+duplicates, cardinality, train/inference shift, groups, time, anomalies and leakage. Report every
+topic in agent_notes.eda_matrix as screened, effect_checked, not_applicable (with reason), or pending.
+State dataset/column coverage; a few generic queries do not establish that every topic was checked.
+Use existing profile evidence for its actual scope, then investigate supported effects with SQL.
+For each effect report subgroup rows, population denominator, effect size and an alternative
+explanation tested by a comparative query; record controls in agent_notes.alternative_checks.
+When controls or coverage remain incomplete, retain the effect as preliminary and leave its topic
+pending with the next check. Do not invent support or mark an untested explanation eliminated.
+Missing coverage makes the EDA report partial; confirmed requirements can still start training.
+Never use sample submission
 prediction values as labels: they are placeholders. Holdout is available only through aggregates.
-Persist each useful finding with save_observation using its supplied profile/CSV evidence reference
+Persist each useful finding with save_observation, including agent_notes, using its supplied profile/CSV evidence reference
 and exact measured numbers. Distinguish observations from assumptions. Proposals are advisory ideas:
 describe an expected effect and a check on comparable splits. Include saved observation IDs when
 available; references are optional and do not gate proposal retention. Do not invent numbers.
-Return ReconnaissanceReport, including unfinished_checks for work to continue next round.
+Use record_eda_status to preserve topic progress during research; the final matrix can also
+update it. Return ReconnaissanceReport, including unfinished_checks for later work.
 Budget covers all requests, tools and repairs. Confirm requirements early and save findings often.'''
 
 
@@ -85,6 +96,7 @@ class ReconnaissanceSession:
             for o in (store.get('reconnaissance_progress',key) or {}).get('observations',[])})
         progress = store.get('reconnaissance_progress',key) or {}
         self.unfinished = progress.get('unfinished_checks',[])
+        self.eda_matrix = eda_matrix(progress.get('eda_matrix'))
         tables = {}
         for name,path,role in [('train',train_path or files.train,'training'), ('test',files.test,'test_features'),
                                *[(f'dictionary_{i+1}',p,'dictionary') for i,p in enumerate(files.dictionaries)]]:
@@ -109,7 +121,9 @@ class ReconnaissanceSession:
                 correlate_csv='Measure Pearson correlations of numeric columns with a target, excluding non-finite pairs.')[name])
         self.tools.register('read_task', self.read_task, 'Read the original task text in bounded pages.')
         self.tools.register('confirm_task', self.confirm_task, 'Validate and persist the task before research; returns validation errors.')
-        self.tools.register('save_observation', self.save_observation, 'Persist a measured finding with a supplied evidence reference.')
+        self.tools.register('save_observation', self.save_observation, 'Persist a finding: rows is subgroup support; numbers include its denominator/effect size; agent_notes records tested alternatives, controls and limitations.')
+        self.tools.register('record_eda_status',self.record_eda_status,
+            'Persist one EDA topic status and compact details: scope, reviewed columns/support, evidence, controls and next check. not_applicable needs a reason.')
         from .context_views import paged_evidence
         self.previous_reports=self.store.list('reconnaissance',limit=3)
         evidence={f'previous_report:{i}':report for i,report in enumerate(self.previous_reports)}
@@ -162,20 +176,35 @@ class ReconnaissanceSession:
         return dict(valid=True, task=task.model_dump(mode='json'))
 
     def save_observation(self, topic: str, description: str, rows: int | None = None,
-                         numbers: dict[str,float] | None = None, source_ref: str = '') -> dict:
+                         numbers: dict[str,float] | None = None, source_ref: str = '',
+                         agent_notes: dict | None = None) -> dict:
         self._check_time()
         numbers = numbers or {}
         evidence = self.store.get('csv_result', source_ref[4:]) if source_ref.startswith('csv:') else None
         result_rows = evidence.get('total_rows') if evidence else None
         identity = 'obs-'+hashlib.sha256(json.dumps([topic,description,rows,numbers,source_ref],sort_keys=True).encode()).hexdigest()[:20]
-        item = Observation(observation_id=identity,topic=topic,description=description,rows=rows,numbers=numbers,source_ref=source_ref,result_rows=result_rows)
+        item = Observation(observation_id=identity,topic=topic,description=description,rows=rows,numbers=numbers,
+            source_ref=source_ref,result_rows=result_rows,agent_notes=agent_notes or {})
         self.observations[identity] = item
         self._persist()
         return item.model_dump(mode='json')
 
     def _persist(self):
         self.store.put('reconnaissance_progress',self.key,dict(observations=[o.model_dump(mode='json') for o in self.observations.values()],
-            unfinished_checks=self.unfinished))
+            unfinished_checks=self.unfinished,eda_matrix=self.eda_matrix))
+
+    def record_eda_status(self, topic: str, status: str, details: dict | None=None) -> dict:
+        self._check_time()
+        if topic not in EDA_TOPICS or status not in EDA_STATUSES:
+            raise ValueError('Choose a topic/status from eda_research_plan')
+        entry=dict(details or {},status=status)
+        if status=='not_applicable' and not entry.get('reason'):
+            raise ValueError('not_applicable requires a reason in details')
+        if status in {'screened','effect_checked'} and (not entry.get('scope') or not entry.get('summary')):
+            raise ValueError('A reviewed topic requires scope and summary in details')
+        self.eda_matrix=eda_matrix(self.eda_matrix,{topic:entry})
+        self._persist()
+        return dict(self.eda_matrix[topic],topic=topic)
 
     def reconcile(self, answer):
         rejected = []
@@ -183,16 +212,22 @@ class ReconnaissanceSession:
             if item.observation_id in self.observations and item == self.observations[item.observation_id]:
                 continue
             try:
-                saved = self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref)
-                if item.agent_notes:
-                    self.observations[saved['observation_id']] = Observation.model_validate(dict(saved,agent_notes=item.agent_notes))
+                self.save_observation(item.topic,item.description,item.rows,item.numbers,item.source_ref,item.agent_notes)
             except ValueError as exc:
                 rejected.append(f'Observation {item.observation_id}: {exc}')
-        unfinished = list(dict.fromkeys(answer.unfinished_checks+self.unfinished+rejected))
+        self.eda_matrix=eda_matrix(self.eda_matrix,answer.agent_notes.get('eda_matrix'))
+        generated={f'EDA screening pending: {topic}' for topic in EDA_TOPICS}
+        declared_unfinished=answer.unfinished_checks if 'unfinished_checks' in answer.model_fields_set else self.unfinished
+        self.unfinished=list(dict.fromkeys(item for item in declared_unfinished+rejected
+            if item not in generated))
+        pending=pending_eda(self.eda_matrix)
+        unfinished=self.unfinished+pending
         # Proposals remain advisory, with their original optional references intact.
         return answer.model_copy(update=dict(observations=list(self.observations.values()),
-            status='partial' if rejected or self.unfinished else answer.status,
-            reason='; '.join(rejected)[:1000] if rejected else answer.reason,unfinished_checks=unfinished))
+            status='partial' if rejected or unfinished else answer.status,
+            reason='; '.join(rejected)[:1000] if rejected else answer.reason,unfinished_checks=unfinished,
+            agent_notes=dict(answer.agent_notes,eda_matrix=self.eda_matrix,
+                eda_coverage=dict(reviewed=len(EDA_TOPICS)-len(pending),total=len(EDA_TOPICS)))))
 
     def run(self):
         from .data_inspector import build_llm_context
@@ -213,6 +248,7 @@ class ReconnaissanceSession:
                          task_description=text[:16000],task_chars=len(text),profile_ref=self.profile_ref,
                          confirmed_task=self.context.task.model_dump(mode='json') if self.context else saved,
                          observations=[o.model_dump(mode='json') for o in self.observations.values()],
+                         eda_research_plan=eda_plan(self.eda_matrix,train_hash=self.csv.tables['train']['hash']),
                          history=self.history,skills=self.skills,
                          previous_reports=[dict(status=report.get('status'),unfinished_checks=report.get('unfinished_checks',[]),
                              observation_ids=[o['observation_id'] for o in report.get('observations',[])],
@@ -231,7 +267,8 @@ class ReconnaissanceSession:
             error = str(exc)[:300]
             answer = ReconnaissanceReport(status='partial' if self.context or self.store.get('confirmed_task','task') else 'unavailable',
                 observations=list(self.observations.values()),reason=error,
-                unfinished_checks=self.unfinished+['Continue unfinished investigation from saved observations and CSV results.'])
+                agent_notes=dict(eda_matrix=self.eda_matrix),
+                unfinished_checks=self.unfinished+pending_eda(self.eda_matrix)+['Continue unfinished investigation from saved observations and CSV results.'])
         finally:
             if original_steps is not None: self.client.max_steps = original_steps
             if original_deadline is not None: self.client.deadline = original_deadline

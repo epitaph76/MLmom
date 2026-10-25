@@ -130,6 +130,11 @@ class InnerExecutionTests(unittest.TestCase):
             self.assertNotAlmostEqual(result['internal_score'],result['oof_score'],places=7)
             oof=json.loads(Path(result['oof_ref']).read_text())
             self.assertEqual(oof['source_indices'],list(range(100,160)))
+            self.assertEqual(oof['version'],2)
+            np.testing.assert_allclose(oof['targets'],frame[context.task.target_columns[0]].to_numpy(),rtol=1e-14)
+            self.assertEqual(oof['output_scale'],'original')
+            self.assertEqual(len(set(oof['fold_numbers'])),5)
+            self.assertTrue(all(f['duration_seconds']>=0 for f in result['execution_facts']))
             restored=load_module(code).load_candidate(result['model_artifact'])
             self.assertEqual(restored.estimator.size,len(frame))
             fitted=[json.loads(p.read_text())['rows'] for p in job.rglob('fit.json')]

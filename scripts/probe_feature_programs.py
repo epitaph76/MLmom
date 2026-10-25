@@ -83,7 +83,7 @@ def probe(name,source,out,rows):
     protocol=inner_protocol(frame,context,fraction=.2,seed=43,outer_split_id='isolated-'+name,source_indices=list(range(len(frame))))
     payload={k:v for k,v in payload.items() if k not in {'output_schema','skill_instructions'}}
     payload.update(feature_runtime=feature_runtime_info(),frozen_model=plan.model_dump(mode='json'),
-        skill_instructions=SkillRegistry(ROOT/'skills').load([],context.task.task_type,role='feature_agent'),
+        skill_instructions=SkillRegistry(ROOT/'skills').load([],context.task.task_type,role='feature_agent',include_references=True),
         isolated_probe=dict(source_request_seq=seq,request='Propose one concrete executable Python feature experiment beyond previously measured proposals. Include at least one program; do not stop in this isolated probe. No particular algorithm or entity key is prescribed.',measurement_rows=len(frame),measurement_folds=len(protocol['folds']),scope='Exploratory subset of outer train only; scores are not a new external benchmark.'))
     atomic_json(out/'agent-input.json',payload)
     atomic_json(out/'control-plan.json',plan)

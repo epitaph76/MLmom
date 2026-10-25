@@ -96,6 +96,14 @@ retain the supplied frozen component implementations and independent preprocessi
 Use SDK FrozenEnsemble, outer identity policies and a single recipe fit; the ensemble agent selects explicit methods and budgets; each actual recipe is reviewed before fitting. Do not tune bases
 again inside an ensemble or replace source components with new implementations.
 
+Use diversity_evidence to explain the selected composition: aligned historical error
+correlation/overlap, fixed-mean benefit, the third component's marginal benefit when
+available, and measured/estimated/unknown refit costs. Do not turn historical OOF gain
+into a claim that the current weighted/stack recipe is independently confirmed. Missing
+measurements leave an unverified hypothesis that can still be tested. Old OOF is diagnostic
+only; the SDK builds fresh training-only OOF for current weight/meta fitting. Budget those
+extra fits separately; HPO wall time and a sum of historical fits are not ensemble latency.
+
 Legacy hand-authored ensembles use blending or
 stacking operations. Stacking meta learners must use OOF base predictions, with
 trainable preprocessing and target encoding fitted within each base fold and

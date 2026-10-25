@@ -5,6 +5,11 @@
 
 # Runtime skills по агентам
 
+Ensemble Agent 1.1.0 получает compare_oof_components и сохраняемый Diversity Evidence:
+парные ошибки, measured blend gain и стоимость refit с явными unknown. Инструмент
+доступен в согласованном runtime; одного обновления карточки недостаточно.
+Подробности: [ENSEMBLE_DIVERSITY_RU.md](ENSEMBLE_DIVERSITY_RU.md).
+
 Реестр рекурсивно читает skills/<роль>/<skill_id>/manifest.json. ID существующих скилов сохранены. Список, инструменты чтения и начальный контекст ограничены ролью; чтение чужого скила отклоняется.
 
 <!-- skill-registry:start -->
@@ -26,7 +31,7 @@
 | training_agent | hpo | metrics, hpo |
 <!-- skill-registry:end -->
 
-COMMON.md входит в candidate_sdk. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Общие пакеты доступны ролям, но не загружаются всем автоматически. Карточка ensembles доступна coding_agent: blending и OOF stacking разрешены. Компоненты и meta-model реализуются собственным кодом кандидата с сохранением изоляции фолдов.
+COMMON.md входит в candidate_sdk. Дополнительные скилы выбираются среди принадлежащих роли; REFERENCE.md подключается кодерам по необходимости. Feature Agent получает свой исследовательский REFERENCE.md в обоих proposal-входах. Общие пакеты доступны ролям, но не загружаются всем автоматически. Карточка ensembles доступна coding_agent: blending и OOF stacking разрешены. Компоненты и meta-model реализуются собственным кодом кандидата с сохранением изоляции фолдов.
 
 Разведчик автоматически получает `polars_sql` при начальном анализе и повторной
 разведке. Карточка описывает SQLContext закреплённой версии Polars 1.26.0:
@@ -75,3 +80,29 @@ preprocessing_agent, sampling, target transforms и thresholds — coding_agent.
 Полные checkpoint configurations, MCC, original-scale scorer, новые инструменты ролей и
 проверенные estimator-only примеры описаны в [SKILL_CONTRACTS_V8_RU.md](SKILL_CONTRACTS_V8_RU.md).
 ready означает готовый пакет инструкций; поддержку конкретного исполнения подтверждают отдельные тесты.
+
+## Иерархическое исследование сущностей
+
+feature_agent 1.2.0 получает последовательность «структура → инварианты → составные ключи и
+linkage → отношения/время → инференс → ablation по сегментам». Справочник содержит порядок
+следующих диагностических запросов, очередь гипотез и критерии покрытия, неоднозначности
+и стоимости. Precision/recall linkage оцениваются по независимым labels; без них точность
+остаётся неизвестной. Скаут 2.4.0 передаёт структурные наблюдения и гипотезы для повторной
+проверки Feature Agent на разрешённой части train.
+
+В каталоге остаётся 33 карточки; REFERENCE.md теперь 14. Featuretools/Splink описаны как
+опциональные реализации методов; они не добавлены в обязательные зависимости. Детали,
+исполняемые SQL-примеры и проверки: [ENTITY_DISCOVERY_PROCEDURE_RU.md](ENTITY_DISCOVERY_PROCEDURE_RU.md).
+
+## EDA, конструирование и вклад признаков
+
+Разведчик получает обязательную EDA-матрицу из десяти тем в eda_research_plan; статусы и
+незавершённые проверки сохраняются. Непроверенные темы означают partial для исследования,
+но не отменяют подтверждённую задачу. record_eda_status сохраняет промежуточное покрытие,
+save_observation сохраняет поддержку, знаменатели и alternative_checks в agent_notes.
+
+feature_engineering 1.1.0 описывает шесть семейств семантических преобразований с отдельными
+baseline comparisons; feature_selection 1.1.0 — repeated/joint permutation importance,
+drop-column ablation и fold stability. Их REFERENCE.md передаются агенту предобработки
+через существующую загрузку выбранных карточек; недоступные сравнения явно остаются
+unmeasured и передаются владельцу эксперимента. Подробности: [RESEARCH_METHODOLOGY_RU.md](RESEARCH_METHODOLOGY_RU.md).

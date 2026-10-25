@@ -358,6 +358,9 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Use execution_contract for ownership: CPU/thread controls come from runtime FitContext, '
                         'so their absence from model_params is expected and is not a warning. '
                         'You decide methodological approval. Runtime only enforces technical boundaries and budgets. '
+                        'For ensembles, diversity_evidence contains historical OOF diagnostics, not independent '
+                        'confirmation of the proposed recipe. Unknown diversity or refit cost is uncertainty to '
+                        'explain, not by itself an experiment refusal. '
                         'Prioritize concrete plan-field contradictions and leakage. Optional improvements such '
                         'as circular encoding or rare-category pooling are not baseline defects without evidence. '
                         'Keep at most three distinct actionable warnings; do not limit real blocking issues. '
@@ -369,6 +372,7 @@ def build_planning_graph(client, context, tools, skills, budget, max_attempts=3,
                         'Unproven library incompatibilities are warnings. Runtime executes declared target/weight/output policies.',
                         dict(round_number=state['payload'].get('round_number',1),
                              champion=state['payload'].get('champion'),evidence_refs=state['payload'].get('evidence_refs',[]),
+                             diversity_evidence=state['payload'].get('diversity_evidence'),
                              planning_brief=state['payload'].get('planning_brief'),
                              planning_attempt=state['payload'].get('planning_attempt',0),lightweight=is_light(state),
                              task=context.task.model_dump(mode='json') if hasattr(context.task,'model_dump') else

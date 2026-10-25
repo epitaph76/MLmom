@@ -77,7 +77,7 @@ class EvidenceContractTests(unittest.TestCase):
         draft=Observation(observation_id='local-count',topic='size',description='Measured training count',numbers={'n':180},source_ref=result['source_ref'])
         valid=dict(description='Check size',evidence_ids=['local-count'],expected_effect='unknown',verification='same split')
         answer=session.reconcile(ReconnaissanceReport(observations=[draft],proposals=[valid,dict(valid,evidence_ids=['invented'])]))
-        self.assertEqual(answer.status,'completed');self.assertEqual(len(answer.observations),1)
+        self.assertEqual(answer.status,'partial');self.assertEqual(len(answer.observations),1)
         self.assertEqual(len(answer.proposals),2)
         self.assertEqual([p.evidence_ids for p in answer.proposals],[['local-count'],['invented']])
         self.assertIsNone(answer.reason)
@@ -91,14 +91,14 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(len(report.observations),2)
         self.assertEqual(len(report.proposals),1)
         self.assertEqual(report.proposals[0].evidence_ids,['same'])
-        self.assertEqual(report.status,'completed')
+        self.assertEqual(report.status,'partial')  # Pending EDA does not discard advisory proposals.
 
     def test_reworded_saved_observation_does_not_discard_its_proposal(self):
         session=self.session();result=session.csv.query_csv('SELECT COUNT(*) AS n FROM train')
         saved=Observation.model_validate(session.save_observation('size','Training count',numbers={'n':180},source_ref=result['source_ref']))
         proposal=dict(description='Check size',evidence_ids=[saved.observation_id],expected_effect='unknown',verification='same split')
         report=session.reconcile(ReconnaissanceReport(observations=[saved.model_copy(update={'description':'Reworded training count'})],proposals=[proposal]))
-        self.assertEqual(report.status,'completed')
+        self.assertEqual(report.status,'partial')
         self.assertEqual(report.proposals[0].model_dump(exclude={'agent_notes'}),proposal)
         self.assertIsNone(report.reason)
 
@@ -106,7 +106,7 @@ class EvidenceContractTests(unittest.TestCase):
         session=self.session()
         proposal=dict(description='Try a different model',expected_effect='unknown',verification='same split')
         report=session.reconcile(ReconnaissanceReport(proposals=[proposal,dict(proposal,evidence_ids=[])]))
-        self.assertEqual(report.status,'completed')
+        self.assertEqual(report.status,'partial')
         self.assertEqual(len(report.proposals),2)
         self.assertEqual([p.evidence_ids for p in report.proposals],[[],[]])
 

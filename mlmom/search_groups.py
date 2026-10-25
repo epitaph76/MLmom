@@ -136,6 +136,7 @@ def component_pool(store, round_number):
 def component_brief(row):
     from .planning_context import evaluation_summary
     from .execution_facts import execution_context
+    from .ensemble_evidence import component_availability
     return dict(experiment_id=row['experiment_id'], candidate_id=row['candidate']['candidate_id'],
         execution_context=execution_context(row['plan'],row['run'],
             evaluation_summary(row['evaluation']) if row.get('evaluation') else None,candidate=row['candidate']),
@@ -145,6 +146,7 @@ def component_brief(row):
         validation_protocol_ref=row['run'].get('validation_protocol_ref'),
         configuration_hash=row['configuration_hash'], duration_seconds=row['run']['duration_seconds'],
         duration_scope='source experiment wall time, may include HPO, validation and refit; not selected-fit latency',
+        diversity_availability=component_availability(row),
         evaluation=evaluation_summary(row['evaluation']) if row.get('evaluation') else None)
 
 

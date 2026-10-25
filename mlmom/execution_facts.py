@@ -25,6 +25,7 @@ class FitExecutionFacts(StrictModel):
     component: str | None = None
     parent_fit_id: str | None = None
     fit_rows: int | None = None
+    duration_seconds: float | None = None
     status: Literal['observed', 'unknown'] = 'unknown'
     estimator: str | None = None
     parameters: dict[str, Any] | None = None
@@ -54,7 +55,7 @@ def read_fit_facts(root):
     return sorted(values, key=lambda value: value.get('recorded_at', 0))
 
 
-def record_fit(model, config, context):
+def record_fit(model, config, context, *, duration_seconds=None):
     """Best-effort observation, never a new estimator audit or execution gate."""
     from .persistence import atomic_json
     facts = FitExecutionFacts(fit_id=context.fit_id,
@@ -62,6 +63,7 @@ def record_fit(model, config, context):
         split_id=context.outer_split_id, trial_number=context.trial_number,
         fold_number=context.fold_number, component=context.component_name,
         parent_fit_id=context.parent_fit_id, fit_rows=context.fit_rows,
+        duration_seconds=duration_seconds,
         code_hash=config.get('_code_hash'), preprocessing_hash=config.get('_preprocessing_hash'))
     try:actual_config = getattr(model, 'config', config)
     except Exception:actual_config = config

@@ -383,8 +383,9 @@ def train(request, root):
         c = fit_context(context,request,work_dir=root/'fixed',groups=fit_groups,weights=weights,seconds=fit_budget)
         c.fit_rows=len(X)
         c.stage='final_full_data_refit' if request.get('phase') in {'final','submission'} else request.get('fit_stage','full_refit')
+        fit_started=time.monotonic()
         model.fit(X,None if unsupervised else y,c)
-        record_fit(model, config, c)
+        record_fit(model, config, c, duration_seconds=time.monotonic()-fit_started)
         c_final=c
         if time.time() >= deadline: raise TimeoutError('Fixed refit exceeded original deadline')
         save_progress(model,best_params,None,'fixed_configuration')
@@ -448,7 +449,7 @@ def train(request, root):
                     c.stage='inner_fold'
                     c.trial_number, c.fold_number = trial_number, fold['number']
                     model.fit(X.iloc[a],None if unsupervised else y.iloc[a],c)
-                    record_fit(model, trial_config, c)
+                    record_fit(model, trial_config, c, duration_seconds=time.monotonic()-fold_started)
                     prediction=np.asarray(model.predict(X.iloc[b],{'kind':kind}))
                     score=score_predictions(y.iloc[b] if y is not None else None,prediction,context,X=X.iloc[b],
                         groups=groups[b] if groups is not None else None,weights=weights[b] if weights is not None else None)
@@ -466,9 +467,8 @@ def train(request, root):
                 trial.oof_score=score_predictions(y.iloc[indices] if y is not None else None,combined,context,X=X.iloc[indices],
                     groups=groups[indices] if groups is not None else None,weights=weights[indices] if weights is not None else None)
                 trial.oof_ref=str(trial_root/'oof.json')
-                atomic_json(Path(trial.oof_ref),dict(indices=indices.tolist(),
-                    source_indices=np.asarray(request.get('outer_train_indices',list(range(len(frame)))))[indices].tolist(),
-                    prediction_kind=kind,predictions=combined.tolist()))
+                from .ensemble_evidence import oof_snapshot
+                atomic_json(Path(trial.oof_ref),oof_snapshot(protocol,context,indices,combined,kind,y,weights))
                 scores=[f['score'] for f in trial.fold_results]
                 score=float(np.mean(scores));trial.score=score
                 trial.score_std=float(np.std(scores)) if len(scores)>1 else None
@@ -542,8 +542,10 @@ def train(request, root):
             groups=fit_groups,weights=weights,seconds=deadline-time.time())
         c_final.fit_rows=len(X)
         c_final.stage='full_refit'
+        fit_started=time.monotonic()
         model.fit(X,None if unsupervised else y,c_final)
-        record_fit(model, dict(config,model_params=best_params), c_final)
+        record_fit(model, dict(config,model_params=best_params), c_final,
+                   duration_seconds=time.monotonic()-fit_started)
         if time.time() >= deadline: raise TimeoutError('Full-train refit exceeded original deadline')
         save_progress(model,best_params,best_score,search_result.get('stop_reason') or
                       ('training_agent_stop' if control_action=='stop' else 'completed'))

@@ -86,3 +86,25 @@ Preprocessing Agent читает свои карточки, inspect_api и мо�
 усечённый профиль дополнен пагинацией и читаемыми source_ref. read_query_result читает
 строки/столбцы полных сохранённых результатов, read_evidence — страницы metadata. Подробности:
 [SKILL_CONTRACTS_V8_RU.md](SKILL_CONTRACTS_V8_RU.md). Для v8 нужен новый run directory.
+
+Feature Agent 1.2.0 дополнен процедурой исследования сущностей и отношений с очередью
+гипотез, отдельной оценкой FP/FN linkage, as-of доступностью и сегментными ablation.
+Его REFERENCE.md передаётся автоматически и раннему proposal, и следующему поисковому
+вызову, с версией/хешем пакета. Разведчик передаёт только структурные наблюдения, не fitted
+maps. Схемы API v8 и агентское методологическое одобрение сохраняются; новый admission gate
+не вводится. Подробности: [ENTITY_DISCOVERY_PROCEDURE_RU.md](ENTITY_DISCOVERY_PROCEDURE_RU.md).
+
+Разведчик 2.4.0 получает eda_research_plan и сохраняет покрытие десяти тем через
+record_eda_status/agent_notes.eda_matrix. Неполное покрытие отражается в partial и
+unfinished_checks, не блокируя обучение по подтверждённой задаче. Наблюдения сохраняют
+размер подгруппы, знаменатель и выполненные проверки альтернатив в agent_notes.
+Агент предобработки получает расширенные feature_engineering/feature_selection 1.1.0,
+реализует назначенную логику и сообщает необходимые сравнения владельцу эксперимента;
+он не получает outer labels и не обучает predictive estimator ради диагностики.
+Подробности: [RESEARCH_METHODOLOGY_RU.md](RESEARCH_METHODOLOGY_RU.md).
+
+Ensemble Agent 1.1.0 получает compare_oof_components: структурированный Diversity Evidence
+по сохранённым inner OOF (корреляция/пересечение ошибок, прирост фиксированного среднего
+по primary metric, стоимость refit). Отчёт сохраняется и передаётся Planner/plan validator.
+Недоступные/несовместимые данные означают непроверенную гипотезу; историческая стоимость
+не становится порогом допуска. Подробности: [ENSEMBLE_DIVERSITY_RU.md](ENSEMBLE_DIVERSITY_RU.md).

@@ -11,6 +11,7 @@ from .planning import build_planning_graph
 from .search_groups import SUPERVISED, component_pool, component_brief, ensemble_recipes
 from .model_spec import frozen_plan
 from .persistence import tree_hash
+from .ensemble_evidence import diversity_evidence
 
 
 def plan_ensemble(pipeline, state):
@@ -34,6 +35,20 @@ def plan_ensemble(pipeline, state):
     snapshot = pipeline.budget.snapshot()
     if snapshot.timeouts_enabled and snapshot.research_seconds <= .5:
         return finish(plans=[], reason='research_deadline')
+    available = {row['experiment_id']:row for row in pool}
+    def measure_components(experiment_ids, methods=(), oof_folds=3):
+        if (not 2<=len(experiment_ids)<=3 or len(set(experiment_ids))!=len(experiment_ids)
+                or any(k not in available for k in experiment_ids)):
+            raise ValueError('Use two or three distinct supplied component experiment IDs')
+        evidence=diversity_evidence([available[k] for k in experiment_ids],context,
+            methods=methods,oof_folds=oof_folds)
+        from hashlib import sha256
+        evidence_key=key+':'+sha256('|'.join(experiment_ids).encode()).hexdigest()[:16]
+        evidence['reference']='ensemble_diversity:'+evidence_key
+        pipeline.store.put('ensemble_diversity',evidence_key,evidence)
+        return evidence
+    def compare_oof_components(experiment_ids: list[str]):
+        return measure_components(experiment_ids)
     try:
         proposal = pipeline.store.get('ensemble_proposal',key)
         if proposal is None:
@@ -43,6 +58,8 @@ def plan_ensemble(pipeline, state):
                 if offset<0 or not 1<=limit<=12:raise ValueError('Use offset>=0 and limit in 1..12')
                 return dict(components=[component_brief(row) for row in pool[offset:offset+limit]],total=len(pool))
             role_tools.register('read_component_history',read_component_history,'Read a page of saved component metadata from completed cycles.')
+            role_tools.register('compare_oof_components',compare_oof_components,
+                'Diversity Evidence for two or three supplied frozen components: aligned historical inner OOF error correlation/overlap, fixed equal-mean benefit under the primary metric, and advisory refit costs. Returns explicit unavailable reasons; never trains or reads current holdout labels.')
             preview=pool[:12]
             champion_id=(state.get('champion') or {}).get('run',{}).get('experiment_id')
             anchor=next((row for row in pool if row['experiment_id']==champion_id),None)
@@ -57,12 +74,19 @@ def plan_ensemble(pipeline, state):
                             'historical scores with different split IDs are not comparable. Return skip=true with a reason '
                             'when appropriate. Source duration_seconds is historical experiment wall time, possibly a whole '
                             'HPO study; do not treat its sum as frozen-refit wall time. Actual resource scheduling owns overlap. '
-                            'when no defensible composition exists. Explicitly select methods (mean, median, weighted, stack), '
+                            'Use compare_oof_components for shortlisted components when OOF is registered. '
+                            'Return agent_notes.diversity_evidence with measurement reference, interpretation, unknowns and '
+                            'decision_status=unverified_hypothesis unless the specific claim is measured. '
+                            'Correlation or historical OOF blend gain does not prove an independent gain of weighted/stack recipes. '
+                            'Explicitly select methods (mean, median, weighted, stack), '
                             'oof_folds and weight_trials when relevant, plus component_experiment_ids, rationale and skip; '
                             'put any skip explanation in rationale. Do not train, write code or select on current holdout labels.',
                             dict(task=context.task.model_dump(mode='json'), budget=snapshot.agent_view(),
                                  champion=champion_snapshot(Champion.model_validate(state['champion']),pipeline.store) if state.get('champion') else None,
                                  components=[component_brief(row) for row in preview],total_components=len(pool),
+                                 diversity_evidence=dict(status='unverified_hypothesis',
+                                     tool='compare_oof_components',scope='historical_inner_oof_diagnostic',
+                                     missing_data_policy='Explain unknowns; a hypothesis may still be tested'),
                                  validation_feedback=feedback,
                                  skill_instructions=pipeline.skills.load([],context.task.task_type,role='ensemble_agent')),
                             EnsembleProposal, role_tools)
@@ -76,9 +100,9 @@ def plan_ensemble(pipeline, state):
         proposal = EnsembleProposal.model_validate(proposal.model_dump() if hasattr(proposal,'model_dump') else proposal)
         if proposal.skip:
             return finish(plans=[],reason=proposal.rationale)
-        available = {r['experiment_id']:r for r in pool}
         if any(key not in available for key in proposal.component_experiment_ids):
             raise ValueError('Ensemble agent selected an unregistered experiment')
+        evidence=measure_components(proposal.component_experiment_ids,proposal.methods,proposal.oof_folds)
         sources = []
         for index, experiment_id in enumerate(proposal.component_experiment_ids):
             row = available[experiment_id]
@@ -97,6 +121,7 @@ def plan_ensemble(pipeline, state):
                 if method in {'weighted','stack'}: recipe['oof_folds']=proposal.oof_folds
                 if method == 'weighted': recipe['weight_trials']=proposal.weight_trials
                 payload.update(ensemble_sources=sources,ensemble_recipe=recipe,
+                               diversity_evidence=evidence,
                                ensemble_weight_trials=proposal.weight_trials)
                 progress_key = key+':'+method
                 progress = pipeline.store.get('ensemble_planning_progress',progress_key) or {}
@@ -118,7 +143,8 @@ def plan_ensemble(pipeline, state):
                 failure = dict(method=method, error=str(error)[:2000], error_type=type(error).__name__)
                 pipeline.store.event('ensemble_recipe_failed',key+':'+method,failure)
                 errors.append(failure)
-        return finish(plans=plans,reason='planned' if plans else 'ensemble_plan_rejected',errors=errors)
+        return finish(plans=plans,reason='planned' if plans else 'ensemble_plan_rejected',errors=errors,
+                      diversity_evidence=evidence)
     except (GlobalAPIError, WorkerInfrastructureError):
         raise
     except (LLMUnavailable,ValueError) as error:

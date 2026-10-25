@@ -32,6 +32,11 @@ do not request agent-authored group IDs or reject independent recipes for them.
 Historical durations are advisory, not technical refusal criteria; study wall time
 does not price one refit. Review methodology against actual deadlines and resources.
 
+Read ensemble diversity_evidence: correlation/fixed-mean gain is historical, not independent
+confirmation of weighted/stack or a third component. Missing OOF/cost alone is not a refusal.
+Old OOF is diagnostic; meta fitting uses fresh training-only OOF. Distinguish measured
+results from agent interpretation.
+
 validation_strategies contains verified reference protocols, not an exhaustive admission
 table; empty native metadata is uncertainty. FLAML holdout supports supplied weights.
 Assess original-scale stopping/native objectives under target/output policies. A fixed fit

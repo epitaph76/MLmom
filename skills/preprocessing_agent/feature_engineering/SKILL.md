@@ -1,13 +1,25 @@
 ---
 name: feature-engineering
-description: Implement cheap reproducible tabular features and train-fitted aggregates after establishing a baseline.
+description: Design and implement semantically justified feature transformations with isolated baseline comparisons.
 ---
 # Feature engineering
 
-Test a specific hypothesis: date parts, missing indicators, safe logs, selected ratios/interactions or train-only frequency/group aggregates. Avoid exhaustive polynomials and arbitrary ID interactions. plan.preprocessing does not execute features: implement/persist a transformer or wrapper.
+Use [REFERENCE.md](REFERENCE.md) for six research families: arithmetic invariants, relative
+quantities, group deviations, interactions, repeated events and relational aggregation.
+For each transformation state input meaning/units, inference availability, mechanism,
+domain/fallback and an individual comparison with the unchanged baseline. Do not justify a
+large bundle by its combined gain alone. Coherent dependencies and atomic replacements
+need feasible ablations, not a mandatory removal-only gain.
 
-Protect zero denominators, validate log domains and clean infinities. Fix datetime/timezone parsing and reference dates. Store output order and train-derived clipping cutoffs/counts/maps; unseen groups get stored fallback values. Do not recompute maps from prediction batches.
+Implement only the assigned preprocessing. Extra experiments/comparisons belong to the
+Feature/experiment owner; record unmeasured hypotheses in agent_notes. Do not fit the
+predictive estimator or duplicate SDK feature_set programs. plan.preprocessing is intent,
+not executable code. Prefer a meaningful supported hypothesis over arbitrary polynomial/ID crosses.
 
-Target encoding needs OOF training values and full-train maps only for new rows. sklearn TargetEncoder.fit_transform cross-fits; fit().transform() is not equivalent. Its ordinary folds do not guarantee group isolation: use explicit group-safe OOF maps when needed. Outer validation cannot fit encoders.
+Protect denominator/log domains, units, timezones and fixed reference dates. Fit maps,
+centres, scales, vocabularies and thresholds inside the current training fold; freeze them
+for inference with unknown-group fallbacks. Target-derived training values/priors need
+group/time-safe OOF or exclusion. Never fit from validation or prediction batches.
 
-Compare with baseline on the same runner split/metric, including CPU/RAM cost. Check persisted transforms after load and on a single new row without batch statistics.
+Compare each proposed transformation on the same folds/metric/options/weights, reporting
+support and cost. Persist schema/state; check reordered/single-row and save/load behavior.
